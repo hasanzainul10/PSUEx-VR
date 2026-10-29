@@ -20,7 +20,11 @@ cl /nologo /O2 /LD /EHsc /DWIN32 /DUNICODE /D_UNICODE `"$src`" /link /DEF:`"$def
 "@
 $bat = Join-Path $env:TEMP "build_dinput8_proxy.bat"
 Set-Content -Path $bat -Value $cmd -Encoding ASCII
-& cmd /c $bat
+# vcvars prints a harmless "vswhere.exe is not recognized" on stderr; only cl's exit code counts.
+$eap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+& cmd /c $bat 2>&1 | ForEach-Object { "$_" }
+$ErrorActionPreference = $eap
 if( $LASTEXITCODE -ne 0 ) { throw "cl failed: $LASTEXITCODE" }
 
 if( $GameDir -and ( Test-Path $GameDir ) ) {

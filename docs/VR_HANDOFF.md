@@ -290,7 +290,7 @@ and pushed to origin `psu_vr` unless noted.
    Toggle off / no mirror: the old order (draw, then capture). **Pending test:** deploy, then town with nameplates in view:
    on the monitor they sit over the right people; the headset is unchanged. Committed with phase 2.
    **Next:** phase 3 (eye resolution scale, LOCAL-space layer, quality presets).
-   **Phase 3 built (Debug + Release, 2026-10-30), not yet deployed (PSUC was running); no settings-file changes.** Performance tab:
+   **Phase 3 built (Debug + Release, 2026-10-30); Debug deployed by the user; no settings-file changes by us.** Performance tab:
    - `stereoLayerSpace` ("view" default / "local"), combo *Headset image space*: `OpenXRRuntime::EndFrame` submits the stereo
      projection layer in LOCAL space with the poses the eyes were rendered with (`m_submittedPoses`, from `LocateNextViews`
      one period ahead), so SteamVR reprojection corrects head rotation at 90 Hz while the game runs at 60. Logs
@@ -310,6 +310,20 @@ and pushed to origin `psu_vr` unless noted.
    2. Scale: Quality Low (0.7) ~1 min, then High ~1 min. Expect GPU eyes / frame ms lower at 0.7, softer image, no black /
       stretched eyes, monitor mirror still cropped right. Also try 1.5 once (does the bigger shared RT create?).
    Compare with `tools/lastlog.sh -a -n 0 'Perf 5 s'` split by `layer` / `res`, and `tools/lastlog.sh 'eye resolution|eye swapchains|eye targets|stereo layer'`.
+   **First run (2026-10-30, Debug deployed 03:25, Release `PSUExVR.dll` in the game folder is still the phase-2 build; Rogue's
+   Toolkit loaded): "seems to work".** Whole session in LOCAL (no VIEW run, so no judder A/B in the log yet). Scale changes
+   0.5 / 0.7 / 1.03 / 1.05 / 1.48 / 1.5 all recreated cleanly (1.5 = 3948x4026 eyes, shared D3D9 RT fine), no failures.
+   Stereo lines, GPU eyes L+R ms: 0.5 -> 1.09+1.12, 1.0 -> 1.19+1.18, 1.5 -> 1.46+1.36: on this GPU the eye passes are not
+   fill-bound, so the scale barely moves our GPU time (it still cuts SteamVR's compositor / reprojection work, not measured
+   here; it matters on weak cards). Few windows at non-1.0 values. GPU frame ~9-10 ms and passB 4-5 ms GPU / 3.5-4.3 CPU
+   are much higher than phase 2 (2.7 / 0.9): the toolkit was loaded this time (its BeginScene / draws), not a phase-3
+   effect. "Over budget" stays ~47% (60 fps game vs 90 Hz) whatever the layer: LOCAL hides it via reprojection, it can't
+   lower it. **Smear test (2026-10-30):** technique effects looked more pixelated with Local; the user found it the same in
+   View / Local and Motion Smoothing on / off, and sharp again with the toolkit disabled -> not phase 3, it is the toolkit
+   (see item 7). **Judder (2026-10-30): the user confirmed Local has less judder -> `stereoLayerSpace` default is now
+   "local"** (built Debug + Release; the game folder's settings files already say "local"). Eye resolution scale and
+   presets work; the scale barely changes GPU time on this PC (not fill-bound). Phase 3 done; not committed.
+   **Next:** phase 4 (separate plan): shadows once per frame, D3D9Ex MANAGED->DYNAMIC remap, the game's frame cap.
 
 7. **Rogue's Toolkit 0.7.2 alongside PSUEx (UPDATED 2026-10-30, see "Status 2026-10-30" at the end of this item; the chain described next is superseded).** Plan:
    `C:\Users\hasan\.claude\plans\plan-to-make-our-giggly-sifakis.md`. The toolkit is a Rust `dinput8.dll` proxy
@@ -347,6 +361,15 @@ and pushed to origin `psu_vr` unless noted.
      wrongly in VR ("like our first release"). **Test in progress:** rename `toolkit_dinput8.dll` ->
      `toolkit_dinput8.dll.off` (game closed) and see if techniques render right in VR. If yes: the toolkit's D3D9 hooks
      (SetViewport / SetRenderTarget / DrawPrimitiveUP / Present) clash with our eye passes: follow plan Step 2
+     **Result (2026-10-30, during perf phase 3):** with `toolkit_dinput8.dll` disabled, technique effects in VR are back at full
+     resolution (with it loaded they look low-res / pixelated). So the toolkit is the cause; follow plan Step 2.
+     **Pixelation fix (deployed 04:21 2026-10-30: Debug `PSUExD.dll` + `PSUExVRConfig.exe`, Release `PSUExVR.dll`;
+     `toolkit_dinput8.dll` enabled again):** suspect = toolkit `ui_sharpness = "sharp"` (on in its toml,
+     with `ui_scale` 2.0): it point-filters the game's 2D sprite draws (it takes them for UI), and the eyes magnify
+     technique sprites. `Hook_DrawPrimitiveUP` now forces stage-0 MIN/MAG filter POINT -> LINEAR around reprojected eye
+     sprites (site 0x747248, eye passes only, restored after; flat untouched). Log `VRToolkit: eye sprite had point
+     filtering` (first 4) confirms the cause. Test: cast techniques in VR: sharp as without the toolkit. If the log line is missing and effects stay pixelated: try toolkit `ui_sharpness = "smooth"`; if that
+     fixes it, the toolkit sets filtering some other way (e.g. a low-res UI target), look there.
      (hook order, who is outermost) and look for a toolkit setting to reduce what it hooks. If no: it is our own
      effect handling (layers / glare, see item 3). Undo = rename back.
    - **Technique effects bug FIXED (2026-10-30):** not the toolkit's drawing, `ui_scale`, or its archive/minimap patches
