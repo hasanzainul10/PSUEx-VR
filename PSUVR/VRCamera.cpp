@@ -545,6 +545,8 @@ namespace PSUVR
 			return true;
 		}
 
+		float s_hmdTracking[ 3 ]{};
+
 		bool TrackingToWorld( const float tracking[ 3 ], float world[ 3 ] )
 		{
 			if( !FirstPersonActive() || !s_haveReference )
@@ -564,6 +566,12 @@ namespace PSUVR
 			world[ 1 ] = s_headWorld.y + local.y;
 			world[ 2 ] = s_headWorld.z + fx * local.x - fz * local.z;
 			return true;
+		}
+
+		bool HeadWorld( float head[ 3 ] )
+		{
+			// The real head (not the leashed anchor), so crouching and stepping show.
+			return TrackingToWorld( s_hmdTracking, head );
 		}
 
 		bool WorldToTracking( const float world[ 3 ], float tracking[ 3 ] )
@@ -988,6 +996,9 @@ namespace PSUVR
 				( views[ 0 ].position[ 0 ] + views[ 1 ].position[ 0 ] ) * 0.5f,
 				( views[ 0 ].position[ 1 ] + views[ 1 ].position[ 1 ] ) * 0.5f,
 				( views[ 0 ].position[ 2 ] + views[ 1 ].position[ 2 ] ) * 0.5f };
+			s_hmdTracking[ 0 ] = head.x;
+			s_hmdTracking[ 1 ] = head.y;
+			s_hmdTracking[ 2 ] = head.z;
 			const bool roomWalk = RoomWalkOn();
 			if( roomWalk )
 			{
