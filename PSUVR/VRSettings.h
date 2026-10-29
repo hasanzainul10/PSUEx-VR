@@ -318,6 +318,11 @@ struct VRSettings
 	bool m_perfLogBatching = true;
 	// Stereo: the monitor shows the left eye instead of a separate flat 3D pass (the HUD still draws on top).
 	bool m_flatMirrorEye = true;
+	// Stereo projection layer space: "local" (the rendered head poses, so the runtime's reprojection corrects
+	// head turns when the game is slower than the headset; less judder) or "view" (head-locked, the old behaviour).
+	std::string m_stereoLayerSpace = "local";
+	// Eye images (and the OpenXR eye swapchains) at this times the runtime's recommended size, 0.5-1.5.
+	float m_eyeResolutionScale = 1.0f;
 
 	// VR shortcuts (keyboard and Back+button pad chords).
 	std::array< VRBinding, kVRActionCount > m_bindings = DefaultVRBindings();

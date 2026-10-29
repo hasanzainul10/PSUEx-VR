@@ -340,6 +340,8 @@ namespace PSUVR
 
 		__try
 		{
+			// eyeResolutionScale: recreate the eye swapchains between frames (the eye RTs follow them).
+			m_xr->SetEyeResolutionScale( Config::Get().vr.m_eyeResolutionScale );
 			if( !m_xr->BeginFrame() )
 			{
 				StereoRenderer::Get().ConsumeFrame();
@@ -405,7 +407,8 @@ namespace PSUVR
 				if( stereoSubmitted && !m_loggedStereo )
 				{
 					m_loggedStereo = true;
-					PSU_LOG( "VR: stereo projection layer active (head-locked submit; recenter: Ctrl+F9 / Back+X)\n" );
+					PSU_LOG( "VR: stereo projection layer active (%s space; recenter: Ctrl+F9 / Back+X)\n",
+						Config::Get().vr.m_stereoLayerSpace == "local" ? "LOCAL" : "VIEW" );
 				}
 				else if( !stereoSubmitted )
 				{

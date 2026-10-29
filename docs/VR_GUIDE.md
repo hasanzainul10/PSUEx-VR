@@ -96,6 +96,13 @@ In the headset the window shows on the HUD panel, with a mouse pointer drawn for
 - **Pause VR** (Ctrl + F8): instantly switch to normal flat play. The headset shows the game on a big screen. Press again to resume. Not saved.
 - **VR enabled**: turns VR on or off completely. Takes effect the **next time you start the game**.
 
+### Performance tab
+
+- **Quality**: Low / Medium / High presets. Low = eye resolution 0.7, no screen glow or glare, glows and sprites not placed in 3D. Medium = 0.85, no screen glow or glare. High = the defaults. Changing one of those by hand shows *Custom*.
+- **Eye resolution** (0.5 to 1.5): size of the headset images, times what SteamVR recommends. Lower is faster on weak graphics cards and looks softer. SteamVR's own resolution slider (Settings → Video) multiplies with it.
+- **Headset image space**: *World (local)* (the default) lets SteamVR correct your head turns between game frames. The game runs at 60 fps on a 90 Hz or faster headset, so this cuts judder when you turn your head. With SteamVR's Motion Smoothing on, the sky or water can smear; turn Motion Smoothing off if it bothers you. *Head-locked (view)* is the old behaviour, with more judder.
+- **Show frame timing**: a small window with how long each part of the frame takes.
+
 ---
 
 ## 7. Controls
@@ -207,7 +214,8 @@ The camera never turns by itself; it only moves when you tell it to.
 | Gamepad does nothing at all | The loader lists your controllers in `dinput8_proxy.log` (`#0` is the one the game uses). VR motion controllers are moved to the end automatically; unplug extra pads or sticks if the wrong one is `#0`. |
 | Gamepad does nothing while the game window isn't focused | Settings → General → *Gamepad works when the game isn't focused* must be on (restart the game after changing it). |
 | HUD text is blurry | Use a higher game resolution (2560 x 1440), or raise **HUD and menus → Size**. |
-| Choppy | Lower shadows, lower the game resolution, close other apps. |
+| Image judders when you turn your head | VR Settings → Performance → *Headset image space*: World (local). |
+| Choppy | VR Settings → Performance: Quality *Low* or a lower *Eye resolution*. Lower shadows, close other apps. |
 | Something else | Send `psuex.log` and `dinput8_proxy.log` from the game folder with your report. |
 
 ---

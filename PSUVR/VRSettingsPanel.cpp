@@ -10,6 +10,7 @@
 #include <Windows.h>
 #include <Xinput.h>
 
+#include <cmath>
 #include <cstdio>
 
 namespace PSUVR
@@ -275,12 +276,12 @@ namespace PSUVR
 			{
 				context.openToolkit();
 			}
-			Help( "Opens the Rogue's Toolkit settings menu (it sends the toolkit's F6 key; this window closes). "
 			ImGui::Checkbox( "Toolkit panels on the VR HUD", &s.m_toolkitOnHud );
 			Help( "Rogue's Toolkit's damage meter, drop panel, timers and menu are drawn onto the HUD panel in the headset. "
 				"They then no longer show on the flat monitor. Off: monitor only." );
 			ImGui::Checkbox( "Pointer drives the toolkit menu", &s.m_toolkitPointer );
 			Help( "While the toolkit menu is open, the right controller's pointer moves and clicks the system mouse over it." );
+			Help( "Opens the Rogue's Toolkit settings menu (it sends the toolkit's F6 key; this window closes). "
 				"Also on the shortcut under Controls (default Ctrl + F6, or Back + A on the pad). "
 				"Needs the toolkit installed; set its settings_pad to \"\" so Back + Start only opens VR settings." );
 		}
@@ -646,6 +647,38 @@ namespace PSUVR
 
 		if( Section( Tab::Performance, "Performance" ) )
 		{
+			// Presets only write the settings below; whatever doesn't match one reads as Custom.
+			struct Preset { const char *name; float scale; bool blur, glare, sprites; };
+			static const Preset presets[] = { { "Low", 0.7f, false, false, false }, { "Medium", 0.85f, false, false, true },
+				{ "High", 1.0f, true, false, true } };
+			int preset = 3;
+			for( int i = 0; i < 3; ++i )
+			{
+				if( std::fabs( s.m_eyeResolutionScale - presets[ i ].scale ) < 0.005f && s.m_eyeBlur == presets[ i ].blur &&
+					s.m_eyeGlare == presets[ i ].glare && s.m_reprojectSprites == presets[ i ].sprites )
+				{
+					preset = i;
+				}
+			}
+			static const char *const presetNames[] = { "Low", "Medium", "High", "Custom" };
+			if( ImGui::Combo( "Quality", &preset, presetNames, 4 ) && preset < 3 )
+			{
+				s.m_eyeResolutionScale = presets[ preset ].scale;
+				s.m_eyeBlur = presets[ preset ].blur;
+				s.m_eyeGlare = presets[ preset ].glare;
+				s.m_reprojectSprites = presets[ preset ].sprites;
+			}
+			Help( "Low: eye resolution 0.7, no screen glow / glare, glows and sprites not placed in 3D. Medium: 0.85, no "
+				"screen glow / glare. High: the defaults. Changing one of those settings by hand shows Custom." );
+			ImGui::SliderFloat( "Eye resolution", &s.m_eyeResolutionScale, 0.5f, 1.5f, "%.2f" );
+			Help( "Size of the headset images, times what the VR runtime recommends (SteamVR's own resolution setting "
+				"also counts). Lower costs less GPU and looks softer. Applies within a frame." );
+			static const char *const layerIds[] = { "view", "local" };
+			static const char *const layerNames[] = { "Head-locked (view)", "World (local)" };
+			Combo( "Headset image space", s.m_stereoLayerSpace, layerIds, layerNames, 2 );
+			Help( "World: the headset gets the head pose each picture was drawn for, so SteamVR can correct head turns "
+				"when the game (60 fps) is slower than the headset. Less judder when turning your head; motion smoothing "
+				"may smear the sky or water. Head-locked: the old behaviour, more judder." );
 			ImGui::Checkbox( "Show frame timing", &s.m_perfOverlay );
 			Help( "A small window with the time each part of the frame takes (CPU and GPU, in ms) and how often a "
 				"frame misses the headset's refresh. Also written to psuex.log every 5 s (\"Perf 5 s:\")." );
