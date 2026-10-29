@@ -69,6 +69,11 @@ namespace PSUVR
 		static void NoteShaderDraw( IDirect3DDevice9 *device, unsigned primitiveCount, void *ret );
 		static void NoteNearCameraDraw( IDirect3DDevice9 *device, unsigned primitiveType, unsigned primitiveCount,
 			const void *verts, unsigned stride, void *ret );
+		// Debug: distinct draws made in the eye passes while a given render layer runs (default 0x0F, enemies).
+		static void NoteLayerDraw( IDirect3DDevice9 *device, const char *api, unsigned primitiveType, unsigned primitiveCount, void *ret );
+		// Eye passes: the enemies' hit-spark billboard (layer 0x0F, 2-triangle additive 32x32) is the cross-shaped flash
+		// where a shot lands; it is built for the flat camera, so it is hidden in the eyes.
+		static bool SkipEyeHitSpark( IDirect3DDevice9 *device, unsigned primitiveCount );
 		static void NoteEffectDraw( IDirect3DDevice9 *device, int where, unsigned primitiveType, unsigned primitiveCount,
 			const void *verts, unsigned stride, void *ret );
 		// A technique is being cast: effect draws in the next 2 s are tagged "tech".

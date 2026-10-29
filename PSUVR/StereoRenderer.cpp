@@ -951,6 +951,93 @@ namespace PSUVR
 #endif
 	}
 
+	bool StereoRenderer::SkipEyeHitSpark( IDirect3DDevice9 *device, unsigned primitiveCount )
+	{
+		if( !s_inEyePass || !device || primitiveCount != 2 || *reinterpret_cast< const int * >( 0x009946C8 ) != 0x0F ||
+			!Config::Get().vr.m_enabled )
+		{
+			return false;
+		}
+		DWORD blend = 0, src = 0, dst = 0;
+		device->GetRenderState( D3DRS_ALPHABLENDENABLE, &blend );
+		device->GetRenderState( D3DRS_SRCBLEND, &src );
+		device->GetRenderState( D3DRS_DESTBLEND, &dst );
+		if( !blend || src != D3DBLEND_ONE || dst != D3DBLEND_ONE )
+		{
+			return false;
+		}
+		IDirect3DBaseTexture9 *texture = nullptr;
+		if( FAILED( device->GetTexture( 0, &texture ) ) || !texture )
+		{
+			return false;
+		}
+		IDirect3DTexture9 *tex2d = nullptr;
+		texture->QueryInterface( __uuidof( IDirect3DTexture9 ), reinterpret_cast< void ** >( &tex2d ) );
+		texture->Release();
+		if( !tex2d )
+		{
+			return false;
+		}
+		D3DSURFACE_DESC desc{};
+		tex2d->GetLevelDesc( 0, &desc );
+		tex2d->Release();
+		return desc.Width <= 32 && desc.Height <= 32;
+	}
+
+	void StereoRenderer::NoteLayerDraw( IDirect3DDevice9 *device, const char *api, unsigned primitiveType, unsigned primitiveCount, void *ret )
+	{
+#ifdef _DEBUG
+		constexpr int kLayer = 0x0F;
+		if( !s_inEyePass || !device || *reinterpret_cast< const int * >( 0x009946C8 ) != kLayer )
+		{
+			return;
+		}
+		DWORD fvf = 0, blend = 0, src = 0, dst = 0, zEnable = 0, zWrite = 0;
+		device->GetFVF( &fvf );
+		device->GetRenderState( D3DRS_ALPHABLENDENABLE, &blend );
+		device->GetRenderState( D3DRS_SRCBLEND, &src );
+		device->GetRenderState( D3DRS_DESTBLEND, &dst );
+		device->GetRenderState( D3DRS_ZENABLE, &zEnable );
+		device->GetRenderState( D3DRS_ZWRITEENABLE, &zWrite );
+		unsigned texW = 0, texH = 0;
+		IDirect3DBaseTexture9 *texture = nullptr;
+		if( SUCCEEDED( device->GetTexture( 0, &texture ) ) && texture )
+		{
+			IDirect3DTexture9 *tex2d = nullptr;
+			texture->QueryInterface( __uuidof( IDirect3DTexture9 ), reinterpret_cast< void ** >( &tex2d ) );
+			texture->Release();
+			if( tex2d )
+			{
+				D3DSURFACE_DESC desc{};
+				tex2d->GetLevelDesc( 0, &desc );
+				texW = desc.Width;
+				texH = desc.Height;
+				tex2d->Release();
+			}
+		}
+		struct Seen { void *ret; unsigned texW, texH, prims; DWORD fvf; };
+		static Seen s_seen[ 128 ];
+		static unsigned s_count = 0;
+		for( unsigned i = 0; i < s_count; ++i )
+		{
+			if( s_seen[ i ].ret == ret && s_seen[ i ].texW == texW && s_seen[ i ].texH == texH && s_seen[ i ].prims == primitiveCount &&
+				s_seen[ i ].fvf == fvf )
+			{
+				return;
+			}
+		}
+		if( s_count >= 128 )
+		{
+			return;
+		}
+		s_seen[ s_count++ ] = { ret, texW, texH, primitiveCount, fvf };
+		PSU_LOG( "VRLayer0F: %s ret=%p type=%u prims=%u fvf=0x%X tex=%ux%u blend=%lu %lu/%lu z=%lu zw=%lu\n", api, ret, primitiveType,
+			primitiveCount, fvf, texW, texH, blend, src, dst, zEnable, zWrite );
+#else
+		( void )device; ( void )api; ( void )primitiveType; ( void )primitiveCount; ( void )ret;
+#endif
+	}
+
 	void StereoRenderer::NoteEffectDraw( IDirect3DDevice9 *device, int where, unsigned primitiveType, unsigned primitiveCount,
 		const void *verts, unsigned stride, void *ret )
 	{
@@ -1170,6 +1257,31 @@ namespace PSUVR
 		// The game's 2D sprite draw; HUD pieces come through it too, but those are drawn in pass B
 		// (not an eye pass) or carry no projected depth.
 		constexpr uintptr_t kSpriteDraw = 0x00747248;
+#ifdef _DEBUG
+		// A projected-depth XYZRHW draw in an eye pass from any other site: a sprite we fail to recognise?
+		if( s_inEyePass && device && verts && stride >= 16 && reinterpret_cast< uintptr_t >( ret ) != kSpriteDraw )
+		{
+			DWORD dfvf = 0;
+			const float *v0 = static_cast< const float * >( verts );
+			if( SUCCEEDED( device->GetFVF( &dfvf ) ) && ( dfvf & D3DFVF_POSITION_MASK ) == D3DFVF_XYZRHW && v0[ 2 ] > 0.0f &&
+				v0[ 2 ] < 1.0f && v0[ 3 ] > 0.0f )
+			{
+				static void *s_seen[ 64 ]{};
+				static unsigned s_seenCount = 0;
+				bool seen = s_seenCount >= 64;
+				for( unsigned i = 0; i < s_seenCount && !seen; ++i )
+				{
+					seen = s_seen[ i ] == ret;
+				}
+				if( !seen )
+				{
+					s_seen[ s_seenCount++ ] = ret;
+					PSU_LOG( "Stereo: eye XYZRHW draw with projected z from ret=%p (not the sprite site) prims=%u z=%.3f\n", ret,
+						primitiveCount, v0[ 2 ] );
+				}
+			}
+		}
+#endif
 		if( !s_inEyePass || !device || !verts || reinterpret_cast< uintptr_t >( ret ) != kSpriteDraw ||
 			!Config::Get().vr.m_reprojectSprites || stride < 16 || s_gameW < 1 || s_gameH < 1 || s_eyeW < 1 || s_eyeH < 1 )
 		{

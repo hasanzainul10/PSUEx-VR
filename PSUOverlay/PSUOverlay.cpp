@@ -526,6 +526,7 @@ HRESULT APIENTRY PSUOverlay::Hook_DrawPrimitive( LPDIRECT3DDEVICE9 pDevice, D3DP
 	NOTE_TOOLKIT_DRAW( "DrawPrimitive" );
 #ifdef _DEBUG
 	PSUVR::StereoRenderer::CountLayerDraw( GAME_RET() );
+	PSUVR::StereoRenderer::NoteLayerDraw( pDevice, "DrawPrimitive", static_cast< unsigned >( PrimitiveType ), PrimitiveCount, GAME_RET() );
 #endif
 	if( PSUVR::StereoRenderer::SkipEyeEffectDraw( GAME_RET() ) )
 	{
@@ -571,8 +572,13 @@ HRESULT APIENTRY PSUOverlay::Hook_DrawIndexedPrimitive( LPDIRECT3DDEVICE9 pDevic
 	NOTE_TOOLKIT_DRAW( "DrawIndexedPrimitive" );
 #ifdef _DEBUG
 	PSUVR::StereoRenderer::CountLayerDraw( GAME_RET() );
+	PSUVR::StereoRenderer::NoteLayerDraw( pDevice, "DrawIndexedPrimitive", static_cast< unsigned >( PrimitiveType ), PrimitiveCount, GAME_RET() );
 #endif
 	if( PSUVR::StereoRenderer::SkipEyeEffectDraw( GAME_RET() ) )
+	{
+		return D3D_OK;
+	}
+	if( PSUVR::StereoRenderer::SkipEyeHitSpark( pDevice, PrimitiveCount ) )
 	{
 		return D3D_OK;
 	}
@@ -616,12 +622,34 @@ HRESULT APIENTRY PSUOverlay::Hook_DrawPrimitiveUP( LPDIRECT3DDEVICE9 pDevice, D3
 	NOTE_TOOLKIT_DRAW( "DrawPrimitiveUP" );
 #ifdef _DEBUG
 	PSUVR::StereoRenderer::CountLayerDraw( GAME_RET() );
+	PSUVR::StereoRenderer::NoteLayerDraw( pDevice, "DrawPrimitiveUP", static_cast< unsigned >( PrimitiveType ), PrimitiveCount, GAME_RET() );
 #endif
 	if( PSUVR::StereoRenderer::SkipEyeEffectDraw( GAME_RET() ) )
 	{
 		return D3D_OK;
 	}
 	FrameTrace::OnDrawPrimitive( true );
+#ifdef _DEBUG
+	// Toolkit diagnostic: UP draws whose direct caller is not the game, with the call site the stack scan picked.
+	if( PSUVR::StereoRenderer::InEyePass() && !InGameExe( reinterpret_cast< uintptr_t >( _ReturnAddress() ) ) &&
+		!InOwnModule( reinterpret_cast< uintptr_t >( _ReturnAddress() ) ) )
+	{
+		static void *s_seenRaw[ 64 ]{};
+		static unsigned s_seenRawCount = 0;
+		void *scanned = GAME_RET();
+		bool seen = s_seenRawCount >= 64;
+		for( unsigned i = 0; i < s_seenRawCount && !seen; ++i )
+		{
+			seen = s_seenRaw[ i ] == scanned;
+		}
+		if( !seen )
+		{
+			s_seenRaw[ s_seenRawCount++ ] = scanned;
+			PSU_LOG( "VRToolkit: eye UP draw direct ret=%p, scanned game ret=%p, prims=%u stride=%u\n", _ReturnAddress(), scanned,
+				PrimitiveCount, VertexStreamZeroStride );
+		}
+	}
+#endif
 #ifdef _DEBUG
 	PSUVR::StereoRenderer::NoteShaderDraw( pDevice, PrimitiveCount, GAME_RET() );
 	PSUVR::StereoRenderer::NoteEffectDraw( pDevice, EffectDrawWhere(), static_cast< unsigned >( PrimitiveType ), PrimitiveCount,
@@ -701,6 +729,7 @@ HRESULT APIENTRY PSUOverlay::Hook_DrawIndexedPrimitiveUP( LPDIRECT3DDEVICE9 pDev
 	NOTE_TOOLKIT_DRAW( "DrawIndexedPrimitiveUP" );
 #ifdef _DEBUG
 	PSUVR::StereoRenderer::CountLayerDraw( GAME_RET() );
+	PSUVR::StereoRenderer::NoteLayerDraw( pDevice, "DrawIndexedPrimitiveUP", static_cast< unsigned >( Type ), PrimitiveCount, GAME_RET() );
 #endif
 	if( PSUVR::StereoRenderer::SkipEyeEffectDraw( GAME_RET() ) )
 	{

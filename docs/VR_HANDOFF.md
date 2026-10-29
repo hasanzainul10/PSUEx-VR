@@ -290,6 +290,26 @@ and pushed to origin `psu_vr` unless noted.
    Toggle off / no mirror: the old order (draw, then capture). **Pending test:** deploy, then town with nameplates in view:
    on the monitor they sit over the right people; the headset is unchanged. Committed with phase 2.
    **Next:** phase 3 (eye resolution scale, LOCAL-space layer, quality presets).
+   **Phase 3 built (Debug + Release, 2026-10-30), not yet deployed (PSUC was running); no settings-file changes.** Performance tab:
+   - `stereoLayerSpace` ("view" default / "local"), combo *Headset image space*: `OpenXRRuntime::EndFrame` submits the stereo
+     projection layer in LOCAL space with the poses the eyes were rendered with (`m_submittedPoses`, from `LocateNextViews`
+     one period ahead), so SteamVR reprojection corrects head rotation at 90 Hz while the game runs at 60. Logs
+     `OpenXR: stereo layer in LOCAL|VIEW space` on each change. Risk the old comment names: motion smoothing may ghost sky / water.
+   - `eyeResolutionScale` (0.5-1.5, default 1.0), slider *Eye resolution*: `OpenXRRuntime::SetEyeResolutionScale` (called by
+     `VRSystem` before `BeginFrame`) recreates the eye swapchains at recommended x scale (even sizes, clamped to max) once the
+     value is steady 0.5 s; on failure it goes back to the old size and won't retry that scale. The D3D9 eye RTs follow via
+     `EyeSwapchainSize` -> `EnsureEyeTargets`, so sizes match and the plain-copy blit still applies; `MirrorLeftEye` and the
+     nameplate mapping use `m_lastEyeW/H` (set in `RenderEyes`), so they follow too. Log `OpenXR: eye resolution scale a -> b`,
+     then `OpenXR: eye swapchains WxH` and `D3D11Bridge: eye targets WxH`.
+   - *Quality* combo (panel only, no stored key): Low = scale 0.7, `eyeBlur` / `eyeGlare` / `reprojectSprites` off; Medium = 0.85,
+     blur / glare off, sprites on; High = defaults (1.0, blur on, glare off, sprites on); anything else shows Custom.
+   - `Perf 5 s:` header now ends `fast FCHLM, layer view|local, res 1.00`.
+   **Pending tests (deploy first: Debug `PSUExD.dll` + `PSUExVRConfig.exe`, Release `PSUExVR.dll`), `perfOverlay` on, town:**
+   1. Judder A/B: *Headset image space* View ~1 min turning the head, then World (local) ~1 min, same spot. User judges judder
+      and any sky / water smear (try with SteamVR Motion Smoothing on and off).
+   2. Scale: Quality Low (0.7) ~1 min, then High ~1 min. Expect GPU eyes / frame ms lower at 0.7, softer image, no black /
+      stretched eyes, monitor mirror still cropped right. Also try 1.5 once (does the bigger shared RT create?).
+   Compare with `tools/lastlog.sh -a -n 0 'Perf 5 s'` split by `layer` / `res`, and `tools/lastlog.sh 'eye resolution|eye swapchains|eye targets|stereo layer'`.
 
 7. **Rogue's Toolkit 0.7.2 alongside PSUEx (UPDATED 2026-10-30, see "Status 2026-10-30" at the end of this item; the chain described next is superseded).** Plan:
    `C:\Users\hasan\.claude\plans\plan-to-make-our-giggly-sifakis.md`. The toolkit is a Rust `dinput8.dll` proxy
@@ -391,6 +411,19 @@ and pushed to origin `psu_vr` unless noted.
      reroutes. Next: (1) confirm by renaming `toolkit_dinput8.dll` -> `.off` (cross should vanish); (2) find the draw with the
      Debug draw-site bisect (Ctrl+Shift+Insert / Delete) while shooting; (3) check its return address against what `GAME_RET()`
      reports (log both); `VREffect: new #N other ret=…` lines show every new site.
+     **Session notes (2026-10-30):** strongest lead: `ReprojectSpriteIfNeeded` only treats a draw as the game's world sprite when
+     `ret == 0x00747248` exactly, so any other/wrong `GAME_RET()` leaves an impact sprite as a flat screen quad in each eye.
+     Added Debug-only logs (built, NOT deployed - game was running): `VRToolkit: eye UP draw direct ret=… scanned game ret=…`
+     (eye-pass UP draws whose direct caller is not the game) and `Stereo: eye XYZRHW draw with projected z from ret=…`
+     (XYZRHW draws with z in (0,1) from a site other than 0x747248). Test: deploy `Debug\PSUExD.dll`, fire a few manual-aim shots,
+     `tools/lastlog.sh "VRToolkit: eye UP|eye XYZRHW"`; if the flash site shows up there, route it through the sprite path.
+     Still to do: step (1), rename `toolkit_dinput8.dll` -> `.off` to confirm the cause.
+     **Result (2026-10-30):** NOT the toolkit (flash also with `toolkit_dinput8.dll.off`); the user's layer bisect says layer 0x0F
+     (enemies, `TEnemyComponent`). `VRLayer0F:` log: one draw, `DrawIndexedPrimitive` ret 0x0074E4FD, 2 prims, fvf 0x102, 32x32 tex,
+     blend ONE/ONE, z on / zwrite off = the hit-spark billboard. Fix (built, NOT deployed - game running):
+     `StereoRenderer::SkipEyeHitSpark` (eye passes only, layer 0x0F, 2 prims, additive, tex <= 32x32) called from
+     `Hook_DrawIndexedPrimitive`. Test: shoot enemies in manual aim, no cross; check enemy status effects/other additive bits
+     still look right (restore `toolkit_dinput8.dll.off` -> `.dll` for toolkit use). `NoteLayerDraw` stays as Debug logging.
    - **Motion-controller shortcut (built + deployed, untested):** both grips + left stick pushed up (>0.8, once per push) sends
      `VRAction::ToggleToolkitMenu` (`VRSyntheticPad.cpp` before the layout loop; `VRMotionLayout` entry so the label cards and
      diagram show it; `VR_GUIDE.md`).
