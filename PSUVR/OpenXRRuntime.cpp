@@ -1,5 +1,7 @@
 ﻿#include "OpenXRRuntime.h"
 
+#include "VRPerf.h"
+
 #include "../Misc/Log.h"
 #include "../PSUExConfig.h"
 
@@ -952,7 +954,11 @@ namespace PSUVR
 
 		XrFrameWaitInfo waitInfo{ XR_TYPE_FRAME_WAIT_INFO };
 		XrFrameState frameState{ XR_TYPE_FRAME_STATE };
-		const XrResult waitHr = xrWaitFrame( session, &waitInfo, &frameState );
+		XrResult waitHr;
+		{
+			VRPerf::Scope timer( VRPerf::Stage::WaitFrame );
+			waitHr = xrWaitFrame( session, &waitInfo, &frameState );
+		}
 		if( XR_FAILED( waitHr ) )
 		{
 			static unsigned s_waitFails = 0;
@@ -965,6 +971,7 @@ namespace PSUVR
 		}
 		m_displayTime = frameState.predictedDisplayTime;
 		m_displayPeriod = frameState.predictedDisplayPeriod;
+		VRPerf::SetDisplayPeriod( m_displayPeriod );
 		m_shouldRender = frameState.shouldRender;
 		// Testing with emulated controllers and no headset worn (SteamVR's null HMD stays
 		// "synchronized", never visible): render anyway, so the eye passes and everything
@@ -1004,6 +1011,7 @@ namespace PSUVR
 			XrSwapchain swapchain = static_cast< XrSwapchain >( m_swapchain[ eye ]  );
 			XrSwapchainImageAcquireInfo ai{ XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
 			uint32_t index = 0;
+			VRPerf::Scope swapTimer( VRPerf::Stage::SwapchainWait );
 			if( XR_FAILED( xrAcquireSwapchainImage( swapchain, &ai, &index ) ) )
 			{
 				return false;
@@ -1207,9 +1215,28 @@ namespace PSUVR
 		return fmt == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB || fmt == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
 	}
 
+	// 8-bit BGRA / RGBA formats that CopySubresourceRegion can copy between (same typeless group).
+	static DXGI_FORMAT CopyGroup( DXGI_FORMAT fmt )
+	{
+		switch( fmt )
+		{
+		case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+		case DXGI_FORMAT_B8G8R8A8_UNORM:
+		case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+			return DXGI_FORMAT_B8G8R8A8_TYPELESS;
+		case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+		case DXGI_FORMAT_R8G8B8A8_UNORM:
+		case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+			return DXGI_FORMAT_R8G8B8A8_TYPELESS;
+		default:
+			return DXGI_FORMAT_UNKNOWN;
+		}
+	}
+
 	bool OpenXRRuntime::BlitTexture( ID3D11Texture2D *src, ID3D11Texture2D *dst )
 	{
-		if( !EnsureBlitPipeline() || !src || !dst || !m_context )
+		VRPerf::Scope timer( VRPerf::Stage::Blit );
+		if( !src || !dst || !m_context )
 		{
 			return false;
 		}
@@ -1218,6 +1245,27 @@ namespace PSUVR
 		D3D11_TEXTURE2D_DESC dstDesc{};
 		src->GetDesc( &srcDesc );
 		dst->GetDesc( &dstDesc );
+
+		// Same size and byte layout: the shader blit only passes the stored gamma bytes through
+		// (the linearize + sRGB RTV path round-trips to the same bytes), so a plain copy matches it.
+		const DXGI_FORMAT group = CopyGroup( srcDesc.Format );
+		if( Config::Get().vr.m_perfCopyBlits && group != DXGI_FORMAT_UNKNOWN && group == CopyGroup( dstDesc.Format ) &&
+			srcDesc.Width == dstDesc.Width && srcDesc.Height == dstDesc.Height &&
+			srcDesc.SampleDesc.Count == 1 && dstDesc.SampleDesc.Count == 1 )
+		{
+			m_context->CopySubresourceRegion( dst, 0, 0, 0, 0, src, 0, nullptr );
+			if( !m_loggedBlitCopy )
+			{
+				m_loggedBlitCopy = true;
+				PSU_LOG( "OpenXR: blit as plain copy %ux%u src fmt=%u dst fmt=%u\n",
+					srcDesc.Width, srcDesc.Height, ( unsigned )srcDesc.Format, ( unsigned )dstDesc.Format );
+			}
+			return true;
+		}
+		if( !EnsureBlitPipeline() )
+		{
+			return false;
+		}
 
 		DXGI_FORMAT srvFmt = srcDesc.Format;
 		if( srvFmt == DXGI_FORMAT_B8G8R8A8_TYPELESS ) srvFmt = DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -1275,8 +1323,12 @@ namespace PSUVR
 				typedSrgbDst ? "linearize+sRGB" : "passthrough" );
 		}
 
-		const float clear[ 4 ] = { 0.0f, 0.0f, 0.0f, 1.0f };
-		m_context->ClearRenderTargetView( rtv, clear );
+		if( !Config::Get().vr.m_perfCopyBlits )
+		{
+			// The full-screen triangle covers the whole target, so the clear only costs time.
+			const float clear[ 4 ] = { 0.0f, 0.0f, 0.0f, 1.0f };
+			m_context->ClearRenderTargetView( rtv, clear );
+		}
 		m_context->OMSetRenderTargets( 1, &rtv, nullptr );
 
 		D3D11_VIEWPORT vp{};
@@ -1376,13 +1428,18 @@ namespace PSUVR
 		XrSwapchain swapchain = static_cast< XrSwapchain >( swapchainHandle );
 		XrSwapchainImageAcquireInfo ai{ XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
 		uint32_t index = 0;
-		if( XR_FAILED( xrAcquireSwapchainImage( swapchain, &ai, &index ) ) )
+		XrResult waitResult;
 		{
-			return false;
+			VRPerf::Scope swapTimer( VRPerf::Stage::SwapchainWait );
+			if( XR_FAILED( xrAcquireSwapchainImage( swapchain, &ai, &index ) ) )
+			{
+				return false;
+			}
+			XrSwapchainImageWaitInfo wi{ XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO };
+			wi.timeout = XR_INFINITE_DURATION;
+			waitResult = xrWaitSwapchainImage( swapchain, &wi );
 		}
-		XrSwapchainImageWaitInfo wi{ XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO };
-		wi.timeout = XR_INFINITE_DURATION;
-		if( XR_FAILED( xrWaitSwapchainImage( swapchain, &wi ) ) )
+		if( XR_FAILED( waitResult ) )
 		{
 			XrSwapchainImageReleaseInfo ri{ XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
 			xrReleaseSwapchainImage( swapchain, &ri );
@@ -1768,7 +1825,11 @@ namespace PSUVR
 		endInfo.layerCount = layerCount;
 		endInfo.layers = layerCount ? layers : nullptr;
 
-		XrResult r = xrEndFrame( session, &endInfo );
+		XrResult r;
+		{
+			VRPerf::Scope timer( VRPerf::Stage::EndFrame );
+			r = xrEndFrame( session, &endInfo );
+		}
 		m_frameStarted = false;
 		m_clearedThisFrame = false;
 		m_submitBackdrop = false;

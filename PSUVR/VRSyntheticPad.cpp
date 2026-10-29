@@ -5,6 +5,7 @@
 #include "VRControllers.h"
 #include "VRSystem.h"
 #include "VRMotionLayout.h"
+#include "VRPerf.h"
 #include "VRSpeech.h"
 #include "VRUiPointer.h"
 #include "../Misc/Log.h"
@@ -14,9 +15,14 @@
 #define DIRECTINPUT_VERSION 0x0800
 #include <dinput.h>
 
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <cmath>
 #include <cstring>
 #include <mutex>
+#include <string>
+#include <vector>
 
 namespace PSUVR
 {
@@ -289,9 +295,15 @@ namespace PSUVR
 		constexpr float kSwitchWaitSeconds = 0.6f;
 		constexpr float kAttackPulseSeconds = 0.08f;
 		constexpr float kMinTurnSeconds = 0.05f;
-		constexpr float kMaxTurnSeconds = 0.7f;
-		constexpr float kFaceHoldAfterSeconds = 0.1f;
-		constexpr float kFaceToleranceRadians = 20.0f * ( 3.14159265f / 180.0f );
+		constexpr float kMaxTurnSeconds = 0.5f;
+		constexpr float kFaceHoldAfterSeconds = 0.05f;
+		// The game keeps turning during the hold after the stop (about 75 degrees per 0.1 s), so the
+		// turn ends this much before the tolerance is reached.
+		constexpr float kFaceLeadRadians = 10.0f * ( 3.14159265f / 180.0f );
+		float FaceTolerance()
+		{
+			return std::clamp( Config::Get().vr.m_attackFaceTolerance, 5.0f, 90.0f ) * ( 3.14159265f / 180.0f );
+		}
 
 		bool MeleeKind( PSUCombat::WeaponKind kind )
 		{
@@ -417,7 +429,7 @@ namespace PSUVR
 #ifdef _DEBUG
 			PSU_LOG( "VRFace: off %.0f deg (facing raw %04X)\n", off * 57.29578f, s_combat.facing );
 #endif
-			return std::fabs( off ) > kFaceToleranceRadians;
+			return std::fabs( off ) > FaceTolerance();
 		}
 
 		void StartAttack( int button, int hand )
@@ -927,7 +939,7 @@ namespace PSUVR
 				// so the stick stays there through the press.
 				s_turnTime += dt;
 				float off = 0.0f;
-				const bool facing = FacingOff( off ) && std::fabs( off ) <= kFaceToleranceRadians;
+				const bool facing = FacingOff( off ) && std::fabs( off ) <= FaceTolerance() + kFaceLeadRadians;
 				if( ( facing && s_turnTime >= kMinTurnSeconds ) || s_turnTime >= kMaxTurnSeconds )
 				{
 					s_turning = false;
@@ -1142,11 +1154,180 @@ namespace PSUVR
 
 	namespace VRSyntheticPad
 	{
+		// ---- Voice button script (item use through the palette) ------------------------------
+		// Steps: hold:<btn> (held to the end), wait:open (palette shown), tap:<btn> / tap:slot,
+		// wait:<seconds>. Runs on the virtual pad, so the game sees plain presses.
+		struct ScriptStep
+		{
+			enum Kind { Hold, WaitOpen, Tap, Wait } kind = Wait;
+			int button = -1;
+			float time = 0.0f;
+		};
+		std::vector< ScriptStep > s_script;
+		size_t s_scriptIndex = 0;
+		float s_scriptTimer = 0.0f;
+		bool s_scriptStepStarted = false;
+		uint32_t s_scriptHeld = 0;
+		float s_scriptTotal = 0.0f;
+
+		int ScriptButtonId( std::string name )
+		{
+			for( char &c : name )
+			{
+				c = static_cast< char >( std::tolower( static_cast< unsigned char >( c ) ) );
+			}
+			static const char *const names[ kPadButtonCount ] = {
+				"a", "b", "x", "y", "l1", "r1", "l2", "r2", "l3", "r3", "select", "start", "up", "right", "down", "left" };
+			for( int i = 0; i < kPadButtonCount; ++i )
+			{
+				if( name == names[ i ] )
+				{
+					return i;
+				}
+			}
+			return -1;
+		}
+
+		void ScriptFinish( const char *why )
+		{
+			PSU_LOG( "VRVoice: pad script %s\n", why );
+			s_script.clear();
+			s_scriptIndex = 0;
+			s_scriptStepStarted = false;
+			s_scriptHeld = 0;
+		}
+
+		// Adds the script's pad buttons for this frame.
+		void RunScript( float dt, PadState &pad )
+		{
+			if( s_script.empty() )
+			{
+				return;
+			}
+			s_scriptTotal += dt;
+			if( s_scriptTotal > 6.0f )
+			{
+				ScriptFinish( "timed out" );
+				return;
+			}
+			// Holds complete at once; the first timed step ends the frame's work.
+			for( int guard = 0; guard < 8 && s_scriptIndex < s_script.size(); ++guard )
+			{
+				const ScriptStep step = s_script[ s_scriptIndex ];
+				if( !s_scriptStepStarted )
+				{
+					s_scriptStepStarted = true;
+					s_scriptTimer = step.kind == ScriptStep::Tap ? 0.24f : step.time;
+					if( step.kind == ScriptStep::Hold )
+					{
+						s_scriptHeld |= Bit( step.button );
+					}
+				}
+				bool done = false;
+				switch( step.kind )
+				{
+					case ScriptStep::Hold:
+						done = true;
+						break;
+					case ScriptStep::WaitOpen:
+						s_scriptTimer -= dt;
+						if( s_combatValid && s_combat.paletteOpen )
+						{
+							done = true;
+						}
+						else if( s_scriptTimer <= 0.0f )
+						{
+							ScriptFinish( "aborted: the palette never opened" );
+							return;
+						}
+						break;
+					case ScriptStep::Tap:
+						// 0.12 s down, 0.12 s up.
+						s_scriptTimer -= dt;
+						if( s_scriptTimer > 0.12f )
+						{
+							pad.buttons |= Bit( step.button );
+						}
+						done = s_scriptTimer <= 0.0f;
+						break;
+					case ScriptStep::Wait:
+						s_scriptTimer -= dt;
+						done = s_scriptTimer <= 0.0f;
+						break;
+				}
+				if( !done )
+				{
+					break;
+				}
+				s_scriptStepStarted = false;
+				++s_scriptIndex;
+				if( step.kind != ScriptStep::Hold )
+				{
+					break;
+				}
+			}
+			if( s_scriptIndex >= s_script.size() )
+			{
+				ScriptFinish( "done" );
+				return;
+			}
+			pad.buttons |= s_scriptHeld;
+		}
+
+		// Parses one script. slotButton: what "tap:slot" presses. False on a bad token.
+		bool ScriptParse( const std::string &text, int slotButton, std::vector< ScriptStep > &out )
+		{
+			out.clear();
+			size_t pos = 0;
+			while( pos < text.size() )
+			{
+				const size_t end = text.find( ' ', pos );
+				const std::string token = text.substr( pos, end == std::string::npos ? std::string::npos : end - pos );
+				pos = end == std::string::npos ? text.size() : end + 1;
+				if( token.empty() )
+				{
+					continue;
+				}
+				const size_t colon = token.find( ':' );
+				const std::string verb = token.substr( 0, colon );
+				const std::string arg = colon == std::string::npos ? std::string() : token.substr( colon + 1 );
+				ScriptStep step;
+				if( verb == "hold" || verb == "tap" )
+				{
+					step.kind = verb == "hold" ? ScriptStep::Hold : ScriptStep::Tap;
+					step.button = arg == "slot" ? slotButton : ScriptButtonId( arg );
+					if( step.button < 0 )
+					{
+						return false;
+					}
+				}
+				else if( verb == "wait" && arg == "open" )
+				{
+					step.kind = ScriptStep::WaitOpen;
+					step.time = 1.5f;
+				}
+				else if( verb == "wait" )
+				{
+					step.kind = ScriptStep::Wait;
+					step.time = static_cast< float >( atof( arg.c_str() ) );
+				}
+				else
+				{
+					return false;
+				}
+				out.push_back( step );
+			}
+			return !out.empty();
+		}
+
 		void Update()
 		{
 			const float dt = FrameSeconds();
 			// Also with the gamepad: the buzz needs only an active right controller.
-			ComboFeedback();
+			{
+				VRPerf::Scope perf( VRPerf::Stage::PadCombo );
+				ComboFeedback();
+			}
 			const bool motion = Config::Get().vr.m_inputMode == "motion";
 			if( !motion || !VRControllers::AnyActive() )
 			{
@@ -1163,6 +1344,9 @@ namespace PSUVR
 				s_gunShot = false;
 				s_gunTail = 0.0f;
 				s_r3Pulse = 0.0f;
+				s_script.clear();
+				s_scriptStepStarted = false;
+				s_scriptHeld = 0;
 				VRSpeech::EndTalk();
 				std::lock_guard lock( s_mutex );
 				s_active = false;
@@ -1369,13 +1553,17 @@ namespace PSUVR
 			{
 				float roomX = 0.0f, roomY = 0.0f;
 				const bool userIdle = pad.lx == 0.0f && pad.ly == 0.0f;
+				VRPerf::Scope perf( VRPerf::Stage::PadRoomWalk );
 				if( VRCamera::RoomWalkStick( userIdle && !s_ui && !DpadActive(), roomX, roomY ) )
 				{
 					pad.lx = roomX;
 					pad.ly = roomY;
 				}
 			}
-			Combat( dt, modifier, pad );
+			{
+				VRPerf::Scope perf( VRPerf::Stage::PadCombat );
+				Combat( dt, modifier, pad );
+			}
 			pad.rx = Deadzone( right.stick[ 0 ], 0.15f );
 			pad.ry = Deadzone( right.stick[ 1 ], 0.15f );
 			if( uiOwns )
@@ -1415,8 +1603,12 @@ namespace PSUVR
 					VRBindings::ShowToast( s_text );
 				}
 			}
-			FreeAim( pad );
-			AimModeFollow( dt, pad );
+			{
+				VRPerf::Scope perf( VRPerf::Stage::PadAim );
+				FreeAim( pad );
+				AimModeFollow( dt, pad );
+			}
+			RunScript( dt, pad );
 
 			std::lock_guard lock( s_mutex );
 			s_out = pad;
@@ -1579,7 +1771,7 @@ namespace PSUVR
 			}
 			else
 			{
-				set( 0, Control::Primary, vr.m_speechToText ? "Hold: speech to text" : "Speech to text (off)" );
+				set( 0, Control::Primary, vr.m_speechToText ? "Hold: talk / tap: voice mode" : "Speech to text (off)" );
 				set( 0, Control::Secondary, vr.m_triangleChatL2 ? "R2 (chat log)" : "Chat log" );
 			}
 		}
@@ -1589,6 +1781,38 @@ namespace PSUVR
 			const unsigned actions = s_actions;
 			s_actions = 0;
 			return actions;
+		}
+
+		bool UseItemSlot( int slot )
+		{
+			if( slot < 0 || slot > 3 || !s_active || !s_script.empty() || !s_combatValid || s_combat.paletteOpen || s_ui )
+			{
+				return false;
+			}
+			const auto &vr = Config::Get().vr;
+			// voiceItemButtons: "Up,Right,Down,Left" = the pad button of items one..four.
+			const std::string &list = vr.m_voiceItemButtons;
+			std::string button;
+			size_t pos = 0;
+			for( int i = 0; i <= slot; ++i )
+			{
+				const size_t end = list.find( ',', pos );
+				button = pos <= list.size() ? list.substr( pos, end == std::string::npos ? std::string::npos : end - pos ) : std::string();
+				pos = end == std::string::npos ? list.size() + 1 : end + 1;
+			}
+			std::vector< ScriptStep > steps;
+			if( !ScriptParse( vr.m_voiceItemScript, ScriptButtonId( button ), steps ) )
+			{
+				PSU_LOG( "VRVoice: bad voiceItemScript \"%s\" / button \"%s\"\n", vr.m_voiceItemScript.c_str(), button.c_str() );
+				return false;
+			}
+			s_script = std::move( steps );
+			s_scriptIndex = 0;
+			s_scriptStepStarted = false;
+			s_scriptHeld = 0;
+			s_scriptTotal = 0.0f;
+			PSU_LOG( "VRVoice: pad script \"%s\" (item %d = %s)\n", vr.m_voiceItemScript.c_str(), slot + 1, button.c_str() );
+			return true;
 		}
 
 		bool CastTechSlot( int slot )

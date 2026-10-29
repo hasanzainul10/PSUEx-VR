@@ -2,12 +2,14 @@
 // memory stays out of the 32-bit game. The game DLL starts it with redirected stdin / stdout and
 // talks in UTF-8 lines:
 //
-//   game -> helper   BEGIN | END | CANCEL | KEYTERMS <a,b,c> | QUIT
+//   game -> helper   BEGIN | END | CANCEL | MODE push|auto | KEYTERMS <a,b,c> | QUIT
 //   helper -> game   STATUS <text> | READY <engine> <size> | ERROR <text> | PARTIAL <text> | FINAL <text>
+//                    | AUTO <text>
 //
 // The microphone stays open while the helper runs; audio only reaches the recognizer between
-// BEGIN and END (plus a short pre-roll so the first word isn't cut). stdin closing (the game
-// exited or crashed) ends the helper.
+// BEGIN and END (plus a short pre-roll so the first word isn't cut). With MODE auto the helper
+// also cuts the microphone into utterances by itself (energy gate) and sends each as AUTO.
+// stdin closing (the game exited or crashed) ends the helper.
 //
 //   PSUExSpeech.exe --model <models dir> --size tiny|small|medium
 //   PSUExSpeech.exe --download tiny|small|medium --models <models dir>   (console, progress)
@@ -18,8 +20,10 @@
 #include <mmsystem.h>
 #include <winhttp.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <deque>
 #include <filesystem>
@@ -188,6 +192,20 @@ namespace
 	std::mutex s_preRollMutex;
 	std::deque< float > s_preRoll;
 
+	// Always-on mode (MODE auto): an energy gate cuts the microphone into utterances by itself.
+	// An utterance starts after kAutoStartBuffers loud buffers in a row (the pre-roll keeps its
+	// first syllable) and ends after kAutoEndSilenceMs of quiet; the loudness gate follows the
+	// room's noise floor. Held-button talking (s_listening) always wins.
+	constexpr float kAutoMinLevel = 0.015f;       // RMS floor of the gate
+	constexpr float kAutoNoiseFactor = 3.0f;      // gate = noise floor x this
+	constexpr int kAutoStartBuffers = 2;          // 2 x 50 ms of speech to start
+	constexpr int kAutoEndSilenceMs = 600;
+	constexpr int kAutoMaxMs = 10000;
+	constexpr int kAutoMinSpeechMs = 200;
+	std::atomic< bool > s_autoMode{ false };
+	std::atomic< bool > s_autoActive{ false };    // an auto utterance is open on the engine
+	std::mutex s_sessionMutex;                    // engine session ownership: capture thread vs BEGIN / END
+
 	void CaptureThread( ISpeechEngine *engine )
 	{
 		WAVEFORMATEX format{};
@@ -220,6 +238,25 @@ namespace
 		std::vector< float > samples;
 		bool wasListening = false;
 		constexpr size_t preRollSamples = kSampleRate * kPreRollMs / 1000;
+		float noise = 0.004f;
+		int loudRun = 0, silentMs = 0, speechMs = 0, totalMs = 0;
+		const auto pushPreRoll = [ & ]()
+		{
+			std::lock_guard< std::mutex > lock( s_preRollMutex );
+			s_preRoll.insert( s_preRoll.end(), samples.begin(), samples.end() );
+			while( s_preRoll.size() > preRollSamples )
+			{
+				s_preRoll.pop_front();
+			}
+		};
+		const auto takePreRoll = [ & ]()
+		{
+			std::vector< float > pre;
+			std::lock_guard< std::mutex > lock( s_preRollMutex );
+			pre.assign( s_preRoll.begin(), s_preRoll.end() );
+			s_preRoll.clear();
+			return pre;
+		};
 		while( !s_quit )
 		{
 			WaitForSingleObject( ready, 200 );
@@ -232,20 +269,19 @@ namespace
 				const size_t count = header.dwBytesRecorded / 2;
 				samples.resize( count );
 				const short *pcm = reinterpret_cast< const short * >( header.lpData );
+				float energy = 0.0f;
 				for( size_t i = 0; i < count; ++i )
 				{
 					samples[ i ] = pcm[ i ] / 32768.0f;
+					energy += samples[ i ] * samples[ i ];
 				}
+				{
+				std::lock_guard< std::mutex > session( s_sessionMutex );
 				const bool listening = s_listening;
 				if( listening && !wasListening )
 				{
 					// Audio from just before the press.
-					std::vector< float > pre;
-					{
-						std::lock_guard< std::mutex > lock( s_preRollMutex );
-						pre.assign( s_preRoll.begin(), s_preRoll.end() );
-						s_preRoll.clear();
-					}
+					const std::vector< float > pre = takePreRoll();
 					if( !pre.empty() )
 					{
 						engine->AddAudio( pre.data(), pre.size(), kSampleRate );
@@ -254,16 +290,79 @@ namespace
 				wasListening = listening;
 				if( listening )
 				{
+					// BEGIN took the engine over: an open auto utterance is gone with its stream.
+					s_autoActive = false;
+					loudRun = 0;
 					engine->AddAudio( samples.data(), count, kSampleRate );
+				}
+				else if( s_autoMode && count > 0 )
+				{
+					const float rms = std::sqrt( energy / static_cast< float >( count ) );
+					const bool loud = rms > ( std::max )( kAutoMinLevel, noise * kAutoNoiseFactor );
+					const int ms = static_cast< int >( count * 1000 / kSampleRate );
+					if( !s_autoActive )
+					{
+						if( loud )
+						{
+							++loudRun;
+						}
+						else
+						{
+							loudRun = 0;
+							noise += ( rms - noise ) * 0.03f;
+						}
+						pushPreRoll();
+						if( loudRun >= kAutoStartBuffers )
+						{
+							const std::vector< float > pre = takePreRoll();
+							engine->Begin();
+							engine->AddAudio( pre.data(), pre.size(), kSampleRate );
+							s_autoActive = true;
+							silentMs = 0;
+							speechMs = loudRun * ms;
+							totalMs = static_cast< int >( pre.size() * 1000 / kSampleRate );
+						}
+					}
+					else
+					{
+						engine->AddAudio( samples.data(), count, kSampleRate );
+						totalMs += ms;
+						if( loud )
+						{
+							silentMs = 0;
+							speechMs += ms;
+						}
+						else
+						{
+							silentMs += ms;
+						}
+						if( silentMs >= kAutoEndSilenceMs || totalMs >= kAutoMaxMs )
+						{
+							if( totalMs >= kAutoMaxMs )
+							{
+								noise = ( std::max )( noise, rms );  // steady noise, not speech: raise the gate
+							}
+							s_autoActive = false;
+							loudRun = 0;
+							const std::string text = engine->End();
+							if( speechMs >= kAutoMinSpeechMs && !text.empty() )
+							{
+								Send( "AUTO", text );
+							}
+						}
+					}
 				}
 				else
 				{
-					std::lock_guard< std::mutex > lock( s_preRollMutex );
-					s_preRoll.insert( s_preRoll.end(), samples.begin(), samples.end() );
-					while( s_preRoll.size() > preRollSamples )
+					if( s_autoActive )
 					{
-						s_preRoll.pop_front();
+						// Always-on was switched off mid-utterance.
+						s_autoActive = false;
+						engine->Cancel();
 					}
+					loudRun = 0;
+					pushPreRoll();
+				}
 				}
 				header.dwFlags &= ~WHDR_DONE;
 				waveInAddBuffer( device, &header, sizeof( WAVEHDR ) );
@@ -440,6 +539,7 @@ int wmain( int argc, wchar_t **argv )
 		}
 		if( line == "BEGIN" )
 		{
+			std::lock_guard< std::mutex > session( s_sessionMutex );
 			engine->Begin();
 			s_listening = true;
 		}
@@ -448,12 +548,18 @@ int wmain( int argc, wchar_t **argv )
 			s_listening = false;
 			// Let the capture thread hand over the last buffer.
 			std::this_thread::sleep_for( std::chrono::milliseconds( kBufferMs * 2 ) );
+			std::lock_guard< std::mutex > session( s_sessionMutex );
 			Send( "FINAL", engine->End() );
 		}
 		else if( line == "CANCEL" )
 		{
+			std::lock_guard< std::mutex > session( s_sessionMutex );
 			s_listening = false;
 			engine->Cancel();
+		}
+		else if( line.rfind( "MODE", 0 ) == 0 )
+		{
+			s_autoMode = line.size() > 5 && line.substr( 5 ) == "auto";
 		}
 		else if( line.rfind( "KEYTERMS", 0 ) == 0 )
 		{

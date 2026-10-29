@@ -104,6 +104,7 @@ namespace PSUVR
 		ID3D11SamplerState *m_blitSampler = nullptr;
 		ID3D11RasterizerState *m_blitRS = nullptr;
 		bool m_loggedBlitRtv = false;
+		bool m_loggedBlitCopy = false;
 
 		// Opaque OpenXR handles stored as uint64 to avoid requiring headers at
 		// every include site; implementation uses real Xr* types.

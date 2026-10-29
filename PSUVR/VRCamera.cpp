@@ -2,6 +2,7 @@
 
 #include "StereoRenderer.h"
 #include "VRControllers.h"
+#include "VRHands.h"
 #include "VRGamepad.h"
 #include "VRSyntheticPad.h"
 #include "VRSystem.h"
@@ -492,10 +493,12 @@ namespace PSUVR
 			const float yaw = WrapAngle( s_bodyYaw + hmdYaw );
 			const float fx = std::sin( yaw );
 			const float fz = std::cos( yaw );
+			float lean[ 2 ]{};
+			VRHands::EyeLean( lean[ 0 ], lean[ 1 ] );
 			const float head[ 3 ] = {
-				playerPosition[ 0 ],
+				playerPosition[ 0 ] + lean[ 0 ],
 				playerPosition[ 1 ] + vr.m_fpEyeHeight * kGameUnitsPerMeter,
-				playerPosition[ 2 ] };
+				playerPosition[ 2 ] + lean[ 1 ] };
 			focusPosition[ 0 ] = head[ 0 ];
 			focusPosition[ 1 ] = head[ 1 ];
 			focusPosition[ 2 ] = head[ 2 ];
@@ -521,7 +524,10 @@ namespace PSUVR
 			// The head follows the body; the eyes keep cancelling whatever the game camera does
 			// (BuildEyeFirstPerson), so the view doesn't follow the game's aim camera.
 			const auto &vr = Config::Get().vr;
-			s_headWorld = { playerPosition[ 0 ], playerPosition[ 1 ] + vr.m_fpEyeHeight * kGameUnitsPerMeter, playerPosition[ 2 ] };
+			float lean[ 2 ]{};
+			VRHands::EyeLean( lean[ 0 ], lean[ 1 ] );
+			s_headWorld = { playerPosition[ 0 ] + lean[ 0 ], playerPosition[ 1 ] + vr.m_fpEyeHeight * kGameUnitsPerMeter,
+				playerPosition[ 2 ] + lean[ 1 ] };
 			s_lastSteerTick = GetTickCount();
 			s_fpActive = true;
 			return true;

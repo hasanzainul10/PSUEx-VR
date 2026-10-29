@@ -1918,6 +1918,61 @@ namespace PSUVR
 		ib->GetDesc( &ibDesc );
 		const bool ib32 = ( ibDesc.Format == D3DFMT_INDEX32 );
 
+		// perfHudLockRanges: lock only the indices this draw reads, then only the vertices they point at.
+		// The locked pointers start at the range, so the expand runs with startIndex 0 and a base
+		// vertex shifted by the first locked vertex. Out-of-bounds ranges fall back to whole locks.
+		const unsigned indexSize = ib32 ? 4u : 2u;
+		const unsigned indexCount = IndexCountForPrimitive( primitiveType, primitiveCount );
+		if( Config::Get().vr.m_perfHudLockRanges && indexCount > 0 &&
+			static_cast< unsigned long long >( startIndex + indexCount ) * indexSize <= ibDesc.Size )
+		{
+			void *ibRange = nullptr;
+			if( SUCCEEDED( ib->Lock( startIndex * indexSize, indexCount * indexSize, &ibRange, D3DLOCK_READONLY ) ) && ibRange )
+			{
+				unsigned lo = 0xFFFFFFFFu;
+				unsigned hi = 0;
+				for( unsigned i = 0; i < indexCount; ++i )
+				{
+					const unsigned index = ib32 ? static_cast< const unsigned * >( ibRange )[ i ]
+						: static_cast< const unsigned short * >( ibRange )[ i ];
+					lo = ( std::min )( lo, index );
+					hi = ( std::max )( hi, index );
+				}
+				D3DVERTEXBUFFER_DESC vbDesc{};
+				vb->GetDesc( &vbDesc );
+				const long long first = static_cast< long long >( baseVertexIndex ) + lo;
+				const long long begin = offsetBytes + first * vbStride;
+				const long long size = static_cast< long long >( hi - lo + 1 ) * vbStride;
+				void *vbRange = nullptr;
+				if( first >= 0 && begin + size <= vbDesc.Size &&
+					SUCCEEDED( vb->Lock( static_cast< UINT >( begin ), static_cast< UINT >( size ), &vbRange, D3DLOCK_READONLY ) ) &&
+					vbRange )
+				{
+					unsigned outPrimCount = 0;
+					const unsigned outVerts = ExpandIndexedToUp( static_cast< const unsigned char * >( vbRange ), vbStride,
+						-static_cast< int >( lo ), ibRange, ib32, 0, primitiveType, primitiveCount, outPrimCount );
+					vb->Unlock();
+					ib->Unlock();
+					ib->Release();
+					vb->Release();
+					if( outVerts < 3 || outPrimCount < 1 )
+					{
+						return;
+					}
+#ifdef _DEBUG
+					NoteMapGeometry( device, s_passBLayer, "DIP-2D", ret, s_uiXformBuf, outVerts, vbStride, false );
+#endif
+					ReplayFontBatch( device, s_uiXformBuf, outVerts, vbStride, ret );
+					if( m_inUiDraw )
+					{
+						++m_uiPassBCaptures;
+					}
+					return;
+				}
+				ib->Unlock();
+			}
+		}
+
 		void *vbData = nullptr;
 		void *ibData = nullptr;
 		const HRESULT vbHr = vb->Lock( 0, 0, &vbData, D3DLOCK_READONLY );

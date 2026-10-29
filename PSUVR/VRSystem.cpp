@@ -14,8 +14,10 @@
 #include "VRControllerLabels.h"
 #include "VRSpeech.h"
 #include "VRHud.h"
+#include "VRPerf.h"
 #include "../Misc/Log.h"
 #include "../PSUExConfig.h"
+#include "../PSUMemory/Memory.hpp"
 
 #include <d3d9.h>
 #include <d3d11.h>
@@ -310,9 +312,15 @@ namespace PSUVR
 		{
 			return;
 		}
+		const bool stereoFrame = StereoRenderer::Get().HasFrame();
+		if( stereoFrame && !Config::Get().vr.m_stereoPanel && Config::Get().vr.m_perfSkipFlatCopy )
+		{
+			// Only the stereo panel shows the flat frame; the fence after BeginFrame covers the eye RTs.
+			return;
+		}
 		m_capturedThisFrame = m_bridge->BlitBackBuffer( m_device );
 		// Stereo eye RTs are drawn earlier in the tick; fence if the BB path did not.
-		if( !m_capturedThisFrame && StereoRenderer::Get().HasFrame() )
+		if( !m_capturedThisFrame && stereoFrame )
 		{
 			m_bridge->Fence( m_device );
 		}
@@ -342,12 +350,28 @@ namespace PSUVR
 			m_haveNextViews = m_xr->LocateNextViews( m_nextViews, m_nextViewSpacePoses );
 			m_haveHeadHeight = m_xr->GetHeadHeightAboveFloor( m_headHeight );
 			// Controllers for the same display time as those views.
+			PSUMemory::fastPointerChecks = Config::Get().vr.m_fastPointerChecks;
+			PSULog::g_batchFlush = Config::Get().vr.m_perfLogBatching;
+			const int64_t updateStart = VRPerf::Begin();
+			int64_t partStart = updateStart;
 			m_xr->UpdateInput();
+			VRPerf::End( VRPerf::Stage::Input, partStart );
+			partStart = VRPerf::Begin();
 			VRControllers::Update( m_xr );
+			VRPerf::End( VRPerf::Stage::Controllers, partStart );
+			partStart = VRPerf::Begin();
 			VRUiPointer::Update( m_xr );
+			VRPerf::End( VRPerf::Stage::UiPointer, partStart );
+			partStart = VRPerf::Begin();
 			VRSyntheticPad::Update();
+			VRPerf::End( VRPerf::Stage::Pad, partStart );
+			partStart = VRPerf::Begin();
 			VRControllerLabels::Update( m_haveNextViews ? m_nextViews : nullptr );
+			VRPerf::End( VRPerf::Stage::LabelsUpdate, partStart );
+			partStart = VRPerf::Begin();
 			VRSpeech::Update();
+			VRPerf::End( VRPerf::Stage::Speech, partStart );
+			VRPerf::End( VRPerf::Stage::Updates, updateStart );
 
 			// VR shortcuts (rebindable keys and Back+button pad chords, see VRBindings).
 			DWORD foregroundPid = 0;
@@ -371,7 +395,13 @@ namespace PSUVR
 				// Eye RTs are filled earlier in the tick; do not rely only on the BB blit fence.
 				m_bridge->Fence( m_device );
 				ID3D11Texture2D *eyes[ 2 ] = { m_bridge->EyeTexture( 0 ), m_bridge->EyeTexture( 1 ) };
+				const int64_t stereoStart = VRPerf::Begin();
 				stereoSubmitted = m_xr->SubmitStereo( eyes, stereo.RenderedPoses(), stereo.RenderedViewSpacePoses() );
+				VRPerf::End( VRPerf::Stage::StereoSubmit, stereoStart );
+				if( stereoSubmitted )
+				{
+					VRPerf::NoteStereoFrame();
+				}
 				if( stereoSubmitted && !m_loggedStereo )
 				{
 					m_loggedStereo = true;
@@ -405,11 +435,13 @@ namespace PSUVR
 					{
 						VRCamera::HudPanelPose( m_nextViews, dist, userPos, userOri );
 					}
+					const int64_t hudStart = VRPerf::Begin();
 					m_xr->SubmitHudQuads(
 						hud.HasUserContent() ? hud.UserTexture() : nullptr, dist, userH,
 						hud.HasWorldContent() ? hud.WorldTexture() : nullptr, dist, worldH,
 						worldPos, worldOri,
 						follow ? userPos : nullptr, follow ? userOri : nullptr );
+					VRPerf::End( VRPerf::Stage::HudQuads, hudStart );
 					static bool s_loggedHudQuads = false;
 					if( !s_loggedHudQuads )
 					{
@@ -501,7 +533,9 @@ namespace PSUVR
 				m_xr->ClearEyes( 0.05f, 0.05f, 0.08f );
 			}
 
+			const int64_t labelStart = VRPerf::Begin();
 			VRControllerLabels::Submit( m_xr, m_bridge );
+			VRPerf::End( VRPerf::Stage::Labels, labelStart );
 			m_xr->EndFrame();
 		}
 		__except( EXCEPTION_EXECUTE_HANDLER )

@@ -256,3 +256,9 @@ PE note: the code section `0x00401000`–`0x0086B000` is **not** flagged executa
 | Movement input read (left stick) | 2 | Rotate it by HMD yaw |
 | DirectInput device objects and `GetDeviceState` | 3 | Synthetic gamepad |
 | Hand and weapon bone transforms | 3 | **Found:** bone pose `0x0074B760` (edited by `VRHands`), bone query `0x004FFFA0`; weapons hang off the hand bones |
+
+## Item palette (voice items, 2026-10-29)
+
+| Address | Name | Signature | Used by | Verified | Notes |
+|---|---|---|---|---|---|
+| `0x00577C40` / `0x00574A20` | TWindowActionPalette ctor / its creator caller | `__thiscall (this, owner)` | — | ghidra (2026-10-29, not verified at runtime) | Draws the weapon / item palette: owns a `TWindowCP` (`0x0057C770`, vtable `0x008D1BAC`, layout states `open_item`, `weapon_active`, `item_active`, `item_active_down` at `0x008D1C84`) with 4 slot objects (`0x0057BC80`, 0xB8 each). Display code only: **no player-side "use palette slot N" function and no readable palette slot contents were found**, so voice item use drives the virtual pad instead (`VRSyntheticPad::UseItemSlot`). Item names are therefore not available to the voice registry. |

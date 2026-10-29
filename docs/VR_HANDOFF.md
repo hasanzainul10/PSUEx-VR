@@ -91,6 +91,43 @@ and pushed to origin `psu_vr` unless noted.
    techniques -> `tools/lastlog.sh VRVoice` shows each slot's id: map ids to names. Say a technique
    name -> it casts from its slot. Logs: `tools/lastlog.sh 'VRSpeech|VRVoice'`.
 
+   **Phase 1 of voice expansion (built + deployed 2026-10-29, untested).** Always-on listening +
+   route toggle. Helper: `MODE auto|push` (stdin), energy-gate VAD in `CaptureThread` (start after
+   2 loud 50 ms buffers, end after 600 ms quiet, max 10 s, gate = max(0.015, noise x 3)), each
+   utterance comes back as `AUTO <text>`; `s_sessionMutex` guards the engine between the capture
+   thread and BEGIN / END. DLL: `vr.speechAlwaysOn` (default off) and `vr.voiceRoute`
+   (`auto` default / `command` / `chat`). Always-on text: route command -> technique match only,
+   unmatched dropped (never chat); chat -> game chat; auto -> command when a weapon is out in the
+   field (no menu / text box; no enemy test yet, so also true in town), else ignored. The held
+   button keeps its fallback to chat. **Tap left Square (<250 ms) cycles the route**
+   command -> chat -> auto (toast; kept only if saved in the panel). Panel: Voice tab. Game folder:
+   Debug DLL, `PSUExSpeech.exe` and `PSUExVRConfig.exe` deployed; settings files NOT changed
+   (`speechAlwaysOn` is off). **Pending test:** turn on *Always listening*, say "Barta" with a
+   rod/staff -> casts; talk normally -> nothing happens (`tools/lastlog.sh 'VRVoice|VRSpeech'` shows
+   "no command in"/"ignored"); route Chat -> everything reaches chat; tap Square cycles; music or
+   room noise doesn't trigger casts. Tune `kAuto*` in `tools/PSUExSpeech/main.cpp` if it clips
+   words or never fires. Phase 3 (skills, PB / beast) still needs Ghidra passes.
+
+   **Phase 2 of voice expansion (built + deployed 2026-10-29, untested).** `VRSpeech.cpp` now has a
+   command registry (`Command{kind, arg, exact aliases, fuzzy name}`, `RefreshCommands()` every 500 ms,
+   `MatchCommand`, `Execute`); techniques behave as in phase 1 (same aliases, fuzzy rule, KEYTERMS; the
+   log line gained `; N commands`). New kind Item: "item one..four" / "use item 2" (`voiceItems`, default
+   OFF, panel Voice tab) calls `VRSyntheticPad::UseItemSlot(n)`, which runs a button script on the virtual
+   pad (`voiceItemScript`, default `hold:B wait:open tap:slot wait:0.3`; `voiceItemButtons` default
+   `Up,Right,Down,Left` = pad button for items 1..4; both editable in config.json). **The default script is
+   a GUESS**: Ghidra only showed the palette's drawing code (TWindowActionPalette, see ADDRESS_MAP "Item
+   palette"); no player-side use function and no readable slot contents, so there is no direct call and no
+   item-name matching ("Monomate") yet. Game folder: Debug DLL + `PSUExVRConfig.exe` deployed, settings
+   files untouched (`voiceItems` off).
+   **Pending tests:** (1) regression: techniques by voice exactly as before. (2) Turn on *Voice items*,
+   Always listening, route Command; with a palette item set say "item two" -> `tools/lastlog.sh VRVoice`
+   shows `pad script ... (item 2 = Right)`, `done` or `aborted: the palette never opened`. Watch what the
+   palette does while B is held and which button picks/uses a slot, then fix `voiceItemScript` /
+   `voiceItemButtons` (steps: `hold:<btn>`, `wait:open`, `tap:<btn|slot>`, `wait:<sec>`; buttons a b x y
+   l1 r1 l2 r2 l3 r3 select start up right down left). (3) Say it with a menu open / palette already open ->
+   toast "can't be used right now", nothing pressed. Next step if the script can't be made to work: a
+   Ghidra pass on the pad->palette input (input slot `PL_PALETTE0` 0x10, `g_InputPlayers`).
+
 7. **Controller UI (in progress, 2026-10-20, uncommitted).** Plan agreed with the user, 3 phases, each
    built and tested before the next: (1) right-controller laser pointer for PSUEx ImGui windows,
    (2) floating label cards at each controller (look down; or hold a grip still ~0.4 s; both grips +
@@ -149,6 +186,74 @@ and pushed to origin `psu_vr` unless noted.
    grip's context; grip + swing -> no flash; both grips -> chord labels; menu / gun / free aim change
    the labels.
 
+8. **Performance pass (started 2026-10-21, uncommitted).** Plan: `C:\Users\hasan\.claude\plans\ok-most-of-what-sprightly-emerson.md`
+   (phase 0 timing overlay -> 1 free wins -> 2 mirror the left eye on the monitor, skipping the flat 3D pass in
+   stereo -> 3 eye resolution scale / LOCAL-space layer / quality presets -> 4 RE: shadows once, D3D9Ex
+   DYNAMIC remap, game frame cap). The user tests on **Release** (`PSUExVR.dll`; the loader prefers
+   `PSUExD.dll`, so rename it `PSUExD.dll.off` in the game folder).
+   **Game folder (2026-10-21 01:42):** Release `PSUExVR.dll` + `PSUExVRConfig.exe` deployed, `PSUExD.dll` renamed
+   `PSUExD.dll.off`, `perfOverlay` true in both settings files (`.bak9` = before).
+   **Phase 0 built (Debug + Release), deployed (Release):** `PSUVR/VRPerf.{h,cpp}`, setting
+   `perfOverlay` (default off, new *Performance* tab). CPU scopes: flat pass, each eye, pass B, overlay (EndScene),
+   capture, Present, submit, xrWaitFrame, GPU wait. GPU: D3D9 timestamp queries (ring of 4, never flushed) for
+   flat / eyes / pass B / whole frame. Overlay window top-left, plus a `Perf 5 s:` log line.
+   **Baseline (2026-10-29, Debug build, town, stereo 100%):** ~45 fps (22 ms), SteamVR running 90 Hz at half
+   rate (predicted period mostly 45 Hz). CPU ms: flat 2.45, eyeL 2.5, eyeR 2.5, passB 1.1, overlay 0.35,
+   capture 0.45, present 0.3, **submit 6.3 (waitFrame only 0.02, gpuWait 0.8 -> ~5.5 ms unaccounted inside
+   OnPresentSubmit: SubmitStereo / swapchain waits / D3D11 blits / HUD quads / labels / xrEndFrame)**; ~6 ms
+   outside the hooks = game logic. GPU ms: flat 2.8, eyes 2.4 + 2.7, passB 1.9, frame 13 -> **CPU-bound**, not
+   GPU. Hitches: frame max 28-56 ms, passB GPU max up to 12 ms.
+   **Phase 0b built + deployed (Debug, 2026-10-29 19:07):** Submit split into `updates`, `stereo` (SubmitStereo),
+   `swapWait` (acquire + wait, all swapchains), `blit` (BlitTexture), `hudQuads`, `labels`, `endFrame` (new log keys;
+   VRSystem uses `VRPerf::Begin/End` because OnPresentSubmit has `__try`). **Pending test:** same town run ->
+   which key holds the ~5.5 ms and the 453 ms stall.
+   **Result (2026-10-29 run, town + a mission, Debug):** the missing time is **`updates` = 3.8-5 ms in town, 7-8 ms in the
+   mission (max 10-18 ms)**, only once first person / motion controllers are active (0.25 ms before). Swapchain wait 0.02,
+   blit 0.05, stereo 0.2, HUD quads 0.08, labels ~0, xrEndFrame 0.38 -> the OpenXR side is fine. Mission: 33-38 fps, eyes
+   3.2-3.5 ms CPU each, pass B GPU spikes 23-27 ms (hitches). Suspect: many `PSUMemory::ReadAbsoluteMemory` /
+   `IsValidPointer` calls (each a `VirtualQuery` syscall) in VRSyntheticPad / PSUCombat / VRHands per frame.
+   **`updates` fixed (2026-10-29, built Debug + Release, deployed: Debug `PSUExD.dll` + `PSUExVRConfig.exe`, Release
+   `PSUExVR.dll`; Debug loads first).** `updates` split into sub-stages (log keys `input ctrl uiPtr pad padCombo padCombat
+   padAim padRoom lblUpd speech`). The cost was `PSUCombat::Read` (~16 `IsValidPointer` = `VirtualQuery`, ~0.2 ms each
+   in this process): `padCombo` (ComboFeedback) 3.7 ms/frame, `speech` (RefreshCommands every 0.5 s) 6 ms spikes.
+   Fix: `PSUMemory::IsValidPointer` probes one byte under SEH (`ProbeReadable`) while `PSUMemory::fastPointerChecks`
+   is set; synced each VR frame from setting `fastPointerChecks` (default on, Performance tab "Fast game memory
+   checks"). Only difference: probing a PAGE_GUARD page clears its guard. Helps every caller (VRHands, aim hooks,
+   Hook_FrameRender layer walk). **Result (user-tested town + mission, Debug):** `updates` 0.2 ms avg (was 4-5), `padCombo`
+   ~0.01; game hits its 60 fps cap (16.7 ms), CPU flat ~0.4-1.0, eyes ~0.7 each (were 2.5-3.5), submit ~1.9 (gpuWait
+   1.3-1.4 of it). Combat / combo buffer / JA buzz unchanged per the user. Not committed.
+   **Next:** phase 1 (skip BB copy + pre-Present fence, CopySubresourceRegion, log flushing, HUD lock ranges), then
+   phase 2 (mirror the left eye on the monitor). Re-take the baseline first: the old numbers predate this fix.
+   **Post-fix baseline (2026-10-29, Debug, town + mission, 240 `Perf 5 s` lines; copy in the session notes folder
+   `perf-baseline-post-fastptr.txt`):** 59.2 fps avg, **pinned at the game's 60 fps cap** (frame 16.7 ms) apart from load
+   spikes. CPU avg ms: flat 0.54, eyes 0.61 + 0.61, passB 1.03, overlay 0.46, **capture 0.65**, present 0.29, submit 1.77
+   (**gpuWait 1.25** total, endFrame 0.36, stereo 0.17, blit 0.04, hudQuads 0.07). GPU: flat 0.5, eyes 0.85 each, passB 1.2,
+   frame 3.45. So phase 1 can only show up as lower CPU ms (capture, gpuWait, passB), not as fps.
+   **Phase 1 built (Debug + Release) and deployed 2026-10-29 21:57 (Debug `PSUExD.dll` + `PSUExVRConfig.exe`, Release
+   `PSUExVR.dll`); no settings-file changes (the new keys default on).** Four settings, Performance tab, all default on:
+   - `perfSkipFlatCopy` (`VRSystem::OnPresentCapture`): in stereo without `stereoPanel`, skip `BlitBackBuffer` and the
+     pre-Present fence; the fence after BeginFrame stays. Expect capture ~0.65 -> ~0.05 and gpuWait lower.
+   - `perfCopyBlits` (`OpenXRRuntime::BlitTexture`): `CopySubresourceRegion` when sizes match and both formats are in the
+     same 8-bit BGRA/RGBA typeless group (eyes 87 -> swapchain 90, passthrough, so byte-identical); the shader path drops
+     its redundant full clear. Logs `OpenXR: blit as plain copy` once. SRV/RTV caching not done (the copy path skips them).
+   - `perfHudLockRanges` (`VRHud::CaptureXyzrhwIndexed`): lock the IB range of the draw, scan min/max index, lock only that
+     VB range; whole-buffer locks as fallback when a range is out of bounds. Expect passB CPU lower.
+   - `perfLogBatching` (`Misc/Log.h`, `PSULog::g_batchFlush` synced each VR frame): flush at most once per second;
+     `GlobalCrashHandler` calls `PSULog::Flush()` (try_lock). Unconditional: at attach a `psuex.log` over 20 MB is renamed
+     `psuex.log.1` (the 150 MB log rotates on the next launch). The per-frame `SceneCB` lines were already capped
+     (last session logged ~7 lines/s), so this is a small win.
+   - Not done: skipping the HUD RT clears when the HUD is empty (in gameplay it never is; a missed dirty flag would leave
+     a stale HUD).
+   - The `Perf 5 s:` line now ends its header with `fast FCHL` (a `-` for each toggle that is off) to split A/B runs.
+   **Pending test:** town + a mission, all on (~3 min), then all four off on the Performance tab (~1 min, same place),
+   then on again. Compare with a summary of `tools/lastlog.sh -a -n 0 'Perf 5 s'` split by `fast FCHL` / `fast ----`.
+   Headset must look the same (eyes, HUD text, map, labels, menus/2D screens).
+   **Result (2026-10-29, Debug, town + mission; 67 lines on vs 19 off): all four kept.** The user saw no difference
+   in the headset either way. CPU avg ms on vs off: capture 0.10 vs 0.84, gpuWait 0.65 vs 1.26, blit 0.00 vs 0.04,
+   stereo 0.12 vs 0.19, hudQuads 0.04 vs 0.08, passB 0.91 vs 1.02, so about 1.4 ms less CPU per frame. Still pinned at
+   the 60 fps cap. Logging has no timer of its own. The log rotated as intended: `psuex.log` was 0.36 MB after the
+   run, and the old log is `psuex.log.1`. Not committed. **Next:** phase 2 (mirror the left eye on the monitor).
+
 ## Features done this stretch (all toggles in the VR settings panel)
 
 - Combat by weapon category (`+0x2D4`/`+0x2D8`): trigger/swing = attack / tech slot 1, grip + = PA /
@@ -190,3 +295,50 @@ and pushed to origin `psu_vr` unless noted.
 
 - Speech to text: an online recognizer as a second `ISpeechEngine` in the helper; push-to-talk
   without motion controllers (gamepad / keyboard key); voice commands beyond techniques.
+
+9. **Strafe legs + smaller attack-facing turn (built Debug 2026-10-29, untested).** `VRHands.cpp` `StrafeLegs`
+   (called after the torso turn, needs `handsFollow`, a body that shows legs: set "Own body" to Headless): body yaw trails the head
+   (35 deg dead-zone, follows at once when walking), travel direction (`+0x124` facing, speed from `+0x114`) against it picks
+   forward / left / right / back (10 deg hysteresis); legs are yawed about the waist by a hip-twist (`strafeBodyBlend` 0.5; back flips 180 deg),
+   no gait reversal. Settings `strafeBody` (default on), `strafeBodyBlend`; checkbox in Camera > First person.
+   `attackFaceTolerance` (default 30 deg, was fixed 20), turn ends 10 deg early, hold 0.05 s, max 0.5 s; slider under "Turn to where I look".
+   **Pending test:** Headless body, walk left / right / back (legs turn against the torso), `tools/lastlog.sh VRStrafe`;
+   attacks with a small look offset turn less, `tools/lastlog.sh VRFace`. If back-walk looks like moonwalking, lower the blend or learn leg clips (PS2PI approach).
+   **Rework (2026-10-29, built Debug, not deployed, game was running):** the log showed the old torso turn twisting the chest 100-180 deg
+   from the legs when the head turned. With `strafeBody` on: `StrafeUpdate` (body yaw, gait, leg turn), `TurnBody` (whole skeleton to the body yaw),
+   chest twist toward the head clamped to +-50 deg (`kTorsoLimit`), `TurnLegs` (extra leg yaw). Off = the old unclamped chest turn.
+   Open: camera sits behind the body / clips the shoulder when walking forward (walk lean puts the head ahead of the eye;
+   idea: anchor the eye to the neck bone's offset from the player position, or raise "Eye forward"). Log: `tools/lastlog.sh 'VRStrafe|torso turn'`.
+   **Eye anchor (2026-10-29, built + deployed Debug):** `fpEyeFollowsNeck` (default on, checkbox "Eye follows the walking lean"): `VRHands::UpdateEyeLean`
+   measures the animated neck's horizontal offset from the root minus its rest value (rest sampled while standing), eased 0.25 s, capped 0.45 m;
+   `VRCamera` adds it to the first-person head anchor (`VRHands::EyeLean`). Pending test: walk forward, camera stays in front of the shoulders, no
+   bobbing/nausea; if it jitters, lower the cap or turn the checkbox off.
+   **Arm stretch (2026-10-29, deployed Debug):** `armStretch` (default on, "Stretch arms to reach my hands"): after the two-bone solve the visible arm stretches
+   (half the gap at the elbow, half at the wrist, up to half the chain length) so the hand lands on the controller; "hands" body already shifted the hand fully.
+   User reports (strafe works): shoulder still visible while running. Not fixed yet; unknown whether the eye lean engaged. Game launch from online.exe exited after Launch
+   (unrelated to our DLLs: even with them and dinput8.dll moved aside); launching PSUC.exe directly works.
+   **Shoulder in view when running straight (2026-10-29, deployed Debug, untested):** `UpdateEyeLean` now also tracks both shoulder bones and pushes the eye
+   forward (along `VRCamera::BodyAxes` forward) until no shoulder has moved further ahead than the eye since rest. Log: `tools/lastlog.sh 'VRStrafe: eye lean'`
+   (lean / goal / neck / shoulder offsets in game units, 10 = 1 m). If a shoulder still shows, send that line; next idea is folding the shoulders near the eye.
+
+10. **Next task (requested 2026-10-29, not started): pose-less skeleton for VRChat-style IK / full-body tracking.** The user wants the game's body animations
+   (attack, idle, walk, default poses) disabled so the model is a plain skeleton (rest pose) that VR drives: 3-point IK from head + hands now, standable / full-body
+   trackers (hips, feet, elbows) later, locomotion layer for legs. Hook point already exists: `Hook_0074B760_BonePose.hpp` -> `VRPlayerDraw::OnBonePose` -> `VRHands::Apply`
+   (28-bone skeleton, bone records 0x90 bytes with parent at +6 and inverse bind at +0x30; `av_bind` in PSP2I_Recomp_VR `port/vr/vr_body.c:688-732` poses a skeleton
+   in its bind pose from the inverse binds). Plan: setting `bodyRestPose` (default off) that replaces every bone matrix with the bind pose (inverse of the record's inverse bind),
+   keeping the root/placement; then the existing arm IK, torso/legs layers (`StrafeUpdate`/`TurnBody`/`TurnLegs`) pose on top; weapons keep following the hand bone
+   (`techWeaponStill` etc. need rechecking since attacks no longer animate). Open questions: weapon swing visuals without animation, Photon Art effects keyed to animation
+   frames (hit timing still comes from the game state, not the pose), and the full-body tracker input path (OpenXR body/`XR_HTCX_vive_tracker_interaction` or SteamVR trackers).
+   Current deployed state: everything above (strafe legs, torso clamp, eye lean, arm stretch) is in the Debug DLL; all untested except strafing (user: "strafing now").
+
+   **Rest pose (built Debug 2026-10-29, not deployed, untested):** `bodyRestPose` (default off, checkbox Camera > First person "Body in rest pose") -
+   `VRHands::RestPose` runs first in `Apply` (also third person, independent of handsFollow): bone 0 keeps the game's matrix, every other bone = bind (inverse of record +0x30,
+   flag 0x8 = leave animated) relative to bone 0, times the root. Arm IK / strafe / torso / eye lean then run on top; with it on, the Photon Art/attack "animation" blend
+   and `techWeaponStill` are skipped (nothing animates; weapon bone is a child of the hand so it follows the arm IK). `bodyFitHeight` ("Scale body to my height"):
+   scales the bones uniformly about the root so neck+6 cm = `fpEyeHeight` (log `tools/lastlog.sh 'body fit|rest pose'`; clamp 0.5-2x). Pending test: the model stands
+   in rest pose (likely a T/A pose), arms follow controllers, legs follow strafe, weapon in hand; if the root isn't bone 0 or the mesh looks sheared, send the log.
+   **Full-body tracker plan:** add a `VRTrackers` source (SteamVR trackers via OpenXR `XR_EXT_user_paths` roles `/user/vive_tracker_htcx/role/{waist,left_foot,right_foot,left_elbow,right_elbow}`
+   with `XR_HTCX_vive_tracker_interaction`; the null-HMD test rig can emulate them). Convert each pose to model space like the controllers (`VRCamera::TrackingDirToWorld`,
+   `s_world` inverse), then in `Apply` after RestPose: waist -> translate/rotate the hip subtree (`ApplyToSubtree`, bone kWaistBone) and replace `StrafeUpdate`'s inferred
+   body yaw with the waist yaw; feet -> two-bone leg IK (reuse `SolveArm` on thigh/shin/foot, pole from the knee direction = foot forward); elbows -> pole vector for
+   `SolveArm`. Keep strafe legs as the fallback when a tracker is absent (per-role validity flags). Calibration: stand in a T pose, record tracker-to-bone offsets (like hand calibration).

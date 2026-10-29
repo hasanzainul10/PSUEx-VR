@@ -1,5 +1,7 @@
 #include "D3D11Bridge.h"
 
+#include "VRPerf.h"
+
 #include "../Misc/Log.h"
 
 #include <d3d9.h>
@@ -24,6 +26,7 @@ namespace PSUVR
 		{
 			return false;
 		}
+		VRPerf::Scope timer( VRPerf::Stage::GpuWait );
 		// Bounded wait — an infinite GetData loop freezes the game (not responding).
 		const DWORD start = GetTickCount();
 		for( ;; )

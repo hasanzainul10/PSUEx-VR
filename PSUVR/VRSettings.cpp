@@ -37,6 +37,9 @@ namespace
 	X( m_hudDrop, "hudDrop" ) \
 	X( m_fpEyeHeight, "fpEyeHeight" ) \
 	X( m_fpEyeForward, "fpEyeForward" ) \
+	X( m_fpEyeFollowsNeck, "fpEyeFollowsNeck" ) \
+	X( m_bodyRestPose, "bodyRestPose" ) \
+	X( m_bodyFitHeight, "bodyFitHeight" ) \
 	X( m_snapTurnDegrees, "snapTurnDegrees" ) \
 	X( m_fpTurnSpeed, "fpTurnSpeed" ) \
 	X( m_fpMoveDirection, "fpMoveDirection" ) \
@@ -70,6 +73,7 @@ namespace
 	X( m_emulateControllers, "emulateControllers" ) \
 	X( m_simScript, "simScript" ) \
 	X( m_handsFollow, "handsFollow" ) \
+	X( m_armStretch, "armStretch" ) \
 	X( m_handsAttack, "handsAttack" ) \
 	X( m_handsPhotonArtAnimation, "handsPhotonArtAnimation" ) \
 	X( m_handCalibrated, "handCalibrated" ) \
@@ -90,7 +94,10 @@ namespace
 	X( m_paGesture, "paGesture" ) \
 	X( m_gripPhotonArt, "gripPhotonArt" ) \
 	X( m_triangleChatL2, "triangleChatL2" ) \
+	X( m_strafeBody, "strafeBody" ) \
+	X( m_strafeBodyBlend, "strafeBodyBlend" ) \
 	X( m_attackFaceLook, "attackFaceLook" ) \
+	X( m_attackFaceTolerance, "attackFaceTolerance" ) \
 	X( m_controllerAim, "controllerAim" ) \
 	X( m_aimInvertPitch, "aimInvertPitch" ) \
 	X( m_aimDirect, "aimDirect" ) \
@@ -115,6 +122,11 @@ namespace
 	X( m_speechModel, "speechModel" ) \
 	X( m_speechChat, "speechChat" ) \
 	X( m_voiceCommands, "voiceCommands" ) \
+	X( m_voiceItems, "voiceItems" ) \
+	X( m_voiceItemScript, "voiceItemScript" ) \
+	X( m_voiceItemButtons, "voiceItemButtons" ) \
+	X( m_speechAlwaysOn, "speechAlwaysOn" ) \
+	X( m_voiceRoute, "voiceRoute" ) \
 	X( m_vignetteStrength, "vignetteStrength" ) \
 	X( m_stereo, "stereo" ) \
 	X( m_stereoMode, "stereoMode" ) \
@@ -127,7 +139,13 @@ namespace
 	X( m_eyeSky, "eyeSky" ) \
 	X( m_stereoPanel, "stereoPanel" ) \
 	X( m_debugEyeShift, "debugEyeShift" ) \
-	X( m_debugDoublePass, "debugDoublePass" )
+	X( m_debugDoublePass, "debugDoublePass" ) \
+	X( m_perfOverlay, "perfOverlay" ) \
+	X( m_fastPointerChecks, "fastPointerChecks" ) \
+	X( m_perfSkipFlatCopy, "perfSkipFlatCopy" ) \
+	X( m_perfCopyBlits, "perfCopyBlits" ) \
+	X( m_perfHudLockRanges, "perfHudLockRanges" ) \
+	X( m_perfLogBatching, "perfLogBatching" )
 
 	void Read( const json &node, const char *key, bool &value )
 	{

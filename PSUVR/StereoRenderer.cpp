@@ -4,6 +4,7 @@
 #include "VRCamera.h"
 #include "VRControllers.h"
 #include "VRHud.h"
+#include "VRPerf.h"
 #include "VRPlayerDraw.h"
 #include "VRSyntheticPad.h"
 #include "VRSystem.h"
@@ -1650,6 +1651,9 @@ namespace PSUVR
 			VRPlayerDraw::BeginEyePasses();
 			for( int eye = 0; eye < 2; ++eye )
 			{
+				VRPerf::Scope timer( eye ? VRPerf::Stage::EyeRight : VRPerf::Stage::EyeLeft );
+				const VRPerf::Gpu gpuPass = eye ? VRPerf::Gpu::EyeRight : VRPerf::Gpu::EyeLeft;
+				VRPerf::GpuBegin( device, gpuPass );
 				D3DMATRIX eyeView{};
 				D3DMATRIX eyeProj{};
 				if( firstPerson )
@@ -1681,6 +1685,7 @@ namespace PSUVR
 				// After the eye pass, so the screen-quad hooks leave them alone.
 				VRControllers::DrawMarkers( device, views[ eye ], eyeW, eyeH );
 				DrawVignette( device, eyeW, eyeH, vignette );
+				VRPerf::GpuEnd( device, gpuPass );
 
 				m_poses[ eye ] = views[ eye ];
 				m_viewSpacePoses[ eye ] = viewSpace[ eye ];

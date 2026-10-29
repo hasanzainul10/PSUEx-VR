@@ -7,6 +7,7 @@
 #include "../PSUVR/VRPlayerDraw.h"
 #include "../PSUVR/VRUiPointer.h"
 #include "../PSUVR/VRControllerLabels.h"
+#include "../PSUVR/VRPerf.h"
 #include "../PSUVR/D3D9ExUpgrade.h"
 #include "../PSUVR/D3D9ExCompat.h"
 #include "../Misc/Log.h"
@@ -595,6 +596,7 @@ HRESULT APIENTRY PSUOverlay::Hook_EndScene( LPDIRECT3DDEVICE9 pDevice )
 		HookWindow();
 	}
 
+	PSUVR::VRPerf::Scope overlayTimer( PSUVR::VRPerf::Stage::Overlay );
 	ImGui_ImplDX9_NewFrame();
 	ImGui_ImplWin32_NewFrame();
 	// After the Win32 backend, so the controller pointer wins over the OS mouse.
@@ -617,6 +619,7 @@ HRESULT APIENTRY PSUOverlay::Hook_EndScene( LPDIRECT3DDEVICE9 pDevice )
 		{
 			i.second->Render();
 		}
+		PSUVR::VRPerf::DrawOverlay();
 	}
 	ImGui::EndFrame();
 	ImGui::Render();
@@ -702,9 +705,21 @@ HRESULT APIENTRY PSUOverlay::Hook_Present( LPDIRECT3DDEVICE9 pDevice, const RECT
 
 	// Capture BB + GPU fence BEFORE Present; OpenXR WaitFrame AFTER so the
 	// monitor is not blocked / blacked out by the VR compositor.
-	PSUVR::System::Get().OnPresentCapture();
-	const HRESULT hr = m_pOriginalPresent( pDevice, pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion );
-	PSUVR::System::Get().OnPresentSubmit();
+	PSUVR::VRPerf::BeforePresent( pDevice );
+	{
+		PSUVR::VRPerf::Scope timer( PSUVR::VRPerf::Stage::Capture );
+		PSUVR::System::Get().OnPresentCapture();
+	}
+	HRESULT hr;
+	{
+		PSUVR::VRPerf::Scope timer( PSUVR::VRPerf::Stage::Present );
+		hr = m_pOriginalPresent( pDevice, pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion );
+	}
+	{
+		PSUVR::VRPerf::Scope timer( PSUVR::VRPerf::Stage::Submit );
+		PSUVR::System::Get().OnPresentSubmit();
+	}
+	PSUVR::VRPerf::EndFrame();
 	return hr;
 }
 

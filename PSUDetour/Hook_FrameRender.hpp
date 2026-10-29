@@ -11,6 +11,7 @@
 #include "../PSUVR/VRBindings.h"
 #include "../PSUVR/VRCamera.h"
 #include "../PSUVR/VRHud.h"
+#include "../PSUVR/VRPerf.h"
 #include <intrin.h>
 
 namespace FrameRender
@@ -329,7 +330,12 @@ namespace FrameRender
 		const auto &vr = Config::Get().vr;
 		const bool twice = vr.m_enabled && vr.m_debugDoublePass;
 		s_passAInFrame = 1;
-		RunPassA();
+		{
+			PSUVR::VRPerf::Scope timer( PSUVR::VRPerf::Stage::FlatPass );
+			PSUVR::VRPerf::GpuBegin( PSUOverlay::Device(), PSUVR::VRPerf::Gpu::FlatPass );
+			RunPassA();
+			PSUVR::VRPerf::GpuEnd( PSUOverlay::Device(), PSUVR::VRPerf::Gpu::FlatPass );
+		}
 		if( twice )
 		{
 			s_passAInFrame = 2;
@@ -366,6 +372,8 @@ namespace FrameRender
 	void __cdecl Hook_PassB()
 	{
 		FrameTrace::PassEnter( 0x004FDBC0 );
+		PSUVR::VRPerf::Scope timer( PSUVR::VRPerf::Stage::PassB );
+		PSUVR::VRPerf::GpuBegin( PSUOverlay::Device(), PSUVR::VRPerf::Gpu::PassB );
 		for( int layer = 0x2B; layer <= 0x3F; ++layer )
 		{
 			PSUVR::VRHud::SetPassBLayer( layer );
@@ -375,6 +383,7 @@ namespace FrameRender
 			}
 		}
 		PSUVR::VRHud::SetPassBLayer( -1 );
+		PSUVR::VRPerf::GpuEnd( PSUOverlay::Device(), PSUVR::VRPerf::Gpu::PassB );
 		FrameTrace::PassLeave();
 	}
 

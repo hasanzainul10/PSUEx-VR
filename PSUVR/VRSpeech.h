@@ -19,6 +19,9 @@ namespace PSUVR
 		void BeginTalk();
 		void EndTalk();
 		bool Talking();
+		// Cycles where speech goes: command -> chat -> auto (command while a weapon is out in the
+		// field). Writes vr.voiceRoute; the VR settings panel's Save keeps it.
+		void CycleRoute();
 
 		// Called from the game's keyboard poll (0x007738E0): adds the key codes the chat sender is
 		// holding to the held-key list. keys has room for 14; returns the new count.

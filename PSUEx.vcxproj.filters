@@ -309,6 +309,9 @@
     <ClInclude Include="PSUVR\VRControllerLabels.h">
       <Filter>Header Files\PSUVR</Filter>
     </ClInclude>
+    <ClInclude Include="PSUVR\VRPerf.h">
+      <Filter>Header Files\PSUVR</Filter>
+    </ClInclude>
     <ClInclude Include="PSUVR\VRProbe.h">
       <Filter>Header Files\PSUVR</Filter>
     </ClInclude>
@@ -495,6 +498,9 @@
       <Filter>Source Files\PSUVR</Filter>
     </ClCompile>
     <ClCompile Include="PSUVR\VRControllerLabels.cpp">
+      <Filter>Source Files\PSUVR</Filter>
+    </ClCompile>
+    <ClCompile Include="PSUVR\VRPerf.cpp">
       <Filter>Source Files\PSUVR</Filter>
     </ClCompile>
     <ClCompile Include="PSUVR\VRProbe.cpp">

@@ -68,6 +68,9 @@ namespace PSUVR
 		std::string s_runningModel;
 		bool s_ready = false;
 		bool s_talking = false;
+		bool s_sentAuto = false;  // the helper's MODE as last sent
+		DWORD s_talkTick = 0;
+		constexpr DWORD kTapMs = 250;  // a press shorter than this is a tap, not talking
 		DWORD s_nextStartTick = 0;
 		bool s_missingToastShown = false;
 
@@ -130,6 +133,7 @@ namespace PSUVR
 			s_process = nullptr;
 			s_ready = false;
 			s_talking = false;
+			s_sentAuto = false;
 			s_runningModel.clear();
 			std::lock_guard< std::mutex > lock( s_lineMutex );
 			s_lines.clear();
@@ -355,8 +359,28 @@ namespace PSUVR
 			{ "slotone", "one", "first" }, { "slottwo", "two", "second" },
 			{ "slotthree", "three", "third" }, { "slotfour", "four", "fourth" } };
 
+		const char *const kItemWords[ 4 ][ 2 ] = {
+			{ "itemone", "item1" }, { "itemtwo", "item2" }, { "itemthree", "item3" }, { "itemfour", "item4" } };
+		const char *const kItemPhrases[ 4 ] = { "item one", "item two", "item three", "item four" };
+
+		// ---- Command registry ------------------------------------------------------------------
+		// Spoken aliases -> an action. Rebuilt about every 500 ms from the live game state, so it
+		// follows the equipped weapon. Categories: Tech (cast slot `arg`), Item (palette item `arg`).
+		// Phase 3 adds skills / Photon Blast as further kinds.
+		enum class CommandKind { Tech, Item };
+		struct Command
+		{
+			CommandKind kind;
+			int arg;
+			std::vector< std::string > exact;  // Normalize()d words that must match whole
+			std::string fuzzy;                 // lower-case name matched within an edit distance ("" = none)
+		};
+		std::vector< Command > s_commands;
+
 		PSUCombat::TechSlots s_slots;
 		bool s_slotsValid = false;
+		bool s_stateValid = false;
+		int s_mode = 0;  // registry inputs: 1 items, 2 techniques
 		DWORD s_slotsTick = 0;
 		std::string s_keyterms;
 
@@ -422,7 +446,15 @@ namespace PSUVR
 			return row[ b.size() ];
 		}
 
-		void RefreshSlots()
+		const char *TechLabel( int slot )
+		{
+			const char *name = TechNameFor( s_slots.id[ slot ] );
+			return name ? name : "-";
+		}
+
+		// Rebuilds the registry from the game state (throttled to 500 ms) and sends the helper
+		// its KEYTERMS bias when the spoken names changed.
+		void RefreshCommands()
 		{
 			const DWORD now = GetTickCount();
 			if( now - s_slotsTick < 500 )
@@ -432,37 +464,68 @@ namespace PSUVR
 			s_slotsTick = now;
 			PSUCombat::State state;
 			PSUCombat::TechSlots slots;
-			const bool valid = PSUCombat::Read( state ) && PSUCombat::ReadTechSlots( state, slots );
-			const bool changed = valid != s_slotsValid || memcmp( slots.id, s_slots.id, 4 ) != 0;
+			const bool stateValid = PSUCombat::Read( state );
+			const bool valid = stateValid && PSUCombat::ReadTechSlots( state, slots );
+			const bool itemsOn = stateValid && Config::Get().vr.m_voiceItems;
+			const bool techsOn = Config::Get().vr.m_voiceCommands;
+			const int mode = ( itemsOn ? 1 : 0 ) | ( techsOn ? 2 : 0 );
+			const bool changed = valid != s_slotsValid || memcmp( slots.id, s_slots.id, 4 ) != 0 || mode != s_mode;
 			s_slots = slots;
 			s_slotsValid = valid;
+			s_stateValid = stateValid;
+			s_mode = mode;
 			if( !changed )
 			{
 				return;
 			}
+			s_commands.clear();
 			std::string keyterms;
-			for( int slot = 0; slot < 4; ++slot )
+			if( valid && techsOn )
 			{
-				const char *name = TechNameFor( s_slots.id[ slot ] );
-				if( name )
+				for( int slot = 0; slot < 4; ++slot )
 				{
+					if( !s_slots.id[ slot ] )
+					{
+						continue;  // only slots holding a technique count
+					}
+					Command command{ CommandKind::Tech, slot, {}, {} };
+					for( const char *word : kSlotWords[ slot ] )
+					{
+						command.exact.push_back( word );
+					}
+					if( const char *name = TechNameFor( s_slots.id[ slot ] ) )
+					{
+						command.fuzzy = Lower( name );
+						keyterms += keyterms.empty() ? "" : ",";
+						keyterms += name;
+					}
+					s_commands.push_back( std::move( command ) );
+				}
+			}
+			if( itemsOn )
+			{
+				for( int item = 0; item < 4; ++item )
+				{
+					Command command{ CommandKind::Item, item, {}, {} };
+					for( const char *word : kItemWords[ item ] )
+					{
+						command.exact.push_back( word );
+					}
+					s_commands.push_back( std::move( command ) );
 					keyterms += keyterms.empty() ? "" : ",";
-					keyterms += name;
+					keyterms += kItemPhrases[ item ];
 				}
 			}
 			PSU_LOG( "VRVoice: slots %u/%u/%u/%u (lv %u/%u/%u/%u) = %s / %s / %s / %s; right %08X [%02X %02X %02X %02X %02X %02X %02X %02X] "
-				"left %08X [%02X %02X %02X %02X %02X %02X %02X %02X], categories %X / %X\n",
+				"left %08X [%02X %02X %02X %02X %02X %02X %02X %02X], categories %X / %X; %u commands\n",
 				s_slots.id[ 0 ], s_slots.id[ 1 ], s_slots.id[ 2 ], s_slots.id[ 3 ],
 				s_slots.level[ 0 ], s_slots.level[ 1 ], s_slots.level[ 2 ], s_slots.level[ 3 ],
-				TechNameFor( s_slots.id[ 0 ] ) ? TechNameFor( s_slots.id[ 0 ] ) : "-",
-				TechNameFor( s_slots.id[ 1 ] ) ? TechNameFor( s_slots.id[ 1 ] ) : "-",
-				TechNameFor( s_slots.id[ 2 ] ) ? TechNameFor( s_slots.id[ 2 ] ) : "-",
-				TechNameFor( s_slots.id[ 3 ] ) ? TechNameFor( s_slots.id[ 3 ] ) : "-",
+				TechLabel( 0 ), TechLabel( 1 ), TechLabel( 2 ), TechLabel( 3 ),
 				s_slots.vtable[ 0 ], s_slots.raw[ 0 ][ 0 ], s_slots.raw[ 0 ][ 1 ], s_slots.raw[ 0 ][ 2 ], s_slots.raw[ 0 ][ 3 ],
 				s_slots.raw[ 0 ][ 4 ], s_slots.raw[ 0 ][ 5 ], s_slots.raw[ 0 ][ 6 ], s_slots.raw[ 0 ][ 7 ],
 				s_slots.vtable[ 1 ], s_slots.raw[ 1 ][ 0 ], s_slots.raw[ 1 ][ 1 ], s_slots.raw[ 1 ][ 2 ], s_slots.raw[ 1 ][ 3 ],
 				s_slots.raw[ 1 ][ 4 ], s_slots.raw[ 1 ][ 5 ], s_slots.raw[ 1 ][ 6 ], s_slots.raw[ 1 ][ 7 ],
-				state.rightCategory, state.leftCategory );
+				state.rightCategory, state.leftCategory, static_cast< unsigned >( s_commands.size() ) );
 			if( keyterms != s_keyterms )
 			{
 				s_keyterms = keyterms;
@@ -470,13 +533,9 @@ namespace PSUVR
 			}
 		}
 
-		// The slot the words name, or -1. Only slots holding a technique count.
+		// The registry entry the words name, or -1.
 		int MatchCommand( const std::string &text )
 		{
-			if( !s_slotsValid )
-			{
-				return -1;
-			}
 			const std::string said = Normalize( text );
 			if( said.empty() )
 			{
@@ -484,64 +543,138 @@ namespace PSUVR
 			}
 			int best = -1;
 			int bestDistance = 1000;
-			for( int slot = 0; slot < 4; ++slot )
+			for( size_t index = 0; index < s_commands.size(); ++index )
 			{
-				if( !s_slots.id[ slot ] )
-				{
-					continue;
-				}
-				for( const char *word : kSlotWords[ slot ] )
+				const Command &command = s_commands[ index ];
+				for( const std::string &word : command.exact )
 				{
 					if( said == word )
 					{
-						return slot;
+						return static_cast< int >( index );
 					}
 				}
-				const char *name = TechNameFor( s_slots.id[ slot ] );
-				if( !name )
+				if( command.fuzzy.empty() )
 				{
 					continue;
 				}
-				const std::string want = Lower( name );
-				const int distance = EditDistance( said, want );
+				const int distance = EditDistance( said, command.fuzzy );
 				// Exact, or one letter off for longer names ("gibarda").
-				const int allowed = want.size() >= 5 ? 1 : 0;
+				const int allowed = command.fuzzy.size() >= 5 ? 1 : 0;
 				if( distance <= allowed && distance < bestDistance )
 				{
-					best = slot;
+					best = static_cast< int >( index );
 					bestDistance = distance;
 				}
 			}
 			return best;
 		}
 
-		void HandleFinal( const std::string &text )
+		// Runs a registry entry; true when it was started.
+		bool Execute( const Command &command, const std::string &text )
+		{
+			if( command.kind == CommandKind::Tech )
+			{
+				const char *name = TechNameFor( s_slots.id[ command.arg ] );
+				if( VRSyntheticPad::CastTechSlot( command.arg ) )
+				{
+					Toast( "Voice: %s (slot %d)", name ? name : "technique", command.arg + 1 );
+				}
+				else
+				{
+					Toast( "Voice: %s can't be cast right now", name ? name : "that" );
+				}
+				PSU_LOG( "VRVoice: \"%s\" -> slot %d (id %u)\n", text.c_str(), command.arg + 1, s_slots.id[ command.arg ] );
+				return true;
+			}
+			if( VRSyntheticPad::UseItemSlot( command.arg ) )
+			{
+				Toast( "Voice: item %d", command.arg + 1 );
+			}
+			else
+			{
+				Toast( "Voice: item %d can't be used right now", command.arg + 1 );
+			}
+			PSU_LOG( "VRVoice: \"%s\" -> item %d\n", text.c_str(), command.arg + 1 );
+			return true;
+		}
+
+		// A menu has the input (0x00B9CC80 0x0405): the chat key would go to it.
+		bool MenuHasInput()
+		{
+			return ( PSUMemory::ReadAbsoluteMemory< uint32_t >( 0x00B9CC80 ) & 0xFFFF ) == 0x0405;
+		}
+
+		// The "in battle" guess for the auto route: free in the field (no menu, no text box) with a
+		// weapon equipped. There is no enemy test yet, so this also holds in a town.
+		bool WeaponOutInField()
+		{
+			PSUCombat::State state;
+			return PSUCombat::Read( state ) && !MenuHasInput() && !TextInputOpen() &&
+				( state.rightCategory || state.leftCategory );
+		}
+
+		enum class Route { Command, Chat, Ignore };
+
+		// Where an utterance goes. The held button (not automatic) always has the chat as its
+		// fallback; an always-on utterance only reaches the chat in the explicit chat route, so
+		// background talk is never broadcast by accident.
+		Route ResolveRoute( bool automatic )
+		{
+			const std::string &route = Config::Get().vr.m_voiceRoute;
+			if( route == "chat" )
+			{
+				return Route::Chat;
+			}
+			if( route == "command" || WeaponOutInField() )
+			{
+				return Route::Command;
+			}
+			return automatic ? Route::Ignore : Route::Chat;
+		}
+
+		const char *RouteLabel( const std::string &route )
+		{
+			return route == "command" ? "Command" : route == "chat" ? "Chat" : "Auto (command in battle)";
+		}
+
+		void HandleFinal( const std::string &text, bool automatic )
 		{
 			const auto &vr = Config::Get().vr;
-			PSU_LOG( "VRSpeech: heard \"%s\"\n", text.c_str() );
+			PSU_LOG( "VRSpeech: heard \"%s\"%s\n", text.c_str(), automatic ? " (always-on)" : "" );
 			if( text.empty() )
 			{
 				Toast( "Speech: didn't catch that" );
 				return;
 			}
-			if( vr.m_voiceCommands )
+			const Route route = ResolveRoute( automatic );
+			if( route == Route::Ignore )
 			{
-				RefreshSlots();
-				const int slot = MatchCommand( text );
-				if( slot >= 0 )
+				PSU_LOG( "VRVoice: ignored \"%s\" (no weapon out in the field)\n", text.c_str() );
+				return;
+			}
+			if( route == Route::Command && ( vr.m_voiceCommands || vr.m_voiceItems ) )
+			{
+				RefreshCommands();
+				const int match = MatchCommand( text );
+				if( match >= 0 )
 				{
-					const char *name = TechNameFor( s_slots.id[ slot ] );
-					if( VRSyntheticPad::CastTechSlot( slot ) )
-					{
-						Toast( "Voice: %s (slot %d)", name ? name : "technique", slot + 1 );
-					}
-					else
-					{
-						Toast( "Voice: %s can't be cast right now", name ? name : "that" );
-					}
-					PSU_LOG( "VRVoice: \"%s\" -> slot %d (id %u)\n", text.c_str(), slot + 1, s_slots.id[ slot ] );
+					Execute( s_commands[ match ], text );
 					return;
 				}
+				if( automatic )
+				{
+					// Always-on chatter that names no technique: nothing to do.
+					PSU_LOG( "VRVoice: no command in \"%s\"\n", text.c_str() );
+#ifdef _DEBUG
+					Toast( "Heard: %s (no command)", text.c_str() );
+#endif
+					return;
+				}
+			}
+			else if( route == Route::Command && automatic )
+			{
+				PSU_LOG( "VRVoice: \"%s\" dropped (voice commands are off)\n", text.c_str() );
+				return;
 			}
 			if( vr.m_speechChat )
 			{
@@ -550,8 +683,7 @@ namespace PSUVR
 					Toast( "Chat: still sending the last message" );
 					return;
 				}
-				// A menu took the input meanwhile (0x00B9CC80 0x0405): the chat key would go to it.
-				if( ( PSUMemory::ReadAbsoluteMemory< uint32_t >( 0x00B9CC80 ) & 0xFFFF ) == 0x0405 )
+				if( MenuHasInput() )
 				{
 					Toast( "Not sent (a menu is open): %s", text.c_str() );
 					return;
@@ -573,7 +705,12 @@ namespace PSUVR
 				s_keyterms.clear();
 				s_slotsTick = 0;
 				s_slotsValid = false;
-				Toast( "Speech to text ready: hold left Square and talk" );
+				s_stateValid = false;
+				s_mode = 0;
+				s_commands.clear();
+				s_sentAuto = false;  // a fresh helper starts in push-to-talk
+				Toast( Config::Get().vr.m_speechAlwaysOn ? "Speech to text ready: always listening" :
+					"Speech to text ready: hold left Square and talk" );
 				PSU_LOG( "VRSpeech: ready (%s)\n", text.c_str() );
 			}
 			else if( kind == "STATUS" )
@@ -595,7 +732,11 @@ namespace PSUVR
 			}
 			else if( kind == "FINAL" )
 			{
-				HandleFinal( text );
+				HandleFinal( text, false );
+			}
+			else if( kind == "AUTO" )
+			{
+				HandleFinal( text, true );
 			}
 			else
 			{
@@ -654,11 +795,25 @@ namespace PSUVR
 				s_nextStartTick = GetTickCount() + kRestartDelayMs;
 			}
 
-			if( s_ready && vr.m_voiceCommands )
+			if( s_ready && vr.m_speechAlwaysOn != s_sentAuto )
 			{
-				RefreshSlots();
+				s_sentAuto = vr.m_speechAlwaysOn;
+				SendLine( s_sentAuto ? "MODE auto" : "MODE push" );
+				PSU_LOG( "VRSpeech: %s\n", s_sentAuto ? "always listening" : "push to talk" );
+			}
+			if( s_ready && ( vr.m_voiceCommands || vr.m_voiceItems ) )
+			{
+				RefreshCommands();
 			}
 			UpdateChat();
+		}
+
+		void CycleRoute()
+		{
+			std::string &route = Config::Get().vr.m_voiceRoute;
+			route = route == "command" ? "chat" : route == "chat" ? "auto" : "command";
+			Toast( "Voice goes to: %s", RouteLabel( route ) );
+			PSU_LOG( "VRSpeech: route %s\n", route.c_str() );
 		}
 
 		void BeginTalk()
@@ -676,6 +831,7 @@ namespace PSUVR
 			}
 			SendLine( "BEGIN" );
 			s_talking = true;
+			s_talkTick = GetTickCount();
 			VRBindings::ShowToast( "Listening..." );
 		}
 
@@ -686,6 +842,13 @@ namespace PSUVR
 				return;
 			}
 			s_talking = false;
+			if( GetTickCount() - s_talkTick < kTapMs )
+			{
+				// A tap on the talk button switches where speech goes instead.
+				SendLine( "CANCEL" );
+				CycleRoute();
+				return;
+			}
 			SendLine( "END" );
 		}
 
