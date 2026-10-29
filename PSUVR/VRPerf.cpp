@@ -279,12 +279,14 @@ namespace PSUVR
 				}
 				char text[ 2048 ];
 				int length = std::snprintf( text, sizeof( text ),
-					"Perf %.0f s: %u frames, %.1f fps, frame avg %.2f max %.2f ms (headset %.0f Hz, %u%% over budget, stereo %u%%, fast %c%c%c%c) | CPU",
+					"Perf %.0f s: %u frames, %.1f fps, frame avg %.2f max %.2f ms (headset %.0f Hz, %u%% over budget, stereo %u%%, fast %c%c%c%c%c) | CPU",
 					seconds, w.frames, w.frames / seconds, w.frameSum / w.frames, w.frameMax,
 					s_displayMs > 0.0 ? 1000.0 / s_displayMs : 0.0, w.overBudget * 100u / w.frames, w.stereo * 100u / w.frames,
-					// Phase 1 toggles: F flat copy skipped, C plain copies, H HUD lock ranges, L log batching.
+					// Phase 1 toggles: F flat copy skipped, C plain copies, H HUD lock ranges, L log batching;
+					// phase 2: M monitor mirrors the left eye.
 					Config::Get().vr.m_perfSkipFlatCopy ? 'F' : '-', Config::Get().vr.m_perfCopyBlits ? 'C' : '-',
-					Config::Get().vr.m_perfHudLockRanges ? 'H' : '-', Config::Get().vr.m_perfLogBatching ? 'L' : '-' );
+					Config::Get().vr.m_perfHudLockRanges ? 'H' : '-', Config::Get().vr.m_perfLogBatching ? 'L' : '-',
+					Config::Get().vr.m_flatMirrorEye ? 'M' : '-' );
 				for( int i = 0; i < kStages && length > 0 && length < static_cast< int >( sizeof( text ) ); ++i )
 				{
 					length += std::snprintf( text + length, sizeof( text ) - length, " %s %.2f/%.2f", kStageKeys[ i ],

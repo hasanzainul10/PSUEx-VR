@@ -1403,34 +1403,35 @@ namespace PSUVR
 		return s_stretchQuadBuf;
 	}
 
-	void StereoRenderer::DrawNameplateToEyes( IDirect3DDevice9 *device, unsigned primitiveType,
+	bool StereoRenderer::DrawNameplateToEyes( IDirect3DDevice9 *device, unsigned primitiveType,
 		unsigned primitiveCount, const void *verts, unsigned stride )
 	{
 		if( s_inNameplateDraw || s_inEyePass || !device || !verts || !m_hasFrame || !m_haveEyeMatrices )
 		{
-			return;
+			return false;
 		}
 		if( stride < 16 || stride > kMaxStretchStride )
 		{
-			return;
+			return false;
 		}
 		const unsigned vertCount = VertCountForPrimitive( primitiveType, primitiveCount );
 		if( vertCount < 3 || vertCount > kMaxStretchVerts || vertCount * stride > sizeof( s_nameplateVertBuf ) )
 		{
-			return;
+			return false;
 		}
 		D3D11Bridge *bridge = System::Get().StereoBridge();
 		if( !bridge || m_lastEyeW < 1 || m_lastEyeH < 1 || m_lastGameW < 1 || m_lastGameH < 1 )
 		{
-			return;
+			return false;
 		}
 
 		DWORD fvf = 0;
 		device->GetFVF( &fvf );
 		if( ( fvf & D3DFVF_POSITION_MASK ) != D3DFVF_XYZRHW )
 		{
-			return;
+			return false;
 		}
+		bool onMonitor = false;
 
 		IDirect3DSurface9 *savedRt = nullptr;
 		IDirect3DSurface9 *savedDs = nullptr;
@@ -1534,6 +1535,30 @@ namespace PSUVR
 			device->SetScissorRect( &scissor );
 			device->DrawPrimitiveUP( static_cast< D3DPRIMITIVETYPE >( primitiveType ),
 				primitiveCount, s_nameplateVertBuf, stride );
+
+			// flatMirrorEye: the monitor shows the left eye, so the plate goes where that eye has it,
+			// through the same crop, instead of the flat camera's place.
+			const LONG srcW = m_mirrorSrc.right - m_mirrorSrc.left;
+			const LONG srcH = m_mirrorSrc.bottom - m_mirrorSrc.top;
+			if( eye == 0 && m_mirrorActive && savedRt && savedRt == m_mirrorTarget && srcW > 0 && srcH > 0 )
+			{
+				const float sx = static_cast< float >( m_mirrorDst.right - m_mirrorDst.left ) / srcW;
+				const float sy = static_cast< float >( m_mirrorDst.bottom - m_mirrorDst.top ) / srcH;
+				for( unsigned i = 0; i < vertCount; ++i )
+				{
+					float *xy = reinterpret_cast< float * >( s_nameplateVertBuf + i * stride );
+					xy[ 0 ] = m_mirrorDst.left + ( xy[ 0 ] - m_mirrorSrc.left ) * sx;
+					xy[ 1 ] = m_mirrorDst.top + ( xy[ 1 ] - m_mirrorSrc.top ) * sy;
+				}
+				device->SetRenderTarget( 0, savedRt );
+				const D3DVIEWPORT9 monitorVp{ static_cast< DWORD >( m_mirrorDst.left ), static_cast< DWORD >( m_mirrorDst.top ),
+					static_cast< DWORD >( m_mirrorDst.right - m_mirrorDst.left ), static_cast< DWORD >( m_mirrorDst.bottom - m_mirrorDst.top ),
+					0.0f, 1.0f };
+				device->SetViewport( &monitorVp );
+				device->SetScissorRect( &m_mirrorDst );
+				onMonitor = SUCCEEDED( device->DrawPrimitiveUP( static_cast< D3DPRIMITIVETYPE >( primitiveType ),
+					primitiveCount, s_nameplateVertBuf, stride ) );
+			}
 		}
 		s_inNameplateDraw = false;
 
@@ -1559,6 +1584,7 @@ namespace PSUVR
 			m_loggedNameplate = true;
 			PSU_LOG( "VR: Pass B nameplates/bubbles remapped to stereo eyes\n" );
 		}
+		return onMonitor;
 	}
 
 	bool StereoRenderer::SceneAllowsStereo()
@@ -1572,12 +1598,91 @@ namespace PSUVR
 		return vr.m_stereoMode == 0 || sceneMode == vr.m_stereoMode;
 	}
 
-	void StereoRenderer::RenderEyes( IDirect3DDevice9 *device, Pass pass )
+	bool StereoRenderer::CanRenderEyes( IDirect3DDevice9 *device ) const
+	{
+		EyePose views[ 2 ];
+		EyePose viewSpace[ 2 ];
+		return device && SceneAllowsStereo() && System::Get().StereoBridge() && System::Get().NextViews( views, viewSpace );
+	}
+
+	bool StereoRenderer::MirrorLeftEye( IDirect3DDevice9 *device )
+	{
+		D3D11Bridge *bridge = System::Get().StereoBridge();
+		IDirect3DSurface9 *eye = bridge ? bridge->EyeSurface( 0 ) : nullptr;
+		if( !device || !eye || m_lastEyeW == 0 || m_lastEyeH == 0 )
+		{
+			return false;
+		}
+		IDirect3DSurface9 *gameTarget = nullptr;
+		if( FAILED( device->GetRenderTarget( 0, &gameTarget ) ) || !gameTarget )
+		{
+			return false;
+		}
+		D3DVIEWPORT9 vp{};
+		device->GetViewport( &vp );
+		if( vp.Width == 0 || vp.Height == 0 )
+		{
+			vp.X = vp.Y = 0;
+			vp.Width = m_lastGameW;
+			vp.Height = m_lastGameH;
+		}
+		// Centre crop of the eye image to the viewport's aspect (the eye buffer is near square).
+		RECT src{ 0, 0, static_cast< LONG >( m_lastEyeW ), static_cast< LONG >( m_lastEyeH ) };
+		const float targetAspect = static_cast< float >( vp.Width ) / static_cast< float >( vp.Height );
+		const float eyeAspect = static_cast< float >( m_lastEyeW ) / static_cast< float >( m_lastEyeH );
+		if( eyeAspect < targetAspect )
+		{
+			const LONG h = static_cast< LONG >( m_lastEyeW / targetAspect );
+			src.top = ( static_cast< LONG >( m_lastEyeH ) - h ) / 2;
+			src.bottom = src.top + h;
+		}
+		else
+		{
+			const LONG w = static_cast< LONG >( m_lastEyeH * targetAspect );
+			src.left = ( static_cast< LONG >( m_lastEyeW ) - w ) / 2;
+			src.right = src.left + w;
+		}
+		const RECT dst{ static_cast< LONG >( vp.X ), static_cast< LONG >( vp.Y ),
+			static_cast< LONG >( vp.X + vp.Width ), static_cast< LONG >( vp.Y + vp.Height ) };
+		const HRESULT hr = device->StretchRect( eye, &src, gameTarget, &dst, D3DTEXF_LINEAR );
+		m_mirrorTarget = gameTarget;  // identity only, not kept alive
+		gameTarget->Release();
+		m_mirrorActive = SUCCEEDED( hr );
+		m_mirrorSrc = src;
+		m_mirrorDst = dst;
+
+		// Pass B (nameplates, HUD) depth-tests against what the flat pass would have left.
+		IDirect3DSurface9 *gameDepth = nullptr;
+		DWORD depthFlags = 0;
+		if( SUCCEEDED( device->GetDepthStencilSurface( &gameDepth ) ) && gameDepth )
+		{
+			D3DSURFACE_DESC depthDesc{};
+			gameDepth->GetDesc( &depthDesc );
+			depthFlags = D3DCLEAR_ZBUFFER | ( HasStencil( depthDesc.Format ) ? D3DCLEAR_STENCIL : 0 );
+			device->Clear( 0, nullptr, depthFlags, 0, 1.0f, 0 );
+			gameDepth->Release();
+		}
+
+		if( !m_loggedMirror || FAILED( hr ) )
+		{
+			static unsigned s_failLogs = 0;
+			if( !m_loggedMirror || s_failLogs++ < 8 )
+			{
+				PSU_LOG( "Stereo: monitor mirrors the left eye, src [%ld %ld %ld %ld] of %ux%u -> viewport %u,%u %ux%u (game RT %ux%u), "
+					"depth clear 0x%X, hr 0x%08X\n", src.left, src.top, src.right, src.bottom, m_lastEyeW, m_lastEyeH,
+					vp.X, vp.Y, vp.Width, vp.Height, m_lastGameW, m_lastGameH, depthFlags, static_cast< unsigned >( hr ) );
+			}
+			m_loggedMirror = true;
+		}
+		return SUCCEEDED( hr );
+	}
+
+	bool StereoRenderer::RenderEyes( IDirect3DDevice9 *device, Pass pass )
 	{
 		const auto &vr = Config::Get().vr;
 		if( !device || !pass || !SceneAllowsStereo() )
 		{
-			return;
+			return false;
 		}
 
 		EyePose views[ 2 ];
@@ -1585,7 +1690,7 @@ namespace PSUVR
 		D3D11Bridge *bridge = System::Get().StereoBridge();
 		if( !bridge || !System::Get().NextViews( views, viewSpace ) )
 		{
-			return;
+			return false;
 		}
 		if( !VRCamera::HasReference() || VRCamera::ConsumeRecenterRequest() )
 		{
@@ -1596,8 +1701,9 @@ namespace PSUVR
 		IDirect3DSurface9 *gameDepth = nullptr;
 		if( FAILED( device->GetRenderTarget( 0, &gameTarget ) ) || !gameTarget )
 		{
-			return;
+			return false;
 		}
+		bool drawn = false;
 		device->GetDepthStencilSurface( &gameDepth );
 
 		D3DSURFACE_DESC targetDesc{};
@@ -1702,6 +1808,7 @@ namespace PSUVR
 			m_lastGameW = targetDesc.Width;
 			m_lastGameH = targetDesc.Height;
 			m_hasFrame = true;
+			drawn = true;
 			VRHud::Get().BeginStereoFrame( device, targetDesc.Width, targetDesc.Height );
 
 			if( !m_loggedFirst )
@@ -1719,5 +1826,6 @@ namespace PSUVR
 		{
 			gameDepth->Release();
 		}
+		return drawn;
 	}
 }

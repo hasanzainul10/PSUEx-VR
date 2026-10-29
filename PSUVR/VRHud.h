@@ -31,6 +31,8 @@ namespace PSUVR
 		void BeginUiDraw() { m_inUiDraw = true; m_uiPassBCaptures = 0; }
 		void EndUiDraw() { m_inUiDraw = false; }
 		bool InUiDraw() const { return m_inUiDraw; }
+		// The last CapturePassBDraw drew a nameplate on the monitor itself (flatMirrorEye): skip the game's draw.
+		bool NameplateOnMonitor() const { return m_nameplateOnMonitor; }
 		// Free aim with the gun up: this 2D draw is a piece of the game's reticle (ours
 		// replaces it), so it isn't drawn at all.
 		bool BlockReticleDraw( IDirect3DDevice9 *device, const void *verts, unsigned primitiveType,
@@ -114,6 +116,7 @@ namespace PSUVR
 		bool m_active = false;
 		bool m_capturing = false;
 		bool m_inUiDraw = false;
+		bool m_nameplateOnMonitor = false;
 		unsigned m_uiPassBCaptures = 0;
 		bool m_hasUser = false;
 		bool m_hasWorld = false;

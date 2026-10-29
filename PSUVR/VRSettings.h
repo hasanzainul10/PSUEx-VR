@@ -304,6 +304,8 @@ struct VRSettings
 	bool m_perfHudLockRanges = true;
 	// psuex.log: flush about once a second instead of after every line.
 	bool m_perfLogBatching = true;
+	// Stereo: the monitor shows the left eye instead of a separate flat 3D pass (the HUD still draws on top).
+	bool m_flatMirrorEye = true;
 
 	// VR shortcuts (keyboard and Back+button pad chords).
 	std::array< VRBinding, kVRActionCount > m_bindings = DefaultVRBindings();

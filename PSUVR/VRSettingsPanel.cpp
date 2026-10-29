@@ -643,6 +643,10 @@ namespace PSUVR
 			ImGui::Checkbox( "Lock only the HUD vertices used", &s.m_perfHudLockRanges );
 			Help( "When copying the game's HUD for the headset, reads only the part of the vertex and index buffers "
 				"each draw uses. Turn off only to compare." );
+			ImGui::Checkbox( "Monitor shows the left eye", &s.m_flatMirrorEye );
+			Help( "In stereo the monitor shows the left eye's picture (cropped to the window) with the HUD on top, "
+				"instead of drawing the whole 3D scene a third time for the monitor. Menus and 2D screens are unchanged. "
+				"Turn off to get the normal flat camera on the monitor." );
 			ImGui::Checkbox( "Batch log writes", &s.m_perfLogBatching );
 			Help( "Writes psuex.log to disk about once a second instead of after every line. A crash still writes "
 				"what was logged. Turn off when chasing a crash that kills the game outright." );

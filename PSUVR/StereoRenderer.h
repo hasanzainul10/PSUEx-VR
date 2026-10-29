@@ -21,13 +21,21 @@ namespace PSUVR
 
 		static StereoRenderer &Get();
 
-		void RenderEyes( IDirect3DDevice9 *device, Pass pass );
+		// True when both eyes were drawn this call.
+		bool RenderEyes( IDirect3DDevice9 *device, Pass pass );
+		// RenderEyes' preconditions (scene, bridge, views) without drawing anything.
+		bool CanRenderEyes( IDirect3DDevice9 *device ) const;
+		// After RenderEyes: the left eye, centre-cropped to the game viewport's aspect, onto the game's
+		// render target, and the game's depth cleared, so pass B draws the HUD over it (flatMirrorEye).
+		bool MirrorLeftEye( IDirect3DDevice9 *device );
 
 		// True from RenderEyes until the frame is submitted.
 		bool HasFrame() const { return m_hasFrame; }
 		const EyePose *RenderedPoses() const { return m_poses; }
 		const EyePose *RenderedViewSpacePoses() const { return m_viewSpacePoses; }
-		void ConsumeFrame() { m_hasFrame = false; m_haveEyeMatrices = false; }
+		void ConsumeFrame() { m_hasFrame = false; m_haveEyeMatrices = false; m_mirrorActive = false; }
+		// MirrorLeftEye put the left eye on the monitor this frame (nameplates follow it there).
+		bool MirrorActive() const { return m_mirrorActive; }
 
 		unsigned EyeWidth() const { return m_lastEyeW; }
 		unsigned EyeHeight() const { return m_lastEyeH; }
@@ -67,7 +75,8 @@ namespace PSUVR
 		static void NoteTechnique();
 
 		// Unproject game XYZRHW (Pass B nameplate/bubble) and draw onto both eye RTs.
-		void DrawNameplateToEyes( IDirect3DDevice9 *device, unsigned primitiveType,
+		// With the mirror active, also draws it on the monitor at its left-eye place; true when it did.
+		bool DrawNameplateToEyes( IDirect3DDevice9 *device, unsigned primitiveType,
 			unsigned primitiveCount, const void *verts, unsigned stride );
 
 		// Track RT textures written during the current eye pass (SetRT / StretchRect dest).
@@ -107,6 +116,11 @@ namespace PSUVR
 
 		bool m_hasFrame = false;
 		bool m_loggedFirst = false;
+		bool m_loggedMirror = false;
+		bool m_mirrorActive = false;
+		RECT m_mirrorSrc{};  // left-eye crop
+		RECT m_mirrorDst{};  // where it went on the game RT
+		const IDirect3DSurface9 *m_mirrorTarget = nullptr;  // that RT (compared only)
 		bool m_haveEyeMatrices = false;
 		bool m_loggedNameplate = false;
 		unsigned m_lastEyeW = 0;

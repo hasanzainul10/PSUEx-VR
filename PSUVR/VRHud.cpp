@@ -1658,6 +1658,7 @@ namespace PSUVR
 	void VRHud::CapturePassBDraw( IDirect3DDevice9 *device, unsigned primitiveType,
 		unsigned primitiveCount, const void *verts, unsigned stride, void *ret )
 	{
+		m_nameplateOnMonitor = false;
 		if( m_capturing || !m_active || !device || !verts ||
 			StereoRenderer::InEyePass() || StereoRenderer::InNameplateDraw() )
 		{
@@ -1811,7 +1812,7 @@ namespace PSUVR
 			{
 				LogLayerRoute( layer, "eyes", verts, vertCount, stride );
 				NoteMapDraw( device, layer, "DP-UP", "eyes", primitiveCount, verts, stride, ret );
-				stereo.DrawNameplateToEyes( device, primitiveType, primitiveCount, verts, stride );
+				m_nameplateOnMonitor = stereo.DrawNameplateToEyes( device, primitiveType, primitiveCount, verts, stride );
 				if( m_inUiDraw )
 				{
 					++m_uiPassBCaptures;
@@ -1824,7 +1825,7 @@ namespace PSUVR
 		{
 			LogRoute( ret, "eyes", verts, vertCount, stride );
 			NoteMapDraw( device, s_passBLayer, "DP-UP", "eyes-avatar", primitiveCount, verts, stride, ret );
-			stereo.DrawNameplateToEyes( device, primitiveType, primitiveCount, verts, stride );
+			m_nameplateOnMonitor = stereo.DrawNameplateToEyes( device, primitiveType, primitiveCount, verts, stride );
 			if( m_inUiDraw )
 			{
 				++m_uiPassBCaptures;

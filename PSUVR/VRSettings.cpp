@@ -145,7 +145,8 @@ namespace
 	X( m_perfSkipFlatCopy, "perfSkipFlatCopy" ) \
 	X( m_perfCopyBlits, "perfCopyBlits" ) \
 	X( m_perfHudLockRanges, "perfHudLockRanges" ) \
-	X( m_perfLogBatching, "perfLogBatching" )
+	X( m_perfLogBatching, "perfLogBatching" ) \
+	X( m_flatMirrorEye, "flatMirrorEye" )
 
 	void Read( const json &node, const char *key, bool &value )
 	{

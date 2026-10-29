@@ -253,6 +253,43 @@ and pushed to origin `psu_vr` unless noted.
    stereo 0.12 vs 0.19, hudQuads 0.04 vs 0.08, passB 0.91 vs 1.02, so about 1.4 ms less CPU per frame. Still pinned at
    the 60 fps cap. Logging has no timer of its own. The log rotated as intended: `psuex.log` was 0.36 MB after the
    run, and the old log is `psuex.log.1`. Not committed. **Next:** phase 2 (mirror the left eye on the monitor).
+   **Phase 2 built (Debug + Release) and deployed 2026-10-29 22:22 (Debug `PSUExD.dll` + `PSUExVRConfig.exe`, Release
+   `PSUExVR.dll`); no settings-file changes (new key defaults on).** Setting `flatMirrorEye` (Performance tab, "Monitor
+   shows the left eye"). `Hook_PassA` skips the flat `RunPassA()` when VR is on, the setting is on, `stereoPanel` is off,
+   `debugDoublePass` is off and `StereoRenderer::CanRenderEyes` (SceneAllowsStereo + bridge + NextViews). After
+   `RenderEyes` (now returns whether both eyes drew), `StereoRenderer::MirrorLeftEye` StretchRects the left eye RT,
+   centre-cropped to the game viewport's aspect, onto the game RT's viewport, then clears the game depth (+stencil).
+   If the eyes didn't draw or the StretchRect fails, the flat pass runs after all. The `flat` perf stage (CPU + GPU)
+   now times the mirror copy in those frames. `Perf 5 s:` header: `fast FCHLM` (`M` = mirror on). Log once:
+   `Stereo: monitor mirrors the left eye, src [...] -> viewport ...`.
+   Dependency check (code reading, not yet confirmed in game): the eyes don't read flat-pass output. Flat-only RT
+   quads (glare / afterimage) are already skipped in the eyes (`stereoSkipScreenQuads`, written-texture set is per eye),
+   `MarkSurfaceTexture` state is cleared per eye, the deferred lists start empty each pass A, shadows run inside each
+   pass A, the device VIEW / PROJECTION aren't set by pass A (the eye passes would clobber them otherwise), and pass B
+   (HUD capture, minimap, nameplate remap) still runs as before on the game RT. Known monitor-only differences:
+   pass B nameplates sit at flat-camera positions over the left-eye picture, and they draw over geometry (depth cleared).
+   **Pending test:** town (stereoMode 5) and a field mission, toggle on (~2 min), then off (~1 min, same place).
+   Expect the monitor to show the left eye + HUD, the headset unchanged, and `flat` CPU/GPU near 0 with `fast FCHLM`.
+   Summarize `tools/lastlog.sh -a -n 0 'Perf 5 s'` split by `FCHLM` / `FCHL-` against the post-phase-1 numbers
+   (CPU flat 0.5, eyes 0.6 each, passB 0.9, submit 1.6; GPU flat 0.5, eyes 0.8 each, passB 1.2, frame 3.3).
+   **First run (2026-10-29, Debug, 136 `Perf 5 s` lines, all `FCHLM`, no off run):** the mirror logged once,
+   `src [0 602 2632 2082] of 2632x2684 -> viewport 0,0 2560x1440`, `hr 0`; no errors in the session. Stereo-100% lines
+   (106, 31.6k frames): 59.6 fps; CPU flat **0.00** (was 0.5), eyes 0.83 + 0.73, passB 1.17, capture 0.03, submit 1.75
+   (gpuWait 0.73); GPU flat **0.10** (the mirror StretchRect; was 0.5), eyes 0.90 + 0.88, passB 1.41, frame 3.55.
+   So the flat pass is gone (~0.5 ms CPU, ~0.4 ms GPU). Eyes / passB / frame read higher than the phase-1 baseline,
+   most likely heavier scenes (more mission time), but there's no same-place off run to confirm.
+   **A/B run (2026-10-29, Debug, same spot, stereo-100% lines: 8 on `FCHLM` vs 32 off `FCHL-`): kept.**
+   CPU ms on vs off: flat 0.00 vs 0.64, eyes 0.71 + 0.60 vs 0.68 + 0.68, passB 0.66 vs 0.91, submit 1.69 vs 1.67.
+   GPU ms: flat 0.10 vs 0.52, eyes 0.66 + 0.76 vs 0.80 + 0.84, passB 0.87 vs 1.24, **frame 2.69 vs 3.66**.
+   So about 0.9 ms CPU and 1 ms GPU less per frame; fps unchanged (60 cap). The user confirmed the monitor shows the
+   left eye ("a bit buggy, doesn't matter"; confirmed: the flat-placed nameplates noted above, left as is) and reported nothing wrong
+   in the headset. **Monitor nameplates fixed (built Debug + Release 2026-10-29, not yet deployed: PSUC was running):**
+   in mirror frames `PSUOverlay::Hook_DrawPrimitiveUP` runs `VRHud::CapturePassBDraw` *before* the game's draw; a plate
+   routed to the eyes is also drawn by `DrawNameplateToEyes` on the game RT at its left-eye place mapped through the
+   mirror crop (`m_mirrorSrc` -> `m_mirrorDst`), and the game's flat-placed draw is skipped (`VRHud::NameplateOnMonitor`).
+   Toggle off / no mirror: the old order (draw, then capture). **Pending test:** deploy, then town with nameplates in view:
+   on the monitor they sit over the right people; the headset is unchanged. Committed with phase 2.
+   **Next:** phase 3 (eye resolution scale, LOCAL-space layer, quality presets).
 
 ## Features done this stretch (all toggles in the VR settings panel)
 

@@ -518,17 +518,27 @@ HRESULT APIENTRY PSUOverlay::Hook_DrawPrimitiveUP( LPDIRECT3DDEVICE9 pDevice, D3
 		pDevice->SetRenderState( D3DRS_ZFUNC, D3DCMP_LESSEQUAL );
 		pDevice->SetRenderState( D3DRS_ZWRITEENABLE, FALSE );
 	}
-	const HRESULT hr = m_pOriginalDrawPrimitiveUP( pDevice, PrimitiveType, PrimitiveCount, verts, VertexStreamZeroStride );
+	// Pass B chrome, or DP-UP nested inside 0x793C40 — not every post-frame fullscreen blit.
+	auto &hud = PSUVR::VRHud::Get();
+	const bool capture = hud.Active() && ( FrameTrace::CurrentPassAddress() == 0x004FDBC0 || hud.InUiDraw() );
+	// flatMirrorEye: the monitor shows the left eye, so a world nameplate is placed there by the capture
+	// (before the game's draw, which would put it where the flat camera sees it).
+	const bool captureFirst = capture && PSUVR::StereoRenderer::Get().MirrorActive();
+	if( captureFirst )
+	{
+		hud.CapturePassBDraw( pDevice,
+			static_cast< unsigned >( PrimitiveType ), PrimitiveCount,
+			pVertexStreamZeroData, VertexStreamZeroStride, _ReturnAddress() );
+	}
+	const HRESULT hr = captureFirst && hud.NameplateOnMonitor() ? D3D_OK
+		: m_pOriginalDrawPrimitiveUP( pDevice, PrimitiveType, PrimitiveCount, verts, VertexStreamZeroStride );
 	if( reprojectedSprite )
 	{
 		pDevice->SetRenderState( D3DRS_ZENABLE, savedZEnable );
 		pDevice->SetRenderState( D3DRS_ZFUNC, savedZFunc );
 		pDevice->SetRenderState( D3DRS_ZWRITEENABLE, savedZWrite );
 	}
-	// Pass B chrome, or DP-UP nested inside 0x793C40 — not every post-frame fullscreen blit.
-	auto &hud = PSUVR::VRHud::Get();
-	if( SUCCEEDED( hr ) && hud.Active() &&
-		( FrameTrace::CurrentPassAddress() == 0x004FDBC0 || hud.InUiDraw() ) )
+	if( SUCCEEDED( hr ) && capture && !captureFirst )
 	{
 		hud.CapturePassBDraw( pDevice,
 			static_cast< unsigned >( PrimitiveType ), PrimitiveCount,
