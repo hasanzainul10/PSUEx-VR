@@ -2,6 +2,7 @@
 
 #include "StereoRenderer.h"
 #include "VRControllers.h"
+#include "VRHands.h"
 #include "VRGamepad.h"
 #include "VRSyntheticPad.h"
 #include "VRSystem.h"
@@ -492,10 +493,12 @@ namespace PSUVR
 			const float yaw = WrapAngle( s_bodyYaw + hmdYaw );
 			const float fx = std::sin( yaw );
 			const float fz = std::cos( yaw );
+			float lean[ 2 ]{};
+			VRHands::EyeLean( lean[ 0 ], lean[ 1 ] );
 			const float head[ 3 ] = {
-				playerPosition[ 0 ],
+				playerPosition[ 0 ] + lean[ 0 ],
 				playerPosition[ 1 ] + vr.m_fpEyeHeight * kGameUnitsPerMeter,
-				playerPosition[ 2 ] };
+				playerPosition[ 2 ] + lean[ 1 ] };
 			focusPosition[ 0 ] = head[ 0 ];
 			focusPosition[ 1 ] = head[ 1 ];
 			focusPosition[ 2 ] = head[ 2 ];
@@ -521,7 +524,10 @@ namespace PSUVR
 			// The head follows the body; the eyes keep cancelling whatever the game camera does
 			// (BuildEyeFirstPerson), so the view doesn't follow the game's aim camera.
 			const auto &vr = Config::Get().vr;
-			s_headWorld = { playerPosition[ 0 ], playerPosition[ 1 ] + vr.m_fpEyeHeight * kGameUnitsPerMeter, playerPosition[ 2 ] };
+			float lean[ 2 ]{};
+			VRHands::EyeLean( lean[ 0 ], lean[ 1 ] );
+			s_headWorld = { playerPosition[ 0 ] + lean[ 0 ], playerPosition[ 1 ] + vr.m_fpEyeHeight * kGameUnitsPerMeter,
+				playerPosition[ 2 ] + lean[ 1 ] };
 			s_lastSteerTick = GetTickCount();
 			s_fpActive = true;
 			return true;
@@ -538,6 +544,8 @@ namespace PSUVR
 			pitch = trackingPitch;
 			return true;
 		}
+
+		float s_hmdTracking[ 3 ]{};
 
 		bool TrackingToWorld( const float tracking[ 3 ], float world[ 3 ] )
 		{
@@ -558,6 +566,12 @@ namespace PSUVR
 			world[ 1 ] = s_headWorld.y + local.y;
 			world[ 2 ] = s_headWorld.z + fx * local.x - fz * local.z;
 			return true;
+		}
+
+		bool HeadWorld( float head[ 3 ] )
+		{
+			// The real head (not the leashed anchor), so crouching and stepping show.
+			return TrackingToWorld( s_hmdTracking, head );
 		}
 
 		bool WorldToTracking( const float world[ 3 ], float tracking[ 3 ] )
@@ -982,6 +996,9 @@ namespace PSUVR
 				( views[ 0 ].position[ 0 ] + views[ 1 ].position[ 0 ] ) * 0.5f,
 				( views[ 0 ].position[ 1 ] + views[ 1 ].position[ 1 ] ) * 0.5f,
 				( views[ 0 ].position[ 2 ] + views[ 1 ].position[ 2 ] ) * 0.5f };
+			s_hmdTracking[ 0 ] = head.x;
+			s_hmdTracking[ 1 ] = head.y;
+			s_hmdTracking[ 2 ] = head.z;
 			const bool roomWalk = RoomWalkOn();
 			if( roomWalk )
 			{

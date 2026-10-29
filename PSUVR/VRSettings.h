@@ -16,6 +16,7 @@ enum class VRAction : int
 	TogglePause,
 	ToggleSnapTurn,
 	ToggleHudFollow,
+	ToggleToolkitMenu,
 	Count
 };
 
@@ -80,6 +81,11 @@ struct VRSettings
 	// Menu overlays bigger than the screen (mission menu scanlines) go on the menu panel in their
 	// draw order instead of being dropped as a background.
 	bool m_hudOverlays = true;
+	// Rogue's Toolkit panels and menu (drawn inside its Present hook) go on the HUD panel in the headset
+	// instead of only the monitor's back buffer. They then no longer show on the flat monitor.
+	bool m_toolkitOnHud = true;
+	// The VR UI pointer drives the Rogue's Toolkit menu (moves and clicks the system mouse over it).
+	bool m_toolkitPointer = true;
 	// Degrees the head may look away before the panel glides back in front.
 	float m_hudFollowAngle = 35.0f;
 	// How far below eye level the panel sits (meters).
@@ -87,6 +93,17 @@ struct VRSettings
 	// First person: eye height above the player's feet and forward offset (meters, avatar scale).
 	float m_fpEyeHeight = 1.6f;
 	float m_fpEyeForward = 0.12f;
+	bool m_fpEyeFollowsNeck = true; // the eye leans with the animated neck so walking doesn't put it behind the shoulders
+	// Replace the game's animated bones (idle, walk, attack) with the skeleton's bind pose; VR layers pose on top.
+	bool m_bodyRestPose = false;
+	// With the rest pose: scale the whole body so its eyes sit at fpEyeHeight (your real height).
+	bool m_bodyFitHeight = false;
+	// With the rest pose, first person: hips follow the head (crouch), the spine leans to it.
+	// With the rest pose: leave the pelvis and legs on the game's own animation (walk, idle).
+	bool m_bodyKeepLegAnim = false;
+	bool m_bodyIk = false;
+	// With the rest pose: feet stay planted in the world and step when the hips move away (replaces the strafe legs).
+	bool m_bodyProceduralLegs = false;
 	// Right-stick snap turn step in degrees (snapTurn = true).
 	float m_snapTurnDegrees = 30.0f;
 	// Right-stick smooth turn speed in degrees per second (snapTurn = false).
@@ -148,6 +165,7 @@ struct VRSettings
 	std::string m_simScript = "psuex_vr_script.txt";
 	// First person: the character's arms reach for the controllers (two-bone IK).
 	bool m_handsFollow = true;
+	bool m_armStretch = true; // visible arms stretch to reach the controllers when yours are longer
 	// Arms while attacking: "controller" (your swing) or "animation" (the game's). Photon
 	// Arts always play the game's animation.
 	std::string m_handsAttack = "controller";
@@ -184,7 +202,10 @@ struct VRSettings
 	// PSUEx chat log window. Y in menus either way.
 	bool m_triangleChatL2 = true;  // (name kept for old settings files; it now sends R2)
 	// Before the first hit of a chain, turn the character toward where you look.
+	bool m_strafeBody = true;            // body trails the head, legs step sideways / back while strafing
+	float m_strafeBodyBlend = 0.5f;      // how far the legs turn from the travel direction toward the body
 	bool m_attackFaceLook = true;
+	float m_attackFaceTolerance = 30.0f; // degrees off the look direction that still needs no turn
 	// Free aim (R3 with a gun): the gun hand steers the aim.
 	bool m_controllerAim = true;
 	bool m_aimInvertPitch = false;
@@ -232,6 +253,19 @@ struct VRSettings
 	std::string m_speechModel = "small";
 	bool m_speechChat = true;
 	bool m_voiceCommands = false;
+	// Voice item use ("item two"): drives the weapon / item palette through the virtual pad. The
+	// script is space separated steps: hold:<button> (kept until the end), wait:open (palette up),
+	// tap:<button> or tap:slot, wait:<seconds>. voiceItemButtons = the buttons of items one..four.
+	// UNVERIFIED in game: the defaults are a guess, tune them from the VRVoice log lines.
+	bool m_voiceItems = false;
+	std::string m_voiceItemScript = "hold:B wait:open tap:slot wait:0.3";
+	std::string m_voiceItemButtons = "Up,Right,Down,Left";
+	// Always-on listening: the helper cuts the microphone into utterances by itself (no button).
+	// voiceRoute decides where an utterance goes: "command" (match a technique, nothing else),
+	// "chat" (the game chat) or "auto" (command while a weapon is out in the field, otherwise
+	// ignored). The held button also falls back to chat when no command matches, except in "command".
+	bool m_speechAlwaysOn = false;
+	std::string m_voiceRoute = "auto";
 	// 0..1 how far the vignette closes in at full motion.
 	float m_vignetteStrength = 0.7f;
 	// Render the 3D pass per eye (projection layer) with the game frame as a panel.
@@ -269,6 +303,26 @@ struct VRSettings
 	float m_debugEyeShift = 0.0f;
 	// Debug: run the 3D pass twice per frame to test repeat-safety.
 	bool m_debugDoublePass = false;
+	// Frame timing overlay (CPU / GPU ms per pass, headset budget) and a "Perf 5 s:" log line.
+	bool m_perfOverlay = false;
+	// Game pointer checks (PSUMemory::IsValidPointer) read one byte under SEH instead of calling
+	// VirtualQuery, which costs ~0.2 ms per call here (PSUCombat::Read alone was ~4 ms a frame).
+	bool m_fastPointerChecks = true;
+	// Stereo: skip the flat back-buffer copy and its pre-Present GPU wait (only the stereo panel uses it).
+	bool m_perfSkipFlatCopy = true;
+	// OpenXR submit: plain GPU copies instead of clear + shader blit when sizes and formats allow.
+	bool m_perfCopyBlits = true;
+	// HUD capture: lock only the vertex / index range a draw uses instead of the whole buffers.
+	bool m_perfHudLockRanges = true;
+	// psuex.log: flush about once a second instead of after every line.
+	bool m_perfLogBatching = true;
+	// Stereo: the monitor shows the left eye instead of a separate flat 3D pass (the HUD still draws on top).
+	bool m_flatMirrorEye = true;
+	// Stereo projection layer space: "local" (the rendered head poses, so the runtime's reprojection corrects
+	// head turns when the game is slower than the headset; less judder) or "view" (head-locked, the old behaviour).
+	std::string m_stereoLayerSpace = "local";
+	// Eye images (and the OpenXR eye swapchains) at this times the runtime's recommended size, 0.5-1.5.
+	float m_eyeResolutionScale = 1.0f;
 
 	// VR shortcuts (keyboard and Back+button pad chords).
 	std::array< VRBinding, kVRActionCount > m_bindings = DefaultVRBindings();

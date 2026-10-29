@@ -827,7 +827,7 @@ namespace PSUVR
 			const float w = maxX - minX;
 			const float h = maxY - minY;
 			const bool squareSprite = w > gw * 0.02f && w < gw * 0.15f && h > w * 0.7f && h < w * 1.4f;
-			if( squareSprite && std::fabs( cx - gw * 0.5f ) < gw * 0.2f && std::fabs( cy - gh * 0.5f ) < gh * 0.25f )
+			if( squareSprite && std::fabs( cx - gw * 0.5f ) < gw * 0.2f && std::fabs( cy - gh * 0.5f ) < gh * 0.4f )
 			{
 				return true;
 			}
@@ -836,9 +836,17 @@ namespace PSUVR
 			{
 				return false;
 			}
+			// Every layer-48 piece the matcher sees while aiming (first 80), to tune it with the toolkit's UI scale.
+			static unsigned s_reticleLogs = 0;
+			if( s_reticleLogs < 80 )
+			{
+				++s_reticleLogs;
+				PSU_LOG( "VRHud reticle: layer 48 piece box=(%.0f,%.0f)-(%.0f,%.0f) w=%.0f h=%.0f of %ux%u\n", minX, minY, maxX, maxY,
+					w, h, width, height );
+			}
 			// Around the centre (ring, corners, ticks), or a thin bar on one of the screen's
 			// centre lines (the four lines reach out to the edges).
-			const bool central = w < gw * 0.6f && std::fabs( cx - gw * 0.5f ) < gw * 0.3f && std::fabs( cy - gh * 0.5f ) < gh * 0.35f;
+			const bool central = w < gw * 0.6f && std::fabs( cx - gw * 0.5f ) < gw * 0.45f && std::fabs( cy - gh * 0.5f ) < gh * 0.35f;
 			const bool crossLine = ( std::fabs( cx - gw * 0.5f ) < gw * 0.02f && w < gw * 0.03f ) ||
 				( std::fabs( cy - gh * 0.5f ) < gh * 0.03f && h < gh * 0.04f );
 			if( !central && !crossLine )
@@ -1658,6 +1666,7 @@ namespace PSUVR
 	void VRHud::CapturePassBDraw( IDirect3DDevice9 *device, unsigned primitiveType,
 		unsigned primitiveCount, const void *verts, unsigned stride, void *ret )
 	{
+		m_nameplateOnMonitor = false;
 		if( m_capturing || !m_active || !device || !verts ||
 			StereoRenderer::InEyePass() || StereoRenderer::InNameplateDraw() )
 		{
@@ -1811,7 +1820,7 @@ namespace PSUVR
 			{
 				LogLayerRoute( layer, "eyes", verts, vertCount, stride );
 				NoteMapDraw( device, layer, "DP-UP", "eyes", primitiveCount, verts, stride, ret );
-				stereo.DrawNameplateToEyes( device, primitiveType, primitiveCount, verts, stride );
+				m_nameplateOnMonitor = stereo.DrawNameplateToEyes( device, primitiveType, primitiveCount, verts, stride );
 				if( m_inUiDraw )
 				{
 					++m_uiPassBCaptures;
@@ -1824,7 +1833,7 @@ namespace PSUVR
 		{
 			LogRoute( ret, "eyes", verts, vertCount, stride );
 			NoteMapDraw( device, s_passBLayer, "DP-UP", "eyes-avatar", primitiveCount, verts, stride, ret );
-			stereo.DrawNameplateToEyes( device, primitiveType, primitiveCount, verts, stride );
+			m_nameplateOnMonitor = stereo.DrawNameplateToEyes( device, primitiveType, primitiveCount, verts, stride );
 			if( m_inUiDraw )
 			{
 				++m_uiPassBCaptures;
@@ -1917,6 +1926,61 @@ namespace PSUVR
 		D3DINDEXBUFFER_DESC ibDesc{};
 		ib->GetDesc( &ibDesc );
 		const bool ib32 = ( ibDesc.Format == D3DFMT_INDEX32 );
+
+		// perfHudLockRanges: lock only the indices this draw reads, then only the vertices they point at.
+		// The locked pointers start at the range, so the expand runs with startIndex 0 and a base
+		// vertex shifted by the first locked vertex. Out-of-bounds ranges fall back to whole locks.
+		const unsigned indexSize = ib32 ? 4u : 2u;
+		const unsigned indexCount = IndexCountForPrimitive( primitiveType, primitiveCount );
+		if( Config::Get().vr.m_perfHudLockRanges && indexCount > 0 &&
+			static_cast< unsigned long long >( startIndex + indexCount ) * indexSize <= ibDesc.Size )
+		{
+			void *ibRange = nullptr;
+			if( SUCCEEDED( ib->Lock( startIndex * indexSize, indexCount * indexSize, &ibRange, D3DLOCK_READONLY ) ) && ibRange )
+			{
+				unsigned lo = 0xFFFFFFFFu;
+				unsigned hi = 0;
+				for( unsigned i = 0; i < indexCount; ++i )
+				{
+					const unsigned index = ib32 ? static_cast< const unsigned * >( ibRange )[ i ]
+						: static_cast< const unsigned short * >( ibRange )[ i ];
+					lo = ( std::min )( lo, index );
+					hi = ( std::max )( hi, index );
+				}
+				D3DVERTEXBUFFER_DESC vbDesc{};
+				vb->GetDesc( &vbDesc );
+				const long long first = static_cast< long long >( baseVertexIndex ) + lo;
+				const long long begin = offsetBytes + first * vbStride;
+				const long long size = static_cast< long long >( hi - lo + 1 ) * vbStride;
+				void *vbRange = nullptr;
+				if( first >= 0 && begin + size <= vbDesc.Size &&
+					SUCCEEDED( vb->Lock( static_cast< UINT >( begin ), static_cast< UINT >( size ), &vbRange, D3DLOCK_READONLY ) ) &&
+					vbRange )
+				{
+					unsigned outPrimCount = 0;
+					const unsigned outVerts = ExpandIndexedToUp( static_cast< const unsigned char * >( vbRange ), vbStride,
+						-static_cast< int >( lo ), ibRange, ib32, 0, primitiveType, primitiveCount, outPrimCount );
+					vb->Unlock();
+					ib->Unlock();
+					ib->Release();
+					vb->Release();
+					if( outVerts < 3 || outPrimCount < 1 )
+					{
+						return;
+					}
+#ifdef _DEBUG
+					NoteMapGeometry( device, s_passBLayer, "DIP-2D", ret, s_uiXformBuf, outVerts, vbStride, false );
+#endif
+					ReplayFontBatch( device, s_uiXformBuf, outVerts, vbStride, ret );
+					if( m_inUiDraw )
+					{
+						++m_uiPassBCaptures;
+					}
+					return;
+				}
+				ib->Unlock();
+			}
+		}
 
 		void *vbData = nullptr;
 		void *ibData = nullptr;

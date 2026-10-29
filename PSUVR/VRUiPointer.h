@@ -14,6 +14,8 @@ namespace PSUVR
 		void SetWindowOpen( bool open );
 		// The same for the setup wizard (either one open counts).
 		void SetWizardOpen( bool open );
+		// The Rogue's Toolkit menu is (assumed) open: the pointer also moves and clicks the system mouse.
+		void SetToolkitMenuOpen( bool open );
 		// True while the pointer drives the overlay (window open, motion input, vr.uiPointer,
 		// right controller active), and until every button is let go after the window closes.
 		bool Wanted();

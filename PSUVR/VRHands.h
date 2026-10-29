@@ -18,6 +18,9 @@ namespace PSUVR
 		void AfterPlayerDraw( void *model );
 		// The pose has the head folded away (vr.fpBody "headless"): no neck clip plane needed.
 		bool HeadHidden();
+		// How far the animated neck leans from rest while walking (game world units, horizontal),
+		// eased; false when unknown (not first person, setting off). Moves the camera's head anchor.
+		bool EyeLean( float &dx, float &dz );
 
 		// The hand angle calibration that vr.handCalibRequest asked for (setup wizard).
 		struct CalibStatus

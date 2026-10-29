@@ -31,6 +31,8 @@ namespace PSUVR
 			DpadToggle,
 			// Both grips + right stick click: the look-down controller labels on / off.
 			ToggleControllerLabels,
+			// Both grips + left stick pushed up: open / close the Rogue's Toolkit menu.
+			ToggleToolkitMenu,
 		};
 
 		struct Entry
@@ -45,7 +47,7 @@ namespace PSUVR
 		inline constexpr Entry kLayout[] = {
 			{ 0, Control::Trigger, Output::L2, Output::CalibrateHands },
 			{ 0, Control::Grip, Output::L1, Output::None },
-			{ 0, Control::Stick, Output::LeftStick, Output::None },
+			{ 0, Control::Stick, Output::LeftStick, Output::ToggleToolkitMenu },
 			{ 0, Control::StickClick, Output::FreeAimMode, Output::DpadToggle },
 			{ 0, Control::Primary, Output::SpeechToText, Output::ToggleSettings },
 			{ 0, Control::Secondary, Output::ChatLog, Output::TogglePause },
@@ -108,6 +110,7 @@ namespace PSUVR
 				case Output::SpeechToText: return "Speech to text, soon (X in menus)";
 				case Output::DpadToggle: return "D-pad on / off (the left stick moves the D-pad)";
 				case Output::ToggleControllerLabels: return "Controller labels on / off (look down)";
+				case Output::ToggleToolkitMenu: return "Rogue's Toolkit menu (push the stick up)";
 				default: return "";
 			}
 		}

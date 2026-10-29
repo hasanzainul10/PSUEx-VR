@@ -76,6 +76,10 @@ namespace PSUVR
 		int32_t EyeSwapchainWidth() const { return m_swapchainWidth; }
 		int32_t EyeSwapchainHeight() const { return m_swapchainHeight; }
 
+		// eyeResolutionScale: recreates the eye swapchains at scale x the recommended size when it
+		// changed. Call between frames (before BeginFrame), never with images acquired.
+		void SetEyeResolutionScale( float scale );
+
 	private:
 		bool LoadLoader();
 		bool CreateInstance();
@@ -104,6 +108,7 @@ namespace PSUVR
 		ID3D11SamplerState *m_blitSampler = nullptr;
 		ID3D11RasterizerState *m_blitRS = nullptr;
 		bool m_loggedBlitRtv = false;
+		bool m_loggedBlitCopy = false;
 
 		// Opaque OpenXR handles stored as uint64 to avoid requiring headers at
 		// every include site; implementation uses real Xr* types.
@@ -137,6 +142,11 @@ namespace PSUVR
 		int64_t m_displayTime = 0;
 		int64_t m_displayPeriod = 0;
 		uint32_t m_acquiredIndex[ 2 ]{};
+		float m_eyeScale = 1.0f;          // eye swapchains = recommended size x this
+		float m_pendingEyeScale = 1.0f;   // requested scale, applied once steady
+		unsigned long long m_pendingEyeScaleSince = 0;
+		float m_failedEyeScale = 0.0f;    // swapchains at this scale failed to create
+		bool m_loggedStereoLocal = false; // last logged stereo layer space (true = LOCAL)
 		bool m_loggedSubmitFormats = false;
 		float m_quadDistance = 2.0f;
 		float m_quadHeight = 1.2f;

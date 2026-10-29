@@ -19,6 +19,11 @@ namespace PSULog
 	inline size_t g_tailLength = 0;
 	inline char g_openError[ 300 ]{};
 	inline bool g_fileOpened = false;  // psuex.log was opened at attach (stays true after detach)
+	// Flush about once a second instead of after every line (VR setting perfLogBatching, synced each frame).
+	inline bool g_batchFlush = false;
+	inline ULONGLONG g_lastFlush = 0;
+	// At attach, a psuex.log larger than this is renamed psuex.log.1 (replacing the old one).
+	constexpr long long kRotateBytes = 20ll * 1024 * 1024;
 
 	inline void AppendTail( const char *text )
 	{
@@ -54,6 +59,14 @@ namespace PSULog
 			slash[ 1 ] = '\0';
 		}
 		strcat_s( path, "psuex.log" );
+		WIN32_FILE_ATTRIBUTE_DATA info{};
+		if( GetFileAttributesExA( path, GetFileExInfoStandard, &info ) &&
+			( ( static_cast< long long >( info.nFileSizeHigh ) << 32 ) | info.nFileSizeLow ) > kRotateBytes )
+		{
+			char oldPath[ MAX_PATH ]{};
+			sprintf_s( oldPath, "%s.1", path );
+			MoveFileExA( path, oldPath, MOVEFILE_REPLACE_EXISTING );
+		}
 		// Share read/write so tools can copy the log while the game runs.
 		g_file = _fsopen( path, "a", _SH_DENYNO );
 		if( g_file )
@@ -96,7 +109,25 @@ namespace PSULog
 		if( g_file )
 		{
 			fputs( buffer, g_file );
-			fflush( g_file );
+			const ULONGLONG now = GetTickCount64();
+			if( !g_batchFlush || now - g_lastFlush >= 1000 )
+			{
+				fflush( g_file );
+				g_lastFlush = now;
+			}
+		}
+	}
+
+	// Crash handler: write out what is buffered. Skips if the crash hit while the log was locked.
+	inline void Flush()
+	{
+		if( g_mutex.try_lock() )
+		{
+			if( g_file )
+			{
+				fflush( g_file );
+			}
+			g_mutex.unlock();
 		}
 	}
 }

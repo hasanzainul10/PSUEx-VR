@@ -25,6 +25,9 @@ namespace PSUVR
 
 		bool s_windowOpen = false;
 		bool s_wizardOpen = false;
+		bool s_toolkitOpen = false;
+		bool s_osButtonDown = false;    // the system mouse button we pressed for the toolkit menu
+		float s_panelPixels[ 2 ]{ 1.0f, 1.0f };
 		bool s_wanted = false;          // last Update's answer, before the release wait
 		bool s_releasePending = false;  // closed with buttons still held: keep them from the game
 		DWORD s_updateTick = 0;
@@ -81,7 +84,7 @@ namespace PSUVR
 		bool BaseWanted()
 		{
 			const auto &vr = Config::Get().vr;
-			return ( s_windowOpen || s_wizardOpen ) && vr.m_uiPointer && vr.m_inputMode == "motion" && VRControllers::Active( kHand ) &&
+			return ( s_windowOpen || s_wizardOpen || s_toolkitOpen ) && vr.m_uiPointer && vr.m_inputMode == "motion" && VRControllers::Active( kHand ) &&
 				GetTickCount() - s_updateTick < kStaleMs;
 		}
 
@@ -120,6 +123,83 @@ namespace PSUVR
 		void SetWizardOpen( bool open )
 		{
 			s_wizardOpen = open;
+		}
+
+		void SetToolkitMenuOpen( bool open )
+		{
+			s_toolkitOpen = open;
+		}
+
+		namespace
+		{
+			// The toolkit reads the system mouse over the game window: client pixels = panel pixels scaled.
+			void DriveSystemMouse()
+			{
+				if( !s_toolkitOpen )
+				{
+					if( s_osButtonDown )
+					{
+						mouse_event( MOUSEEVENTF_LEFTUP, 0, 0, 0, 0 );
+						s_osButtonDown = false;
+					}
+					return;
+				}
+				HWND window = VRBindings::GameWindow();
+				RECT client{};
+				if( !window || !GetClientRect( window, &client ) || client.right < 1 || client.bottom < 1 )
+				{
+					return;
+				}
+				// Real mouse input only reaches the game while its window is in front; otherwise post the same
+				// messages to it (the toolkit watches the window's input).
+				// The toolkit reads the button and cursor from the system, so it needs the window in front.
+				static ULONGLONG s_lastFront = 0;
+				bool foreground = GetForegroundWindow() == window;
+				if( !foreground && GetTickCount64() - s_lastFront > 400 )
+				{
+					s_lastFront = GetTickCount64();
+					foreground = VRBindings::BringGameToFront();
+				}
+				static int s_logs = 0;
+				if( s_logs < 12 && ( s_hit || s_click ) )
+				{
+					++s_logs;
+					PSU_LOG( "VRToolkit: pointer %s hit=%d click=%d client %ldx%ld\n", foreground ? "real input" : "posted messages",
+						s_hit ? 1 : 0, s_click ? 1 : 0, client.right, client.bottom );
+				}
+				POINT p{ static_cast< LONG >( s_pixel[ 0 ] / s_panelPixels[ 0 ] * static_cast< float >( client.right ) ),
+					static_cast< LONG >( s_pixel[ 1 ] / s_panelPixels[ 1 ] * static_cast< float >( client.bottom ) ) };
+				const LPARAM clientPos = MAKELPARAM( p.x, p.y );
+				if( s_hit )
+				{
+					if( foreground )
+					{
+						ClientToScreen( window, &p );
+						SetCursorPos( p.x, p.y );
+					}
+					else
+					{
+						PostMessage( window, WM_MOUSEMOVE, s_osButtonDown ? MK_LBUTTON : 0, clientPos );
+					}
+				}
+				if( s_click != s_osButtonDown )
+				{
+					if( foreground )
+					{
+						mouse_event( s_click ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP, 0, 0, 0, 0 );
+					}
+					else
+					{
+						PostMessage( window, s_click ? WM_LBUTTONDOWN : WM_LBUTTONUP, s_click ? MK_LBUTTON : 0, clientPos );
+					}
+					s_osButtonDown = s_click;
+				}
+				// s_wheel is cleared by FeedImGui right after this.
+				if( foreground && s_wheel != 0.0f )
+				{
+					mouse_event( MOUSEEVENTF_WHEEL, 0, 0, static_cast< DWORD >( static_cast< int >( s_wheel * WHEEL_DELTA ) ), 0 );
+				}
+			}
 		}
 
 		bool Wanted()
@@ -178,6 +258,8 @@ namespace PSUVR
 					distance = hitDistance;
 					s_pixel[ 0 ] = u * static_cast< float >( quad.pixelWidth );
 					s_pixel[ 1 ] = v * static_cast< float >( quad.pixelHeight );
+					s_panelPixels[ 0 ] = static_cast< float >( quad.pixelWidth );
+					s_panelPixels[ 1 ] = static_cast< float >( quad.pixelHeight );
 					if( !s_loggedHit )
 					{
 						s_loggedHit = true;
@@ -280,6 +362,7 @@ namespace PSUVR
 
 		void FeedImGui()
 		{
+			DriveSystemMouse();
 			ImGuiIO &io = ImGui::GetIO();
 			if( !s_wanted )
 			{

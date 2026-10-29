@@ -101,7 +101,33 @@ LoadRealDInput8()
 	char path[ MAX_PATH ]{};
 	GetSystemDirectoryA( path, MAX_PATH );
 	strcat_s( path, "\\dinput8.dll" );
-	g_realDInput8 = LoadLibraryA( path );
+	// Rogue's Toolkit (or another dinput8 proxy) renamed to toolkit_dinput8.dll: PSUEx stays the
+	// first dinput8 (so it loads before the launcher's own PSUEx.dll) and forwards to it, which
+	// forwards to the system DLL in turn.
+	char chained[ MAX_PATH ]{};
+	GetModuleFileNameA( nullptr, chained, MAX_PATH );
+	if( char *slash = strrchr( chained, '\\' ) )
+	{
+		slash[ 1 ] = '\0';
+	}
+	strcat_s( chained, "toolkit_dinput8.dll" );
+	if( GetFileAttributesA( chained ) != INVALID_FILE_ATTRIBUTES )
+	{
+		g_realDInput8 = LoadLibraryA( chained );
+		if( g_realDInput8 && GetProcAddress( g_realDInput8, "DirectInput8Create" ) )
+		{
+			Log( "Forwarding DirectInput to toolkit_dinput8.dll" );
+		}
+		else
+		{
+			Log( "toolkit_dinput8.dll can't be used (missing or no DirectInput8Create); using the system dinput8.dll" );
+			g_realDInput8 = nullptr;
+		}
+	}
+	if( !g_realDInput8 )
+	{
+		g_realDInput8 = LoadLibraryA( path );
+	}
 	if( !g_realDInput8 )
 	{
 		Log( "Failed to load system dinput8.dll" );

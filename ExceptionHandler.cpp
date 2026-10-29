@@ -103,6 +103,7 @@ bool WriteMinidump( EXCEPTION_POINTERS *pExceptionPointers, const std::string &d
 LONG WINAPI GlobalCrashHandler( EXCEPTION_POINTERS *pExceptionPointers )
 {
 	LogAccessViolation( pExceptionPointers );
+	PSULog::Flush();
 
 	// Only prompt/dump on access violations; still log every unhandled exception.
     if( pExceptionPointers->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION )

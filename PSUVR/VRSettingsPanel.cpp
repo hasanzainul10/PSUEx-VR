@@ -10,6 +10,7 @@
 #include <Windows.h>
 #include <Xinput.h>
 
+#include <cmath>
 #include <cstdio>
 
 namespace PSUVR
@@ -200,8 +201,8 @@ namespace PSUVR
 
 	// The panel is split into tabs (one screen each in the headset, no long scroll); sections
 	// keep their order in the code and say which tab they belong to.
-	enum class Tab : int { General, Camera, Hud, Controllers, Combat, Voice, Keys, Count };
-	const char *const kTabNames[] = { "General", "Camera", "HUD", "Controllers", "Combat", "Voice", "Keys" };
+	enum class Tab : int { General, Camera, Hud, Controllers, Combat, Voice, Performance, Keys, Count };
+	const char *const kTabNames[] = { "General", "Camera", "HUD", "Controllers", "Combat", "Voice", "Performance", "Keys" };
 	static Tab s_tab = Tab::General;
 
 	// A section of the selected tab: a heading, then its widgets.
@@ -271,6 +272,18 @@ namespace PSUVR
 			{
 				context.runSetup();
 			}
+			if( context.inGame && context.openToolkit && ImGui::Button( "Open Rogue's Toolkit menu" ) )
+			{
+				context.openToolkit();
+			}
+			ImGui::Checkbox( "Toolkit panels on the VR HUD", &s.m_toolkitOnHud );
+			Help( "Rogue's Toolkit's damage meter, drop panel, timers and menu are drawn onto the HUD panel in the headset. "
+				"They then no longer show on the flat monitor. Off: monitor only." );
+			ImGui::Checkbox( "Pointer drives the toolkit menu", &s.m_toolkitPointer );
+			Help( "While the toolkit menu is open, the right controller's pointer moves and clicks the system mouse over it." );
+			Help( "Opens the Rogue's Toolkit settings menu (it sends the toolkit's F6 key; this window closes). "
+				"Also on the shortcut under Controls (default Ctrl + F6, or Back + A on the pad). "
+				"Needs the toolkit installed; set its settings_pad to \"\" so Back + Start only opens VR settings." );
 		}
 
 		if( Section( Tab::Camera, "First person" ) )
@@ -283,8 +296,32 @@ namespace PSUVR
 			Combo( "Own body", s.m_fpBody, bodyIds, bodyNames, 4 );
 			Help( "Hands only: just the hands and weapons, right on the controllers (no reach limit), while the arms "
 				"follow the controllers (otherwise like Headless)." );
+			ImGui::Checkbox( "Body faces my head, legs strafe", &s.m_strafeBody );
+			Help( "Needs the arms to follow the controllers and a body that shows legs (not Hands only). The body "
+				"trails where you look; moving left, right or back turns the legs against the body." );
+			if( s.m_strafeBody )
+			{
+				ImGui::SliderFloat( "Legs toward the body", &s.m_strafeBodyBlend, 0.0f, 1.0f, "%.2f" );
+			}
 			ImGui::SliderFloat( "Eye height (m)", &s.m_fpEyeHeight, 1.2f, 2.0f, "%.2f" );
 			ImGui::SliderFloat( "Eye forward (m)", &s.m_fpEyeForward, 0.0f, 0.3f, "%.2f" );
+			ImGui::Checkbox( "Eye follows the walking lean", &s.m_fpEyeFollowsNeck );
+			Help( "The eye moves with the animated neck while you walk, so the camera isn't behind the shoulders. "
+				"Needs the arms to follow the controllers (first person)." );
+			ImGui::Checkbox( "Body in rest pose (no animations)", &s.m_bodyRestPose );
+			Help( "Replaces the game's idle, walk and attack animations with the plain skeleton; the arms, torso and legs "
+				"are then posed only by VR." );
+			if( s.m_bodyRestPose )
+			{
+				ImGui::Checkbox( "Scale body to my height", &s.m_bodyFitHeight );
+				Help( "Scales the model so its eyes are at the Eye height above. Set Eye height to your real eye height." );
+				ImGui::Checkbox( "Keep the game's leg animation", &s.m_bodyKeepLegAnim );
+				Help( "The pelvis and legs keep the walk / idle animation (the strafe legs turn them); the rest of the body is the plain skeleton." );
+				ImGui::Checkbox( "Body follows my head (hips, spine)", &s.m_bodyIk );
+				Help( "First person. The hips drop when you crouch and the spine leans toward your head." );
+				ImGui::Checkbox( "Planted feet that step", &s.m_bodyProceduralLegs );
+				Help( "The feet stay where they are in the world and step to a new spot when the hips move away. Replaces the strafe legs." );
+			}
 			ImGui::SliderFloat( "Neck cut below eyes (m)", &s.m_fpNeckDrop, 0.05f, 0.5f, "%.2f" );
 			ImGui::SliderFloat( "Lean limit (m)", &s.m_fpLeanLimit, 0.0f, 0.5f, "%.2f" );
 			ImGui::SliderFloat( "Crouch limit (m)", &s.m_fpCrouchLimit, 0.0f, 0.5f, "%.2f" );
@@ -425,6 +462,9 @@ namespace PSUVR
 			Help( "The character's arms reach for where you hold the controllers." );
 			if( s.m_handsFollow )
 			{
+				ImGui::Checkbox( "Stretch arms to reach my hands", &s.m_armStretch );
+				Help( "The character's arms are shorter than most players'. On: they stretch (up to half again) so the "
+					"hands sit on the controllers. Off: the arm stops at its own length." );
 				bool attackAnimation = s.m_handsAttack == "animation";
 				if( ImGui::Checkbox( "Play the game's attack animation", &attackAnimation ) )
 				{
@@ -487,6 +527,12 @@ namespace PSUVR
 						"swing only, swing with the trigger held is the Photon Art." );
 				}
 				ImGui::Checkbox( "Turn to where I look before attacking", &s.m_attackFaceLook );
+				if( s.m_attackFaceLook )
+				{
+					ImGui::SliderFloat( "Turn only if off by more than (deg)", &s.m_attackFaceTolerance, 5.0f, 90.0f, "%.0f" );
+					Help( "Smaller: the character turns more often before an attack. Larger: less turning, "
+						"the attack lands a little off where you look." );
+				}
 				ImGui::Checkbox( "Aim free aim with the gun hand", &s.m_controllerAim );
 				Help( "Left stick click turns free aim mode on / off. While on, raising the gun hand into view "
 					"enters the game's free aim (reticle) and lowering it leaves it; turning the gun hand turns "
@@ -584,7 +630,77 @@ namespace PSUVR
 			ImGui::Checkbox( "Voice commands (say a technique to cast it)", &s.m_voiceCommands );
 			Help( "With a rod, staff or TCSM: saying the name of a technique set on the weapon (\"Barta\") casts it from "
 				"its slot, like a swing (slot 1) or grip + swing (slot 2). \"Slot one\" .. \"slot four\" also work. "
-				"Anything else goes to the chat. Needs motion combat." );
+				"Anything else goes to the chat (with the held button). Needs motion combat." );
+			ImGui::Checkbox( "Voice items (say \"item two\" to use palette slot 2)", &s.m_voiceItems );
+			Help( "Experimental: opens the item palette through the virtual pad, picks the slot and releases. The button sequence is voiceItemScript / voiceItemButtons in config.json (a guess until tested). Item names (\"Monomate\") are not supported yet." );
+			ImGui::Checkbox( "Always listening (no button)", &s.m_speechAlwaysOn );
+			Help( "The microphone is cut into sentences by itself, so you can just talk. The held button still works. "
+				"Needs speech to text. A noisy room or loud game audio can set it off: it then only acts when the words "
+				"match a command." );
+			static const char *const routeIds[] = { "auto", "command", "chat" };
+			static const char *const routeNames[] = { "Auto (command in battle)", "Command", "Chat" };
+			Combo( "Always-on speech goes to", s.m_voiceRoute, routeIds, routeNames, 3 );
+			Help( "Auto: with a weapon out in the field it is matched to a technique, anything else is ignored. "
+				"Command: a technique, nothing else. Chat: everything you say goes to the game chat. "
+				"Tap left Square (a short press) to cycle these in the game. The held button always falls back to the chat." );
+		}
+
+		if( Section( Tab::Performance, "Performance" ) )
+		{
+			// Presets only write the settings below; whatever doesn't match one reads as Custom.
+			struct Preset { const char *name; float scale; bool blur, glare, sprites; };
+			static const Preset presets[] = { { "Low", 0.7f, false, false, false }, { "Medium", 0.85f, false, false, true },
+				{ "High", 1.0f, true, false, true } };
+			int preset = 3;
+			for( int i = 0; i < 3; ++i )
+			{
+				if( std::fabs( s.m_eyeResolutionScale - presets[ i ].scale ) < 0.005f && s.m_eyeBlur == presets[ i ].blur &&
+					s.m_eyeGlare == presets[ i ].glare && s.m_reprojectSprites == presets[ i ].sprites )
+				{
+					preset = i;
+				}
+			}
+			static const char *const presetNames[] = { "Low", "Medium", "High", "Custom" };
+			if( ImGui::Combo( "Quality", &preset, presetNames, 4 ) && preset < 3 )
+			{
+				s.m_eyeResolutionScale = presets[ preset ].scale;
+				s.m_eyeBlur = presets[ preset ].blur;
+				s.m_eyeGlare = presets[ preset ].glare;
+				s.m_reprojectSprites = presets[ preset ].sprites;
+			}
+			Help( "Low: eye resolution 0.7, no screen glow / glare, glows and sprites not placed in 3D. Medium: 0.85, no "
+				"screen glow / glare. High: the defaults. Changing one of those settings by hand shows Custom." );
+			ImGui::SliderFloat( "Eye resolution", &s.m_eyeResolutionScale, 0.5f, 1.5f, "%.2f" );
+			Help( "Size of the headset images, times what the VR runtime recommends (SteamVR's own resolution setting "
+				"also counts). Lower costs less GPU and looks softer. Applies within a frame." );
+			static const char *const layerIds[] = { "view", "local" };
+			static const char *const layerNames[] = { "Head-locked (view)", "World (local)" };
+			Combo( "Headset image space", s.m_stereoLayerSpace, layerIds, layerNames, 2 );
+			Help( "World: the headset gets the head pose each picture was drawn for, so SteamVR can correct head turns "
+				"when the game (60 fps) is slower than the headset. Less judder when turning your head; motion smoothing "
+				"may smear the sky or water. Head-locked: the old behaviour, more judder." );
+			ImGui::Checkbox( "Show frame timing", &s.m_perfOverlay );
+			Help( "A small window with the time each part of the frame takes (CPU and GPU, in ms) and how often a "
+				"frame misses the headset's refresh. Also written to psuex.log every 5 s (\"Perf 5 s:\")." );
+			ImGui::Checkbox( "Fast game memory checks", &s.m_fastPointerChecks );
+			Help( "Checks game pointers (player, weapon, motion tables) with a guarded read instead of asking Windows "
+				"about the memory each time. Saves about 4 ms per frame with motion controllers. Turn off only to compare." );
+			ImGui::Checkbox( "Skip the flat frame copy in stereo", &s.m_perfSkipFlatCopy );
+			Help( "In stereo the headset shows the eye images, so the monitor image is not copied to the headset or "
+				"waited for. Menus and 2D screens still copy it. Turn off only to compare." );
+			ImGui::Checkbox( "Plain GPU copies for the headset images", &s.m_perfCopyBlits );
+			Help( "Copies the eye, menu and HUD images to the headset directly when their size and format match, "
+				"instead of drawing them with a shader. Turn off only to compare." );
+			ImGui::Checkbox( "Lock only the HUD vertices used", &s.m_perfHudLockRanges );
+			Help( "When copying the game's HUD for the headset, reads only the part of the vertex and index buffers "
+				"each draw uses. Turn off only to compare." );
+			ImGui::Checkbox( "Monitor shows the left eye", &s.m_flatMirrorEye );
+			Help( "In stereo the monitor shows the left eye's picture (cropped to the window) with the HUD on top, "
+				"instead of drawing the whole 3D scene a third time for the monitor. Menus and 2D screens are unchanged. "
+				"Turn off to get the normal flat camera on the monitor." );
+			ImGui::Checkbox( "Batch log writes", &s.m_perfLogBatching );
+			Help( "Writes psuex.log to disk about once a second instead of after every line. A crash still writes "
+				"what was logged. Turn off when chasing a crash that kills the game outright." );
 		}
 
 		if( Section( Tab::Keys, "Keyboard and gamepad shortcuts" ) )

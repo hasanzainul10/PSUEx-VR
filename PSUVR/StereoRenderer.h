@@ -21,13 +21,21 @@ namespace PSUVR
 
 		static StereoRenderer &Get();
 
-		void RenderEyes( IDirect3DDevice9 *device, Pass pass );
+		// True when both eyes were drawn this call.
+		bool RenderEyes( IDirect3DDevice9 *device, Pass pass );
+		// RenderEyes' preconditions (scene, bridge, views) without drawing anything.
+		bool CanRenderEyes( IDirect3DDevice9 *device ) const;
+		// After RenderEyes: the left eye, centre-cropped to the game viewport's aspect, onto the game's
+		// render target, and the game's depth cleared, so pass B draws the HUD over it (flatMirrorEye).
+		bool MirrorLeftEye( IDirect3DDevice9 *device );
 
 		// True from RenderEyes until the frame is submitted.
 		bool HasFrame() const { return m_hasFrame; }
 		const EyePose *RenderedPoses() const { return m_poses; }
 		const EyePose *RenderedViewSpacePoses() const { return m_viewSpacePoses; }
-		void ConsumeFrame() { m_hasFrame = false; m_haveEyeMatrices = false; }
+		void ConsumeFrame() { m_hasFrame = false; m_haveEyeMatrices = false; m_mirrorActive = false; }
+		// MirrorLeftEye put the left eye on the monitor this frame (nameplates follow it there).
+		bool MirrorActive() const { return m_mirrorActive; }
 
 		unsigned EyeWidth() const { return m_lastEyeW; }
 		unsigned EyeHeight() const { return m_lastEyeH; }
@@ -61,13 +69,19 @@ namespace PSUVR
 		static void NoteShaderDraw( IDirect3DDevice9 *device, unsigned primitiveCount, void *ret );
 		static void NoteNearCameraDraw( IDirect3DDevice9 *device, unsigned primitiveType, unsigned primitiveCount,
 			const void *verts, unsigned stride, void *ret );
+		// Debug: distinct draws made in the eye passes while a given render layer runs (default 0x0F, enemies).
+		static void NoteLayerDraw( IDirect3DDevice9 *device, const char *api, unsigned primitiveType, unsigned primitiveCount, void *ret );
+		// Eye passes: the enemies' hit-spark billboard (layer 0x0F, 2-triangle additive 32x32) is the cross-shaped flash
+		// where a shot lands; it is built for the flat camera, so it is hidden in the eyes.
+		static bool SkipEyeHitSpark( IDirect3DDevice9 *device, unsigned primitiveCount );
 		static void NoteEffectDraw( IDirect3DDevice9 *device, int where, unsigned primitiveType, unsigned primitiveCount,
 			const void *verts, unsigned stride, void *ret );
 		// A technique is being cast: effect draws in the next 2 s are tagged "tech".
 		static void NoteTechnique();
 
 		// Unproject game XYZRHW (Pass B nameplate/bubble) and draw onto both eye RTs.
-		void DrawNameplateToEyes( IDirect3DDevice9 *device, unsigned primitiveType,
+		// With the mirror active, also draws it on the monitor at its left-eye place; true when it did.
+		bool DrawNameplateToEyes( IDirect3DDevice9 *device, unsigned primitiveType,
 			unsigned primitiveCount, const void *verts, unsigned stride );
 
 		// Track RT textures written during the current eye pass (SetRT / StretchRect dest).
@@ -107,6 +121,11 @@ namespace PSUVR
 
 		bool m_hasFrame = false;
 		bool m_loggedFirst = false;
+		bool m_loggedMirror = false;
+		bool m_mirrorActive = false;
+		RECT m_mirrorSrc{};  // left-eye crop
+		RECT m_mirrorDst{};  // where it went on the game RT
+		const IDirect3DSurface9 *m_mirrorTarget = nullptr;  // that RT (compared only)
 		bool m_haveEyeMatrices = false;
 		bool m_loggedNameplate = false;
 		unsigned m_lastEyeW = 0;

@@ -137,8 +137,18 @@ public:
         }
     }
 
+    // vr.fastPointerChecks: IsValidPointer reads one byte under SEH instead of calling VirtualQuery
+    // (a system call, ~0.2 ms each in this process). Same answer, except that probing a PAGE_GUARD
+    // page clears its guard.
+    static inline bool fastPointerChecks = true;
+
     static bool IsValidPointer( const void *ptr )
     {
+        if( fastPointerChecks )
+        {
+            return ProbeReadable( ptr );
+        }
+
         MEMORY_BASIC_INFORMATION mbi;
         if( VirtualQuery( ptr, &mbi, sizeof( mbi ) ) == 0 )
         {
@@ -157,6 +167,20 @@ public:
         }
 
         return true;
+    }
+
+    static bool ProbeReadable( const void *ptr )
+    {
+        __try
+        {
+            static_cast< void >( *static_cast< const volatile uint8_t * >( ptr ) );
+            return true;
+        }
+        __except( GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION || GetExceptionCode() == STATUS_GUARD_PAGE_VIOLATION
+            ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH )
+        {
+            return false;
+        }
     }
 
     uintptr_t GetMainModuleBaseAddress()

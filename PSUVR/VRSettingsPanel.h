@@ -16,6 +16,7 @@ namespace PSUVR
 		std::function< bool() > save;        // returns true on success
 		std::function< bool() > reload;      // re-read from file
 		std::function< void() > runSetup;    // opens the setup wizard (in-game)
+	std::function< void() > openToolkit; // opens the Rogue's Toolkit menu (in-game)
 		std::string message;                 // last save/reload result, shown in the footer
 	};
 

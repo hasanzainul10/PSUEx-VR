@@ -4,6 +4,7 @@
 #include "VRCamera.h"
 #include "VRControllers.h"
 #include "VRHud.h"
+#include "VRPerf.h"
 #include "VRPlayerDraw.h"
 #include "VRSyntheticPad.h"
 #include "VRSystem.h"
@@ -950,6 +951,93 @@ namespace PSUVR
 #endif
 	}
 
+	bool StereoRenderer::SkipEyeHitSpark( IDirect3DDevice9 *device, unsigned primitiveCount )
+	{
+		if( !s_inEyePass || !device || primitiveCount != 2 || *reinterpret_cast< const int * >( 0x009946C8 ) != 0x0F ||
+			!Config::Get().vr.m_enabled )
+		{
+			return false;
+		}
+		DWORD blend = 0, src = 0, dst = 0;
+		device->GetRenderState( D3DRS_ALPHABLENDENABLE, &blend );
+		device->GetRenderState( D3DRS_SRCBLEND, &src );
+		device->GetRenderState( D3DRS_DESTBLEND, &dst );
+		if( !blend || src != D3DBLEND_ONE || dst != D3DBLEND_ONE )
+		{
+			return false;
+		}
+		IDirect3DBaseTexture9 *texture = nullptr;
+		if( FAILED( device->GetTexture( 0, &texture ) ) || !texture )
+		{
+			return false;
+		}
+		IDirect3DTexture9 *tex2d = nullptr;
+		texture->QueryInterface( __uuidof( IDirect3DTexture9 ), reinterpret_cast< void ** >( &tex2d ) );
+		texture->Release();
+		if( !tex2d )
+		{
+			return false;
+		}
+		D3DSURFACE_DESC desc{};
+		tex2d->GetLevelDesc( 0, &desc );
+		tex2d->Release();
+		return desc.Width <= 32 && desc.Height <= 32;
+	}
+
+	void StereoRenderer::NoteLayerDraw( IDirect3DDevice9 *device, const char *api, unsigned primitiveType, unsigned primitiveCount, void *ret )
+	{
+#ifdef _DEBUG
+		constexpr int kLayer = 0x0F;
+		if( !s_inEyePass || !device || *reinterpret_cast< const int * >( 0x009946C8 ) != kLayer )
+		{
+			return;
+		}
+		DWORD fvf = 0, blend = 0, src = 0, dst = 0, zEnable = 0, zWrite = 0;
+		device->GetFVF( &fvf );
+		device->GetRenderState( D3DRS_ALPHABLENDENABLE, &blend );
+		device->GetRenderState( D3DRS_SRCBLEND, &src );
+		device->GetRenderState( D3DRS_DESTBLEND, &dst );
+		device->GetRenderState( D3DRS_ZENABLE, &zEnable );
+		device->GetRenderState( D3DRS_ZWRITEENABLE, &zWrite );
+		unsigned texW = 0, texH = 0;
+		IDirect3DBaseTexture9 *texture = nullptr;
+		if( SUCCEEDED( device->GetTexture( 0, &texture ) ) && texture )
+		{
+			IDirect3DTexture9 *tex2d = nullptr;
+			texture->QueryInterface( __uuidof( IDirect3DTexture9 ), reinterpret_cast< void ** >( &tex2d ) );
+			texture->Release();
+			if( tex2d )
+			{
+				D3DSURFACE_DESC desc{};
+				tex2d->GetLevelDesc( 0, &desc );
+				texW = desc.Width;
+				texH = desc.Height;
+				tex2d->Release();
+			}
+		}
+		struct Seen { void *ret; unsigned texW, texH, prims; DWORD fvf; };
+		static Seen s_seen[ 128 ];
+		static unsigned s_count = 0;
+		for( unsigned i = 0; i < s_count; ++i )
+		{
+			if( s_seen[ i ].ret == ret && s_seen[ i ].texW == texW && s_seen[ i ].texH == texH && s_seen[ i ].prims == primitiveCount &&
+				s_seen[ i ].fvf == fvf )
+			{
+				return;
+			}
+		}
+		if( s_count >= 128 )
+		{
+			return;
+		}
+		s_seen[ s_count++ ] = { ret, texW, texH, primitiveCount, fvf };
+		PSU_LOG( "VRLayer0F: %s ret=%p type=%u prims=%u fvf=0x%X tex=%ux%u blend=%lu %lu/%lu z=%lu zw=%lu\n", api, ret, primitiveType,
+			primitiveCount, fvf, texW, texH, blend, src, dst, zEnable, zWrite );
+#else
+		( void )device; ( void )api; ( void )primitiveType; ( void )primitiveCount; ( void )ret;
+#endif
+	}
+
 	void StereoRenderer::NoteEffectDraw( IDirect3DDevice9 *device, int where, unsigned primitiveType, unsigned primitiveCount,
 		const void *verts, unsigned stride, void *ret )
 	{
@@ -1169,6 +1257,31 @@ namespace PSUVR
 		// The game's 2D sprite draw; HUD pieces come through it too, but those are drawn in pass B
 		// (not an eye pass) or carry no projected depth.
 		constexpr uintptr_t kSpriteDraw = 0x00747248;
+#ifdef _DEBUG
+		// A projected-depth XYZRHW draw in an eye pass from any other site: a sprite we fail to recognise?
+		if( s_inEyePass && device && verts && stride >= 16 && reinterpret_cast< uintptr_t >( ret ) != kSpriteDraw )
+		{
+			DWORD dfvf = 0;
+			const float *v0 = static_cast< const float * >( verts );
+			if( SUCCEEDED( device->GetFVF( &dfvf ) ) && ( dfvf & D3DFVF_POSITION_MASK ) == D3DFVF_XYZRHW && v0[ 2 ] > 0.0f &&
+				v0[ 2 ] < 1.0f && v0[ 3 ] > 0.0f )
+			{
+				static void *s_seen[ 64 ]{};
+				static unsigned s_seenCount = 0;
+				bool seen = s_seenCount >= 64;
+				for( unsigned i = 0; i < s_seenCount && !seen; ++i )
+				{
+					seen = s_seen[ i ] == ret;
+				}
+				if( !seen )
+				{
+					s_seen[ s_seenCount++ ] = ret;
+					PSU_LOG( "Stereo: eye XYZRHW draw with projected z from ret=%p (not the sprite site) prims=%u z=%.3f\n", ret,
+						primitiveCount, v0[ 2 ] );
+				}
+			}
+		}
+#endif
 		if( !s_inEyePass || !device || !verts || reinterpret_cast< uintptr_t >( ret ) != kSpriteDraw ||
 			!Config::Get().vr.m_reprojectSprites || stride < 16 || s_gameW < 1 || s_gameH < 1 || s_eyeW < 1 || s_eyeH < 1 )
 		{
@@ -1402,34 +1515,35 @@ namespace PSUVR
 		return s_stretchQuadBuf;
 	}
 
-	void StereoRenderer::DrawNameplateToEyes( IDirect3DDevice9 *device, unsigned primitiveType,
+	bool StereoRenderer::DrawNameplateToEyes( IDirect3DDevice9 *device, unsigned primitiveType,
 		unsigned primitiveCount, const void *verts, unsigned stride )
 	{
 		if( s_inNameplateDraw || s_inEyePass || !device || !verts || !m_hasFrame || !m_haveEyeMatrices )
 		{
-			return;
+			return false;
 		}
 		if( stride < 16 || stride > kMaxStretchStride )
 		{
-			return;
+			return false;
 		}
 		const unsigned vertCount = VertCountForPrimitive( primitiveType, primitiveCount );
 		if( vertCount < 3 || vertCount > kMaxStretchVerts || vertCount * stride > sizeof( s_nameplateVertBuf ) )
 		{
-			return;
+			return false;
 		}
 		D3D11Bridge *bridge = System::Get().StereoBridge();
 		if( !bridge || m_lastEyeW < 1 || m_lastEyeH < 1 || m_lastGameW < 1 || m_lastGameH < 1 )
 		{
-			return;
+			return false;
 		}
 
 		DWORD fvf = 0;
 		device->GetFVF( &fvf );
 		if( ( fvf & D3DFVF_POSITION_MASK ) != D3DFVF_XYZRHW )
 		{
-			return;
+			return false;
 		}
+		bool onMonitor = false;
 
 		IDirect3DSurface9 *savedRt = nullptr;
 		IDirect3DSurface9 *savedDs = nullptr;
@@ -1533,6 +1647,30 @@ namespace PSUVR
 			device->SetScissorRect( &scissor );
 			device->DrawPrimitiveUP( static_cast< D3DPRIMITIVETYPE >( primitiveType ),
 				primitiveCount, s_nameplateVertBuf, stride );
+
+			// flatMirrorEye: the monitor shows the left eye, so the plate goes where that eye has it,
+			// through the same crop, instead of the flat camera's place.
+			const LONG srcW = m_mirrorSrc.right - m_mirrorSrc.left;
+			const LONG srcH = m_mirrorSrc.bottom - m_mirrorSrc.top;
+			if( eye == 0 && m_mirrorActive && savedRt && savedRt == m_mirrorTarget && srcW > 0 && srcH > 0 )
+			{
+				const float sx = static_cast< float >( m_mirrorDst.right - m_mirrorDst.left ) / srcW;
+				const float sy = static_cast< float >( m_mirrorDst.bottom - m_mirrorDst.top ) / srcH;
+				for( unsigned i = 0; i < vertCount; ++i )
+				{
+					float *xy = reinterpret_cast< float * >( s_nameplateVertBuf + i * stride );
+					xy[ 0 ] = m_mirrorDst.left + ( xy[ 0 ] - m_mirrorSrc.left ) * sx;
+					xy[ 1 ] = m_mirrorDst.top + ( xy[ 1 ] - m_mirrorSrc.top ) * sy;
+				}
+				device->SetRenderTarget( 0, savedRt );
+				const D3DVIEWPORT9 monitorVp{ static_cast< DWORD >( m_mirrorDst.left ), static_cast< DWORD >( m_mirrorDst.top ),
+					static_cast< DWORD >( m_mirrorDst.right - m_mirrorDst.left ), static_cast< DWORD >( m_mirrorDst.bottom - m_mirrorDst.top ),
+					0.0f, 1.0f };
+				device->SetViewport( &monitorVp );
+				device->SetScissorRect( &m_mirrorDst );
+				onMonitor = SUCCEEDED( device->DrawPrimitiveUP( static_cast< D3DPRIMITIVETYPE >( primitiveType ),
+					primitiveCount, s_nameplateVertBuf, stride ) );
+			}
 		}
 		s_inNameplateDraw = false;
 
@@ -1558,6 +1696,7 @@ namespace PSUVR
 			m_loggedNameplate = true;
 			PSU_LOG( "VR: Pass B nameplates/bubbles remapped to stereo eyes\n" );
 		}
+		return onMonitor;
 	}
 
 	bool StereoRenderer::SceneAllowsStereo()
@@ -1571,12 +1710,91 @@ namespace PSUVR
 		return vr.m_stereoMode == 0 || sceneMode == vr.m_stereoMode;
 	}
 
-	void StereoRenderer::RenderEyes( IDirect3DDevice9 *device, Pass pass )
+	bool StereoRenderer::CanRenderEyes( IDirect3DDevice9 *device ) const
+	{
+		EyePose views[ 2 ];
+		EyePose viewSpace[ 2 ];
+		return device && SceneAllowsStereo() && System::Get().StereoBridge() && System::Get().NextViews( views, viewSpace );
+	}
+
+	bool StereoRenderer::MirrorLeftEye( IDirect3DDevice9 *device )
+	{
+		D3D11Bridge *bridge = System::Get().StereoBridge();
+		IDirect3DSurface9 *eye = bridge ? bridge->EyeSurface( 0 ) : nullptr;
+		if( !device || !eye || m_lastEyeW == 0 || m_lastEyeH == 0 )
+		{
+			return false;
+		}
+		IDirect3DSurface9 *gameTarget = nullptr;
+		if( FAILED( device->GetRenderTarget( 0, &gameTarget ) ) || !gameTarget )
+		{
+			return false;
+		}
+		D3DVIEWPORT9 vp{};
+		device->GetViewport( &vp );
+		if( vp.Width == 0 || vp.Height == 0 )
+		{
+			vp.X = vp.Y = 0;
+			vp.Width = m_lastGameW;
+			vp.Height = m_lastGameH;
+		}
+		// Centre crop of the eye image to the viewport's aspect (the eye buffer is near square).
+		RECT src{ 0, 0, static_cast< LONG >( m_lastEyeW ), static_cast< LONG >( m_lastEyeH ) };
+		const float targetAspect = static_cast< float >( vp.Width ) / static_cast< float >( vp.Height );
+		const float eyeAspect = static_cast< float >( m_lastEyeW ) / static_cast< float >( m_lastEyeH );
+		if( eyeAspect < targetAspect )
+		{
+			const LONG h = static_cast< LONG >( m_lastEyeW / targetAspect );
+			src.top = ( static_cast< LONG >( m_lastEyeH ) - h ) / 2;
+			src.bottom = src.top + h;
+		}
+		else
+		{
+			const LONG w = static_cast< LONG >( m_lastEyeH * targetAspect );
+			src.left = ( static_cast< LONG >( m_lastEyeW ) - w ) / 2;
+			src.right = src.left + w;
+		}
+		const RECT dst{ static_cast< LONG >( vp.X ), static_cast< LONG >( vp.Y ),
+			static_cast< LONG >( vp.X + vp.Width ), static_cast< LONG >( vp.Y + vp.Height ) };
+		const HRESULT hr = device->StretchRect( eye, &src, gameTarget, &dst, D3DTEXF_LINEAR );
+		m_mirrorTarget = gameTarget;  // identity only, not kept alive
+		gameTarget->Release();
+		m_mirrorActive = SUCCEEDED( hr );
+		m_mirrorSrc = src;
+		m_mirrorDst = dst;
+
+		// Pass B (nameplates, HUD) depth-tests against what the flat pass would have left.
+		IDirect3DSurface9 *gameDepth = nullptr;
+		DWORD depthFlags = 0;
+		if( SUCCEEDED( device->GetDepthStencilSurface( &gameDepth ) ) && gameDepth )
+		{
+			D3DSURFACE_DESC depthDesc{};
+			gameDepth->GetDesc( &depthDesc );
+			depthFlags = D3DCLEAR_ZBUFFER | ( HasStencil( depthDesc.Format ) ? D3DCLEAR_STENCIL : 0 );
+			device->Clear( 0, nullptr, depthFlags, 0, 1.0f, 0 );
+			gameDepth->Release();
+		}
+
+		if( !m_loggedMirror || FAILED( hr ) )
+		{
+			static unsigned s_failLogs = 0;
+			if( !m_loggedMirror || s_failLogs++ < 8 )
+			{
+				PSU_LOG( "Stereo: monitor mirrors the left eye, src [%ld %ld %ld %ld] of %ux%u -> viewport %u,%u %ux%u (game RT %ux%u), "
+					"depth clear 0x%X, hr 0x%08X\n", src.left, src.top, src.right, src.bottom, m_lastEyeW, m_lastEyeH,
+					vp.X, vp.Y, vp.Width, vp.Height, m_lastGameW, m_lastGameH, depthFlags, static_cast< unsigned >( hr ) );
+			}
+			m_loggedMirror = true;
+		}
+		return SUCCEEDED( hr );
+	}
+
+	bool StereoRenderer::RenderEyes( IDirect3DDevice9 *device, Pass pass )
 	{
 		const auto &vr = Config::Get().vr;
 		if( !device || !pass || !SceneAllowsStereo() )
 		{
-			return;
+			return false;
 		}
 
 		EyePose views[ 2 ];
@@ -1584,7 +1802,7 @@ namespace PSUVR
 		D3D11Bridge *bridge = System::Get().StereoBridge();
 		if( !bridge || !System::Get().NextViews( views, viewSpace ) )
 		{
-			return;
+			return false;
 		}
 		if( !VRCamera::HasReference() || VRCamera::ConsumeRecenterRequest() )
 		{
@@ -1595,8 +1813,9 @@ namespace PSUVR
 		IDirect3DSurface9 *gameDepth = nullptr;
 		if( FAILED( device->GetRenderTarget( 0, &gameTarget ) ) || !gameTarget )
 		{
-			return;
+			return false;
 		}
+		bool drawn = false;
 		device->GetDepthStencilSurface( &gameDepth );
 
 		D3DSURFACE_DESC targetDesc{};
@@ -1650,6 +1869,9 @@ namespace PSUVR
 			VRPlayerDraw::BeginEyePasses();
 			for( int eye = 0; eye < 2; ++eye )
 			{
+				VRPerf::Scope timer( eye ? VRPerf::Stage::EyeRight : VRPerf::Stage::EyeLeft );
+				const VRPerf::Gpu gpuPass = eye ? VRPerf::Gpu::EyeRight : VRPerf::Gpu::EyeLeft;
+				VRPerf::GpuBegin( device, gpuPass );
 				D3DMATRIX eyeView{};
 				D3DMATRIX eyeProj{};
 				if( firstPerson )
@@ -1681,6 +1903,7 @@ namespace PSUVR
 				// After the eye pass, so the screen-quad hooks leave them alone.
 				VRControllers::DrawMarkers( device, views[ eye ], eyeW, eyeH );
 				DrawVignette( device, eyeW, eyeH, vignette );
+				VRPerf::GpuEnd( device, gpuPass );
 
 				m_poses[ eye ] = views[ eye ];
 				m_viewSpacePoses[ eye ] = viewSpace[ eye ];
@@ -1697,6 +1920,7 @@ namespace PSUVR
 			m_lastGameW = targetDesc.Width;
 			m_lastGameH = targetDesc.Height;
 			m_hasFrame = true;
+			drawn = true;
 			VRHud::Get().BeginStereoFrame( device, targetDesc.Width, targetDesc.Height );
 
 			if( !m_loggedFirst )
@@ -1714,5 +1938,6 @@ namespace PSUVR
 		{
 			gameDepth->Release();
 		}
+		return drawn;
 	}
 }

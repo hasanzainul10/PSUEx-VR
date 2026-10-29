@@ -11,6 +11,7 @@
 #include "../PSUVR/VRBindings.h"
 #include "../PSUVR/VRCamera.h"
 #include "../PSUVR/VRHud.h"
+#include "../PSUVR/VRPerf.h"
 #include <intrin.h>
 
 namespace FrameRender
@@ -328,19 +329,47 @@ namespace FrameRender
 		}
 		const auto &vr = Config::Get().vr;
 		const bool twice = vr.m_enabled && vr.m_debugDoublePass;
-		s_passAInFrame = 1;
-		RunPassA();
-		if( twice )
+		IDirect3DDevice9 *device = PSUOverlay::Device();
+		auto &stereo = PSUVR::StereoRenderer::Get();
+		// flatMirrorEye: in stereo the monitor gets the left eye instead of its own 3D pass. The stereo panel
+		// shows the flat picture in the headset, so it keeps the flat pass.
+		const bool mirror = vr.m_enabled && vr.m_flatMirrorEye && !vr.m_stereoPanel && !twice && stereo.CanRenderEyes( device );
+		if( !mirror )
 		{
-			s_passAInFrame = 2;
-			RunPassA();
+			s_passAInFrame = 1;
+			{
+				PSUVR::VRPerf::Scope timer( PSUVR::VRPerf::Stage::FlatPass );
+				PSUVR::VRPerf::GpuBegin( device, PSUVR::VRPerf::Gpu::FlatPass );
+				RunPassA();
+				PSUVR::VRPerf::GpuEnd( device, PSUVR::VRPerf::Gpu::FlatPass );
+			}
+			if( twice )
+			{
+				s_passAInFrame = 2;
+				RunPassA();
+			}
+			s_passAInFrame = 0;
 		}
-		s_passAInFrame = 0;
 		// Stereo only in the configured scene mode (default 5 = town). Menus stay mono.
 		const unsigned mode = PSUMemory::ReadAbsoluteMemory< unsigned >( 0x00B90EA8 );
+		bool eyesDrawn = false;
 		if( vr.m_enabled && vr.m_stereo && ( vr.m_stereoMode == 0 || mode == vr.m_stereoMode ) )
 		{
-			PSUVR::StereoRenderer::Get().RenderEyes( PSUOverlay::Device(), pOriginalPassA );
+			eyesDrawn = stereo.RenderEyes( device, pOriginalPassA );
+		}
+		if( mirror )
+		{
+			// The flat stage times the mirror copy here, so the overlay shows what replaced the pass.
+			PSUVR::VRPerf::Scope timer( PSUVR::VRPerf::Stage::FlatPass );
+			PSUVR::VRPerf::GpuBegin( device, PSUVR::VRPerf::Gpu::FlatPass );
+			if( !eyesDrawn || !stereo.MirrorLeftEye( device ) )
+			{
+				// The eyes didn't draw after all (eye targets failed): the monitor still needs a picture.
+				s_passAInFrame = 1;
+				RunPassA();
+				s_passAInFrame = 0;
+			}
+			PSUVR::VRPerf::GpuEnd( device, PSUVR::VRPerf::Gpu::FlatPass );
 		}
 		if( hidden )
 		{
@@ -366,6 +395,8 @@ namespace FrameRender
 	void __cdecl Hook_PassB()
 	{
 		FrameTrace::PassEnter( 0x004FDBC0 );
+		PSUVR::VRPerf::Scope timer( PSUVR::VRPerf::Stage::PassB );
+		PSUVR::VRPerf::GpuBegin( PSUOverlay::Device(), PSUVR::VRPerf::Gpu::PassB );
 		for( int layer = 0x2B; layer <= 0x3F; ++layer )
 		{
 			PSUVR::VRHud::SetPassBLayer( layer );
@@ -375,6 +406,7 @@ namespace FrameRender
 			}
 		}
 		PSUVR::VRHud::SetPassBLayer( -1 );
+		PSUVR::VRPerf::GpuEnd( PSUOverlay::Device(), PSUVR::VRPerf::Gpu::PassB );
 		FrameTrace::PassLeave();
 	}
 

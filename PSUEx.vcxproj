@@ -244,6 +244,7 @@
     <ClInclude Include="PSUVR\VRControllers.h" />
     <ClInclude Include="PSUVR\VRUiPointer.h" />
     <ClInclude Include="PSUVR\VRControllerLabels.h" />
+    <ClInclude Include="PSUVR\VRPerf.h" />
     <ClInclude Include="PSUVR\VRProbe.h" />
     <ClInclude Include="PSUVR\VRSyntheticPad.h" />
     <ClInclude Include="PSUVR\VRSpeech.h" />
@@ -299,6 +300,7 @@
     <ClCompile Include="PSUVR\VRControllers.cpp" />
     <ClCompile Include="PSUVR\VRUiPointer.cpp" />
     <ClCompile Include="PSUVR\VRControllerLabels.cpp" />
+    <ClCompile Include="PSUVR\VRPerf.cpp" />
     <ClCompile Include="PSUVR\VRProbe.cpp" />
     <ClCompile Include="PSUVR\VRSyntheticPad.cpp" />
     <ClCompile Include="PSUVR\VRSpeech.cpp" />

@@ -7,6 +7,7 @@
 #include "../PSUVR/VRPlayerDraw.h"
 #include "../PSUVR/VRUiPointer.h"
 #include "../PSUVR/VRControllerLabels.h"
+#include "../PSUVR/VRPerf.h"
 #include "../PSUVR/D3D9ExUpgrade.h"
 #include "../PSUVR/D3D9ExCompat.h"
 #include "../Misc/Log.h"
@@ -365,6 +366,152 @@ HRESULT APIENTRY PSUOverlay::Hook_Reset( LPDIRECT3DDEVICE9 pDevice, D3DPRESENT_P
 	return tmpReset;
 }
 
+
+// The game's own return address for a draw call. With another D3D9 hook layered over ours (Rogue's
+// Toolkit) the immediate caller is that mod's code, which hides the game's draw sites that the eye
+// passes recognize (e.g. the sprite drawer 0x00747248): walk up the stack to the first call site in the exe.
+static __forceinline bool InGameExe( uintptr_t a )
+{
+	return a >= 0x00401000 && a < 0x00B00000;
+}
+
+// Our own DLL's image: its draws (controller reticle, beams, overlay) must keep their own return address,
+// not be mistaken for a game draw site found further up the stack.
+static bool InOwnModule( uintptr_t a )
+{
+	static uintptr_t s_base = 0, s_end = 0;
+	if( !s_base )
+	{
+		HMODULE self = nullptr;
+		if( GetModuleHandleExA( GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+				reinterpret_cast< LPCSTR >( &InOwnModule ), &self ) )
+		{
+			const auto *dos = reinterpret_cast< const IMAGE_DOS_HEADER * >( self );
+			const auto *nt = reinterpret_cast< const IMAGE_NT_HEADERS * >( reinterpret_cast< const char * >( self ) + dos->e_lfanew );
+			s_base = reinterpret_cast< uintptr_t >( self );
+			s_end = s_base + nt->OptionalHeader.SizeOfImage;
+		}
+	}
+	return a >= s_base && a < s_end;
+}
+
+static __forceinline void *GameRet( void *returnAddressSlot, void *ret )
+{
+	if( InGameExe( reinterpret_cast< uintptr_t >( ret ) ) || InOwnModule( reinterpret_cast< uintptr_t >( ret ) ) )
+	{
+		return ret;
+	}
+	const uintptr_t *slot = static_cast< const uintptr_t * >( returnAddressSlot );
+	for( int i = 1; i < 96; ++i )
+	{
+		const uintptr_t a = slot[ i ];
+		if( !InGameExe( a ) )
+		{
+			continue;
+		}
+		const unsigned char *p = reinterpret_cast< const unsigned char * >( a );
+		const auto indirectCall = []( unsigned char op, unsigned char modrm ) { return op == 0xFF && ( ( modrm >> 3 ) & 7 ) == 2; };
+		// call rel32, call [reg+disp32] / [abs], call [reg+disp8], call reg / [reg]
+		if( p[ -5 ] == 0xE8 || indirectCall( p[ -6 ], p[ -5 ] ) || indirectCall( p[ -3 ], p[ -2 ] ) || indirectCall( p[ -2 ], p[ -1 ] ) )
+		{
+			return reinterpret_cast< void * >( a );
+		}
+	}
+	return ret;
+}
+#define GAME_RET() GameRet( _AddressOfReturnAddress(), _ReturnAddress() )
+
+// Draws issued while the real Present runs: that is Rogue's Toolkit drawing its panels and menu from its
+// Present hook (it sits below ours). Counted so the HUD panel is only marked when it actually drew.
+static bool s_inToolkitPresent = false;
+static unsigned s_toolkitPresentDraws = 0;
+typedef HRESULT( APIENTRY *RtFn )( LPDIRECT3DDEVICE9, DWORD, IDirect3DSurface9 * );
+typedef HRESULT( APIENTRY *VpFn )( LPDIRECT3DDEVICE9, CONST D3DVIEWPORT9 * );
+static bool s_toolkitScene = false;
+static IDirect3DSurface9 *s_toolkitSavedRt = nullptr;
+static IDirect3DSurface9 *s_toolkitSavedDs = nullptr;
+static D3DVIEWPORT9 s_toolkitSavedVp{};
+
+// A caller that is neither the game nor this DLL: Rogue's Toolkit (or D3DX working for it).
+static bool CallerIsOther( void *ret )
+{
+	if( InGameExe( reinterpret_cast< uintptr_t >( ret ) ) )
+	{
+		return false;
+	}
+	HMODULE self = nullptr;
+	GetModuleHandleExA( GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+		reinterpret_cast< LPCSTR >( &CallerIsOther ), &self );
+	HMODULE caller = nullptr;
+	GetModuleHandleExA( GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+		reinterpret_cast< LPCSTR >( ret ), &caller );
+	return caller != self;
+}
+
+// Log where the toolkit's calls come from (first few), to find its drawing path.
+static void LogToolkitCall( const char *what, void *ret )
+{
+	static unsigned s_logged = 0;
+	if( s_logged >= 24 )
+	{
+		return;
+	}
+	HMODULE caller = nullptr;
+	char name[ MAX_PATH ] = "?";
+	if( GetModuleHandleExA( GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+			reinterpret_cast< LPCSTR >( ret ), &caller ) )
+	{
+		GetModuleFileNameA( caller, name, MAX_PATH );
+	}
+	++s_logged;
+	PSU_LOG( "VRToolkit: %s from %s (ret %p) inPresent=%d inScene=%d\n", what, name, ret, s_inToolkitPresent ? 1 : 0,
+		s_toolkitScene ? 1 : 0 );
+}
+
+// Point drawing at the HUD panel (and back).
+static bool BeginToolkitRedirect( IDirect3DDevice9 *pDevice, RtFn setRt, VpFn setVp )
+{
+	auto &hud = PSUVR::VRHud::Get();
+	PSUVR::D3D11Bridge *bridge = PSUVR::System::Get().StereoBridge();
+	IDirect3DSurface9 *hudSurface = bridge ? bridge->HudUserSurface() : nullptr;
+	if( !Config::Get().vr.m_enabled || !Config::Get().vr.m_toolkitOnHud || !hud.Active() || !hudSurface )
+	{
+		return false;
+	}
+	D3DSURFACE_DESC desc{};
+	hudSurface->GetDesc( &desc );
+	pDevice->GetRenderTarget( 0, &s_toolkitSavedRt );
+	pDevice->GetDepthStencilSurface( &s_toolkitSavedDs );
+	pDevice->GetViewport( &s_toolkitSavedVp );
+	setRt( pDevice, 0, hudSurface );
+	pDevice->SetDepthStencilSurface( nullptr );
+	const D3DVIEWPORT9 vp{ 0, 0, desc.Width, desc.Height, 0.0f, 1.0f };
+	setVp( pDevice, &vp );
+	return true;
+}
+
+static void EndToolkitRedirect( IDirect3DDevice9 *pDevice, RtFn setRt, VpFn setVp )
+{
+	setRt( pDevice, 0, s_toolkitSavedRt );
+	pDevice->SetDepthStencilSurface( s_toolkitSavedDs );
+	setVp( pDevice, &s_toolkitSavedVp );
+	if( s_toolkitSavedRt )
+	{
+		s_toolkitSavedRt->Release();
+		s_toolkitSavedRt = nullptr;
+	}
+	if( s_toolkitSavedDs )
+	{
+		s_toolkitSavedDs->Release();
+		s_toolkitSavedDs = nullptr;
+	}
+}
+
+#define NOTE_TOOLKIT_DRAW( name ) do { \
+	if( s_inToolkitPresent ) { ++s_toolkitPresentDraws; } \
+	if( ( s_inToolkitPresent || s_toolkitScene ) && CallerIsOther( _ReturnAddress() ) ) { LogToolkitCall( name, _ReturnAddress() ); } \
+} while( 0 )
+
 #ifdef _DEBUG
 // Where a screen-space draw happens, for the VREffect log: 0 eye pass, 1 pass B / UI, 2 other.
 static int EffectDrawWhere()
@@ -376,20 +523,22 @@ static int EffectDrawWhere()
 
 HRESULT APIENTRY PSUOverlay::Hook_DrawPrimitive( LPDIRECT3DDEVICE9 pDevice, D3DPRIMITIVETYPE PrimitiveType, UINT StartVertex, UINT PrimitiveCount )
 {
+	NOTE_TOOLKIT_DRAW( "DrawPrimitive" );
 #ifdef _DEBUG
-	PSUVR::StereoRenderer::CountLayerDraw( _ReturnAddress() );
+	PSUVR::StereoRenderer::CountLayerDraw( GAME_RET() );
+	PSUVR::StereoRenderer::NoteLayerDraw( pDevice, "DrawPrimitive", static_cast< unsigned >( PrimitiveType ), PrimitiveCount, GAME_RET() );
 #endif
-	if( PSUVR::StereoRenderer::SkipEyeEffectDraw( _ReturnAddress() ) )
+	if( PSUVR::StereoRenderer::SkipEyeEffectDraw( GAME_RET() ) )
 	{
 		return D3D_OK;
 	}
 	FrameTrace::OnDrawPrimitive( false );
 #ifdef _DEBUG
-	PSUVR::StereoRenderer::NoteShaderDraw( pDevice, PrimitiveCount, _ReturnAddress() );
+	PSUVR::StereoRenderer::NoteShaderDraw( pDevice, PrimitiveCount, GAME_RET() );
 	PSUVR::StereoRenderer::NoteEffectDraw( pDevice, EffectDrawWhere(), static_cast< unsigned >( PrimitiveType ), PrimitiveCount,
-		nullptr, 0, _ReturnAddress() );
+		nullptr, 0, GAME_RET() );
 #endif
-	if( PSUVR::StereoRenderer::ShouldSkipScreenQuad( pDevice, _ReturnAddress(), PrimitiveCount, false ) )
+	if( PSUVR::StereoRenderer::ShouldSkipScreenQuad( pDevice, GAME_RET(), PrimitiveCount, false ) )
 	{
 		return D3D_OK;
 	}
@@ -404,36 +553,42 @@ HRESULT APIENTRY PSUOverlay::Hook_DrawPrimitive( LPDIRECT3DDEVICE9 pDevice, D3DP
 	if( SUCCEEDED( hr ) && hud.Active() && FrameTrace::CurrentPassAddress() == 0x004FDBC0 )
 	{
 		hud.CaptureMapMeshDraw( pDevice, 0, static_cast< unsigned >( PrimitiveType ), 0, 0, 0, StartVertex,
-			PrimitiveCount, nullptr, 0, nullptr, 0, _ReturnAddress() );
+			PrimitiveCount, nullptr, 0, nullptr, 0, GAME_RET() );
 	}
 	return hr;
 }
 
 HRESULT APIENTRY PSUOverlay::Hook_SetVertexShaderConstantF( LPDIRECT3DDEVICE9 pDevice, UINT StartRegister, CONST float *pConstantData, UINT Vector4fCount )
 {
-	FrameTrace::OnVertexShaderConstantF( StartRegister, Vector4fCount, _ReturnAddress() );
+	FrameTrace::OnVertexShaderConstantF( StartRegister, Vector4fCount, GAME_RET() );
 #ifdef _DEBUG
-	PSUVR::StereoRenderer::NoteVertexConstants( StartRegister, pConstantData, Vector4fCount, _ReturnAddress() );
+	PSUVR::StereoRenderer::NoteVertexConstants( StartRegister, pConstantData, Vector4fCount, GAME_RET() );
 #endif
 	return m_pOriginalSetVertexShaderConstantF( pDevice, StartRegister, pConstantData, Vector4fCount );
 }
 
 HRESULT APIENTRY PSUOverlay::Hook_DrawIndexedPrimitive( LPDIRECT3DDEVICE9 pDevice, D3DPRIMITIVETYPE PrimitiveType, INT BaseVertexIndex, UINT MinIndex, UINT NumVertices, UINT StartIndex, UINT PrimitiveCount )
 {
+	NOTE_TOOLKIT_DRAW( "DrawIndexedPrimitive" );
 #ifdef _DEBUG
-	PSUVR::StereoRenderer::CountLayerDraw( _ReturnAddress() );
+	PSUVR::StereoRenderer::CountLayerDraw( GAME_RET() );
+	PSUVR::StereoRenderer::NoteLayerDraw( pDevice, "DrawIndexedPrimitive", static_cast< unsigned >( PrimitiveType ), PrimitiveCount, GAME_RET() );
 #endif
-	if( PSUVR::StereoRenderer::SkipEyeEffectDraw( _ReturnAddress() ) )
+	if( PSUVR::StereoRenderer::SkipEyeEffectDraw( GAME_RET() ) )
 	{
 		return D3D_OK;
 	}
-	FrameTrace::OnDrawIndexed( _ReturnAddress() );
+	if( PSUVR::StereoRenderer::SkipEyeHitSpark( pDevice, PrimitiveCount ) )
+	{
+		return D3D_OK;
+	}
+	FrameTrace::OnDrawIndexed( GAME_RET() );
 #ifdef _DEBUG
-	PSUVR::StereoRenderer::NoteShaderDraw( pDevice, PrimitiveCount, _ReturnAddress() );
+	PSUVR::StereoRenderer::NoteShaderDraw( pDevice, PrimitiveCount, GAME_RET() );
 	PSUVR::StereoRenderer::NoteEffectDraw( pDevice, EffectDrawWhere(), static_cast< unsigned >( PrimitiveType ), PrimitiveCount,
-		nullptr, 0, _ReturnAddress() );
+		nullptr, 0, GAME_RET() );
 #endif
-	if( PSUVR::StereoRenderer::ShouldSkipScreenQuad( pDevice, _ReturnAddress(), PrimitiveCount, false ) )
+	if( PSUVR::StereoRenderer::ShouldSkipScreenQuad( pDevice, GAME_RET(), PrimitiveCount, false ) )
 	{
 		return D3D_OK;
 	}
@@ -452,34 +607,57 @@ HRESULT APIENTRY PSUOverlay::Hook_DrawIndexedPrimitive( LPDIRECT3DDEVICE9 pDevic
 	{
 		hudDip.CaptureXyzrhwIndexed( pDevice,
 			static_cast< unsigned >( PrimitiveType ), BaseVertexIndex, MinIndex, NumVertices,
-			StartIndex, PrimitiveCount, _ReturnAddress() );
+			StartIndex, PrimitiveCount, GAME_RET() );
 	}
 	if( SUCCEEDED( hr ) && hudDip.Active() && FrameTrace::CurrentPassAddress() == 0x004FDBC0 )
 	{
 		hudDip.CaptureMapMeshDraw( pDevice, 1, static_cast< unsigned >( PrimitiveType ), BaseVertexIndex, MinIndex,
-			NumVertices, StartIndex, PrimitiveCount, nullptr, 0, nullptr, 0, _ReturnAddress() );
+			NumVertices, StartIndex, PrimitiveCount, nullptr, 0, nullptr, 0, GAME_RET() );
 	}
 	return hr;
 }
 
 HRESULT APIENTRY PSUOverlay::Hook_DrawPrimitiveUP( LPDIRECT3DDEVICE9 pDevice, D3DPRIMITIVETYPE PrimitiveType, UINT PrimitiveCount, const void *pVertexStreamZeroData, UINT VertexStreamZeroStride )
 {
+	NOTE_TOOLKIT_DRAW( "DrawPrimitiveUP" );
 #ifdef _DEBUG
-	PSUVR::StereoRenderer::CountLayerDraw( _ReturnAddress() );
+	PSUVR::StereoRenderer::CountLayerDraw( GAME_RET() );
+	PSUVR::StereoRenderer::NoteLayerDraw( pDevice, "DrawPrimitiveUP", static_cast< unsigned >( PrimitiveType ), PrimitiveCount, GAME_RET() );
 #endif
-	if( PSUVR::StereoRenderer::SkipEyeEffectDraw( _ReturnAddress() ) )
+	if( PSUVR::StereoRenderer::SkipEyeEffectDraw( GAME_RET() ) )
 	{
 		return D3D_OK;
 	}
 	FrameTrace::OnDrawPrimitive( true );
 #ifdef _DEBUG
-	PSUVR::StereoRenderer::NoteShaderDraw( pDevice, PrimitiveCount, _ReturnAddress() );
-	PSUVR::StereoRenderer::NoteEffectDraw( pDevice, EffectDrawWhere(), static_cast< unsigned >( PrimitiveType ), PrimitiveCount,
-		pVertexStreamZeroData, VertexStreamZeroStride, _ReturnAddress() );
-	PSUVR::StereoRenderer::NoteNearCameraDraw( pDevice, static_cast< unsigned >( PrimitiveType ), PrimitiveCount,
-		pVertexStreamZeroData, VertexStreamZeroStride, _ReturnAddress() );
+	// Toolkit diagnostic: UP draws whose direct caller is not the game, with the call site the stack scan picked.
+	if( PSUVR::StereoRenderer::InEyePass() && !InGameExe( reinterpret_cast< uintptr_t >( _ReturnAddress() ) ) &&
+		!InOwnModule( reinterpret_cast< uintptr_t >( _ReturnAddress() ) ) )
+	{
+		static void *s_seenRaw[ 64 ]{};
+		static unsigned s_seenRawCount = 0;
+		void *scanned = GAME_RET();
+		bool seen = s_seenRawCount >= 64;
+		for( unsigned i = 0; i < s_seenRawCount && !seen; ++i )
+		{
+			seen = s_seenRaw[ i ] == scanned;
+		}
+		if( !seen )
+		{
+			s_seenRaw[ s_seenRawCount++ ] = scanned;
+			PSU_LOG( "VRToolkit: eye UP draw direct ret=%p, scanned game ret=%p, prims=%u stride=%u\n", _ReturnAddress(), scanned,
+				PrimitiveCount, VertexStreamZeroStride );
+		}
+	}
 #endif
-	if( PSUVR::StereoRenderer::ShouldSkipScreenQuad( pDevice, _ReturnAddress(), PrimitiveCount, true ) )
+#ifdef _DEBUG
+	PSUVR::StereoRenderer::NoteShaderDraw( pDevice, PrimitiveCount, GAME_RET() );
+	PSUVR::StereoRenderer::NoteEffectDraw( pDevice, EffectDrawWhere(), static_cast< unsigned >( PrimitiveType ), PrimitiveCount,
+		pVertexStreamZeroData, VertexStreamZeroStride, GAME_RET() );
+	PSUVR::StereoRenderer::NoteNearCameraDraw( pDevice, static_cast< unsigned >( PrimitiveType ), PrimitiveCount,
+		pVertexStreamZeroData, VertexStreamZeroStride, GAME_RET() );
+#endif
+	if( PSUVR::StereoRenderer::ShouldSkipScreenQuad( pDevice, GAME_RET(), PrimitiveCount, true ) )
 	{
 		return D3D_OK;
 	}
@@ -494,20 +672,23 @@ HRESULT APIENTRY PSUOverlay::Hook_DrawPrimitiveUP( LPDIRECT3DDEVICE9 pDevice, D3
 	bool reprojectedSprite = false;
 	if( const void *reprojected = PSUVR::StereoRenderer::ReprojectSpriteIfNeeded(
 			pDevice, static_cast< unsigned >( PrimitiveType ), PrimitiveCount,
-			pVertexStreamZeroData, VertexStreamZeroStride, _ReturnAddress() ) )
+			pVertexStreamZeroData, VertexStreamZeroStride, GAME_RET() ) )
 	{
 		verts = reprojected;
 		reprojectedSprite = true;
 	}
 	else if( const void *stretched = PSUVR::StereoRenderer::StretchScreenQuadIfNeeded(
 			pDevice, static_cast< unsigned >( PrimitiveType ), PrimitiveCount,
-			pVertexStreamZeroData, VertexStreamZeroStride, _ReturnAddress() ) )
+			pVertexStreamZeroData, VertexStreamZeroStride, GAME_RET() ) )
 	{
 		verts = stretched;
 	}
 	// A world sprite placed for this eye: hidden behind whatever is nearer (the weapon in your
 	// hand), whatever depth test the game left set for its flat screen; it never writes depth.
 	DWORD savedZEnable = 0, savedZFunc = 0, savedZWrite = 0;
+	// Rogue's Toolkit ui_sharpness "sharp" sets point filtering on the game's 2D sprite draws (it takes them
+	// for UI); magnified in the eyes, technique effects then look pixelated. Linear for world sprites.
+	DWORD savedMinFilter = D3DTEXF_LINEAR, savedMagFilter = D3DTEXF_LINEAR;
 	if( reprojectedSprite )
 	{
 		pDevice->GetRenderState( D3DRS_ZENABLE, &savedZEnable );
@@ -516,32 +697,71 @@ HRESULT APIENTRY PSUOverlay::Hook_DrawPrimitiveUP( LPDIRECT3DDEVICE9 pDevice, D3
 		pDevice->SetRenderState( D3DRS_ZENABLE, D3DZB_TRUE );
 		pDevice->SetRenderState( D3DRS_ZFUNC, D3DCMP_LESSEQUAL );
 		pDevice->SetRenderState( D3DRS_ZWRITEENABLE, FALSE );
+		pDevice->GetSamplerState( 0, D3DSAMP_MINFILTER, &savedMinFilter );
+		pDevice->GetSamplerState( 0, D3DSAMP_MAGFILTER, &savedMagFilter );
+		if( savedMinFilter == D3DTEXF_POINT || savedMagFilter == D3DTEXF_POINT )
+		{
+			static unsigned s_pointLogs = 0;
+			if( s_pointLogs < 4 )
+			{
+				++s_pointLogs;
+				PSU_LOG( "VRToolkit: eye sprite had point filtering (min=%lu mag=%lu), drawn linear\n", savedMinFilter, savedMagFilter );
+			}
+			if( savedMinFilter == D3DTEXF_POINT )
+			{
+				pDevice->SetSamplerState( 0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR );
+			}
+			if( savedMagFilter == D3DTEXF_POINT )
+			{
+				pDevice->SetSamplerState( 0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR );
+			}
+		}
 	}
-	const HRESULT hr = m_pOriginalDrawPrimitiveUP( pDevice, PrimitiveType, PrimitiveCount, verts, VertexStreamZeroStride );
+	// Pass B chrome, or DP-UP nested inside 0x793C40 — not every post-frame fullscreen blit.
+	auto &hud = PSUVR::VRHud::Get();
+	const bool capture = hud.Active() && ( FrameTrace::CurrentPassAddress() == 0x004FDBC0 || hud.InUiDraw() );
+	// flatMirrorEye: the monitor shows the left eye, so a world nameplate is placed there by the capture
+	// (before the game's draw, which would put it where the flat camera sees it).
+	const bool captureFirst = capture && PSUVR::StereoRenderer::Get().MirrorActive();
+	if( captureFirst )
+	{
+		hud.CapturePassBDraw( pDevice,
+			static_cast< unsigned >( PrimitiveType ), PrimitiveCount,
+			pVertexStreamZeroData, VertexStreamZeroStride, GAME_RET() );
+	}
+	const HRESULT hr = captureFirst && hud.NameplateOnMonitor() ? D3D_OK
+		: m_pOriginalDrawPrimitiveUP( pDevice, PrimitiveType, PrimitiveCount, verts, VertexStreamZeroStride );
 	if( reprojectedSprite )
 	{
 		pDevice->SetRenderState( D3DRS_ZENABLE, savedZEnable );
 		pDevice->SetRenderState( D3DRS_ZFUNC, savedZFunc );
 		pDevice->SetRenderState( D3DRS_ZWRITEENABLE, savedZWrite );
+		if( savedMinFilter == D3DTEXF_POINT )
+		{
+			pDevice->SetSamplerState( 0, D3DSAMP_MINFILTER, savedMinFilter );
+		}
+		if( savedMagFilter == D3DTEXF_POINT )
+		{
+			pDevice->SetSamplerState( 0, D3DSAMP_MAGFILTER, savedMagFilter );
+		}
 	}
-	// Pass B chrome, or DP-UP nested inside 0x793C40 — not every post-frame fullscreen blit.
-	auto &hud = PSUVR::VRHud::Get();
-	if( SUCCEEDED( hr ) && hud.Active() &&
-		( FrameTrace::CurrentPassAddress() == 0x004FDBC0 || hud.InUiDraw() ) )
+	if( SUCCEEDED( hr ) && capture && !captureFirst )
 	{
 		hud.CapturePassBDraw( pDevice,
 			static_cast< unsigned >( PrimitiveType ), PrimitiveCount,
-			pVertexStreamZeroData, VertexStreamZeroStride, _ReturnAddress() );
+			pVertexStreamZeroData, VertexStreamZeroStride, GAME_RET() );
 	}
 	return hr;
 }
 
 HRESULT APIENTRY PSUOverlay::Hook_DrawIndexedPrimitiveUP( LPDIRECT3DDEVICE9 pDevice, D3DPRIMITIVETYPE Type, UINT MinVertexIndex, UINT NumVertices, UINT PrimitiveCount, const void *pIndexData, D3DFORMAT IndexDataFormat, const void *pVertexStreamZeroData, UINT VertexStreamZeroStride )
 {
+	NOTE_TOOLKIT_DRAW( "DrawIndexedPrimitiveUP" );
 #ifdef _DEBUG
-	PSUVR::StereoRenderer::CountLayerDraw( _ReturnAddress() );
+	PSUVR::StereoRenderer::CountLayerDraw( GAME_RET() );
+	PSUVR::StereoRenderer::NoteLayerDraw( pDevice, "DrawIndexedPrimitiveUP", static_cast< unsigned >( Type ), PrimitiveCount, GAME_RET() );
 #endif
-	if( PSUVR::StereoRenderer::SkipEyeEffectDraw( _ReturnAddress() ) )
+	if( PSUVR::StereoRenderer::SkipEyeEffectDraw( GAME_RET() ) )
 	{
 		return D3D_OK;
 	}
@@ -554,7 +774,7 @@ HRESULT APIENTRY PSUOverlay::Hook_DrawIndexedPrimitiveUP( LPDIRECT3DDEVICE9 pDev
 	{
 		hud.CaptureMapMeshDraw( pDevice, 2, static_cast< unsigned >( Type ), 0, MinVertexIndex, NumVertices, 0,
 			PrimitiveCount, pIndexData, static_cast< unsigned >( IndexDataFormat ), pVertexStreamZeroData,
-			VertexStreamZeroStride, _ReturnAddress() );
+			VertexStreamZeroStride, GAME_RET() );
 	}
 	return hr;
 }
@@ -572,7 +792,19 @@ void PrintMatrix( const Matrix4x4 &matrix, const char *name )
 
 HRESULT APIENTRY PSUOverlay::Hook_BeginScene( LPDIRECT3DDEVICE9 pDevice )
 {
-	FrameTrace::OnBeginScene( _ReturnAddress() );
+	// A scene opened by Rogue's Toolkit (not the game, not us): its panels and menu draw into it, so point the
+	// scene at the HUD panel until its EndScene (vr.toolkitOnHud).
+	if( !s_toolkitScene && !s_inToolkitPresent && CallerIsOther( _ReturnAddress() ) )
+	{
+		LogToolkitCall( "BeginScene", _ReturnAddress() );
+		const HRESULT hr = m_pOriginalBeginScene( pDevice );
+		if( SUCCEEDED( hr ) && BeginToolkitRedirect( pDevice, m_pOriginalSetRenderTarget, m_pOriginalSetViewport ) )
+		{
+			s_toolkitScene = true;
+		}
+		return hr;
+	}
+	FrameTrace::OnBeginScene( GAME_RET() );
 	return m_pOriginalBeginScene( pDevice );
 }
 
@@ -585,7 +817,17 @@ HRESULT APIENTRY PSUOverlay::Hook_EndScene( LPDIRECT3DDEVICE9 pDevice )
 		PSU_LOG( "EndScene hooked (first call) device=%p\n", pDevice );
 	}
 
-	FrameTrace::OnEndScene( _ReturnAddress() );
+	if( s_toolkitScene && CallerIsOther( _ReturnAddress() ) )
+	{
+		LogToolkitCall( "EndScene", _ReturnAddress() );
+		const HRESULT hr = m_pOriginalEndScene( pDevice );
+		EndToolkitRedirect( pDevice, m_pOriginalSetRenderTarget, m_pOriginalSetViewport );
+		s_toolkitScene = false;
+		PSUVR::VRHud::Get().MarkUserContent();
+		return hr;
+	}
+
+	FrameTrace::OnEndScene( GAME_RET() );
 
 	if( !m_bInitialized )
 	{
@@ -595,6 +837,7 @@ HRESULT APIENTRY PSUOverlay::Hook_EndScene( LPDIRECT3DDEVICE9 pDevice )
 		HookWindow();
 	}
 
+	PSUVR::VRPerf::Scope overlayTimer( PSUVR::VRPerf::Stage::Overlay );
 	ImGui_ImplDX9_NewFrame();
 	ImGui_ImplWin32_NewFrame();
 	// After the Win32 backend, so the controller pointer wins over the OS mouse.
@@ -617,6 +860,7 @@ HRESULT APIENTRY PSUOverlay::Hook_EndScene( LPDIRECT3DDEVICE9 pDevice )
 		{
 			i.second->Render();
 		}
+		PSUVR::VRPerf::DrawOverlay();
 	}
 	ImGui::EndFrame();
 	ImGui::Render();
@@ -702,9 +946,45 @@ HRESULT APIENTRY PSUOverlay::Hook_Present( LPDIRECT3DDEVICE9 pDevice, const RECT
 
 	// Capture BB + GPU fence BEFORE Present; OpenXR WaitFrame AFTER so the
 	// monitor is not blocked / blacked out by the VR compositor.
-	PSUVR::System::Get().OnPresentCapture();
-	const HRESULT hr = m_pOriginalPresent( pDevice, pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion );
-	PSUVR::System::Get().OnPresentSubmit();
+	PSUVR::VRPerf::BeforePresent( pDevice );
+	{
+		PSUVR::VRPerf::Scope timer( PSUVR::VRPerf::Stage::Capture );
+		PSUVR::System::Get().OnPresentCapture();
+	}
+	HRESULT hr;
+	{
+		PSUVR::VRPerf::Scope timer( PSUVR::VRPerf::Stage::Present );
+		// Rogue's Toolkit draws its panels and menu inside its Present hook, below this one. In stereo the headset
+		// never shows the back buffer, so point that drawing at the HUD panel (vr.toolkitOnHud).
+		auto &hud = PSUVR::VRHud::Get();
+		const bool toHud = BeginToolkitRedirect( pDevice, m_pOriginalSetRenderTarget, m_pOriginalSetViewport );
+		if( toHud )
+		{
+			s_toolkitPresentDraws = 0;
+			s_inToolkitPresent = true;
+		}
+		hr = m_pOriginalPresent( pDevice, pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion );
+		if( toHud )
+		{
+			s_inToolkitPresent = false;
+			EndToolkitRedirect( pDevice, m_pOriginalSetRenderTarget, m_pOriginalSetViewport );
+			if( s_toolkitPresentDraws > 0 )
+			{
+				hud.MarkUserContent();
+				static bool s_loggedToolkit = false;
+				if( !s_loggedToolkit )
+				{
+					s_loggedToolkit = true;
+					PSU_LOG( "VRToolkit: %u draws inside Present went to the HUD panel\n", s_toolkitPresentDraws );
+				}
+			}
+		}
+	}
+	{
+		PSUVR::VRPerf::Scope timer( PSUVR::VRPerf::Stage::Submit );
+		PSUVR::System::Get().OnPresentSubmit();
+	}
+	PSUVR::VRPerf::EndFrame();
 	return hr;
 }
 

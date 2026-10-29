@@ -12,8 +12,10 @@
 #include <Windows.h>
 #include <d3dx9.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <string>
 
 namespace PSUVR
@@ -502,8 +504,275 @@ namespace PSUVR
 		}
 	}
 
+	namespace
+	{
+		// Strafe legs (VRChat-style locomotion on top of the head / hand IK): the body yaw trails the
+		// head with a dead-zone, and the legs are posed against the direction the game moves the
+		// character (it faces its travel direction) relative to that body yaw.
+		enum Gait { kGaitForward, kGaitLeft, kGaitRight, kGaitBack };
+		float s_bodyYaw = 0.0f;
+		bool s_haveBodyYaw = false;
+		float s_legTurn = 0.0f;           // eased yaw of the legs away from the game's facing
+		Gait s_gait = kGaitForward;
+		float s_lastPos[ 3 ]{};
+		DWORD s_lastPosTick = 0;
+		float s_speed = 0.0f;             // game units per second
+		constexpr float kPi = 3.14159265f;
+		constexpr float kBodyDeadZone = 35.0f * ( kPi / 180.0f );
+		constexpr float kBodyFollowRate = 6.0f;
+		constexpr float kGaitHysteresis = 10.0f * ( kPi / 180.0f );
+		constexpr float kMovingSpeed = 8.0f;
+		constexpr float kLegEaseSeconds = 0.12f;
+		constexpr float kTorsoLimit = 50.0f * ( kPi / 180.0f );
+
+		float WrapPi( float a )
+		{
+			while( a > kPi ) a -= 2.0f * kPi;
+			while( a < -kPi ) a += 2.0f * kPi;
+			return a;
+		}
+
+		D3DXMATRIX YawAbout( float angle, const D3DXVECTOR3 &pivot )
+		{
+			D3DXMATRIX t0, r, t1, m;
+			D3DXMatrixTranslation( &t0, -pivot.x, -pivot.y, -pivot.z );
+			D3DXMatrixRotationY( &r, angle );
+			D3DXMatrixTranslation( &t1, pivot.x, pivot.y, pivot.z );
+			D3DXMatrixMultiply( &m, &t0, &r );
+			D3DXMatrixMultiply( &m, &m, &t1 );
+			return m;
+		}
+
+		// Speed from the position, sampled at least 40 ms apart (Apply runs more than once a frame).
+		void SampleSpeed( const PSUCombat::State &combat )
+		{
+			const DWORD now = GetTickCount();
+			if( s_lastPosTick == 0 || now - s_lastPosTick > 500 )
+			{
+				std::memcpy( s_lastPos, combat.position, sizeof( s_lastPos ) );
+				s_lastPosTick = now;
+				s_speed = 0.0f;
+			}
+			else if( now - s_lastPosTick >= 40 )
+			{
+				const float dx = combat.position[ 0 ] - s_lastPos[ 0 ];
+				const float dz = combat.position[ 2 ] - s_lastPos[ 2 ];
+				s_speed = std::sqrt( dx * dx + dz * dz ) / ( ( now - s_lastPosTick ) / 1000.0f );
+				std::memcpy( s_lastPos, combat.position, sizeof( s_lastPos ) );
+				s_lastPosTick = now;
+			}
+		}
+
+		// Eye anchor: how far the animated neck leans from where it stands at rest (game world,
+		// horizontal), eased. Walking leans the head ahead of the player position the camera uses,
+		// which put the eye behind the shoulders. The eye also stays at least as far ahead of each
+		// shoulder (along the body's forward) as it is at rest, since a running twist swings a
+		// shoulder into view.
+		constexpr int kLeanPoints = 3; // neck, left shoulder, right shoulder
+		float s_leanRest[ kLeanPoints ][ 2 ]{};
+		bool s_haveLeanRest = false;
+		float s_lean[ 2 ]{};
+		DWORD s_leanTick = 0;
+		constexpr float kLeanEaseSeconds = 0.25f;
+		constexpr float kLeanMaxMeters = 0.45f;
+
+		void UpdateEyeLean( const float *out, const D3DXMATRIX &world, const PSUCombat::State &combat, const float forward[ 3 ],
+			float dt, bool log )
+		{
+			const int bones[ kLeanPoints ] = { kNeckBone, kArms[ 0 ].shoulder, kArms[ 1 ].shoulder };
+			D3DXVECTOR3 root = Position( out, 0 );
+			D3DXVec3TransformCoord( &root, &root, &world );
+			float now[ kLeanPoints ][ 2 ];
+			for( int i = 0; i < kLeanPoints; ++i )
+			{
+				D3DXVECTOR3 point = Position( out, bones[ i ] );
+				D3DXVec3TransformCoord( &point, &point, &world );
+				now[ i ][ 0 ] = point.x - root.x;
+				now[ i ][ 1 ] = point.z - root.z;
+			}
+			SampleSpeed( combat );
+			float goal[ 2 ] = { 0.0f, 0.0f };
+			if( !s_haveLeanRest )
+			{
+				std::memcpy( s_leanRest, now, sizeof( now ) );
+				s_haveLeanRest = true;
+			}
+			if( s_speed <= kMovingSpeed )
+			{
+				const float k = dt * 3.0f > 1.0f ? 1.0f : dt * 3.0f;
+				for( int i = 0; i < kLeanPoints; ++i )
+				{
+					s_leanRest[ i ][ 0 ] += ( now[ i ][ 0 ] - s_leanRest[ i ][ 0 ] ) * k;
+					s_leanRest[ i ][ 1 ] += ( now[ i ][ 1 ] - s_leanRest[ i ][ 1 ] ) * k;
+				}
+			}
+			else
+			{
+				goal[ 0 ] = now[ 0 ][ 0 ] - s_leanRest[ 0 ][ 0 ];
+				goal[ 1 ] = now[ 0 ][ 1 ] - s_leanRest[ 0 ][ 1 ];
+				// Ahead of the shoulders: push along the forward axis until no shoulder moved further
+				// forward than the eye did.
+				const float fl = std::sqrt( forward[ 0 ] * forward[ 0 ] + forward[ 2 ] * forward[ 2 ] );
+				if( fl > 1.0e-4f )
+				{
+					const float fx = forward[ 0 ] / fl, fz = forward[ 2 ] / fl;
+					float eyeAhead = goal[ 0 ] * fx + goal[ 1 ] * fz;
+					float shoulderAhead = eyeAhead;
+					for( int i = 1; i < kLeanPoints; ++i )
+					{
+						const float ahead = ( now[ i ][ 0 ] - s_leanRest[ i ][ 0 ] ) * fx + ( now[ i ][ 1 ] - s_leanRest[ i ][ 1 ] ) * fz;
+						shoulderAhead = ahead > shoulderAhead ? ahead : shoulderAhead;
+					}
+					goal[ 0 ] += fx * ( shoulderAhead - eyeAhead );
+					goal[ 1 ] += fz * ( shoulderAhead - eyeAhead );
+				}
+				const float limit = kLeanMaxMeters * 10.0f;
+				const float len = std::sqrt( goal[ 0 ] * goal[ 0 ] + goal[ 1 ] * goal[ 1 ] );
+				if( len > limit )
+				{
+					goal[ 0 ] *= limit / len;
+					goal[ 1 ] *= limit / len;
+				}
+			}
+			const float k = dt / kLeanEaseSeconds > 1.0f ? 1.0f : dt / kLeanEaseSeconds;
+			s_lean[ 0 ] += ( goal[ 0 ] - s_lean[ 0 ] ) * k;
+			s_lean[ 1 ] += ( goal[ 1 ] - s_lean[ 1 ] ) * k;
+			s_leanTick = GetTickCount();
+#ifdef _DEBUG
+			if( log )
+			{
+				PSU_LOG( "VRStrafe: eye lean (%.2f %.2f) goal (%.2f %.2f) neck (%.2f %.2f) shoulders L (%.2f %.2f) R (%.2f %.2f) speed %.1f\n",
+					s_lean[ 0 ], s_lean[ 1 ], goal[ 0 ], goal[ 1 ], now[ 0 ][ 0 ] - s_leanRest[ 0 ][ 0 ], now[ 0 ][ 1 ] - s_leanRest[ 0 ][ 1 ],
+					now[ 1 ][ 0 ] - s_leanRest[ 1 ][ 0 ], now[ 1 ][ 1 ] - s_leanRest[ 1 ][ 1 ],
+					now[ 2 ][ 0 ] - s_leanRest[ 2 ][ 0 ], now[ 2 ][ 1 ] - s_leanRest[ 2 ][ 1 ], s_speed );
+			}
+#endif
+		}
+
+		void StrafeUpdate( const PSUCombat::State &combat, float lookYaw, float dt )
+		{
+			const auto &vr = Config::Get().vr;
+			const float facing = static_cast< float >( combat.facing ) * ( 2.0f * kPi / 65536.0f );
+
+			SampleSpeed( combat );
+			const bool moving = s_speed > kMovingSpeed;
+
+			// Body yaw: stays while the head turns inside the dead-zone, then follows; follows at once
+			// while walking so the body faces where you look.
+			if( !s_haveBodyYaw )
+			{
+				s_bodyYaw = lookYaw;
+				s_haveBodyYaw = true;
+			}
+			const float headOff = WrapPi( lookYaw - s_bodyYaw );
+			if( moving || std::fabs( headOff ) > kBodyDeadZone )
+			{
+				const float k = dt * kBodyFollowRate > 1.0f ? 1.0f : dt * kBodyFollowRate;
+				s_bodyYaw = WrapPi( s_bodyYaw + headOff * k );
+			}
+
+			float target = 0.0f; // wanted leg yaw minus the game's facing
+			if( moving )
+			{
+				const float d = WrapPi( facing - s_bodyYaw ); // travel direction against the body
+				const float ad = std::fabs( d );
+				// Sector changes need to pass the edge by the hysteresis.
+				Gait gait = s_gait;
+				const float edgeFwd = kPi * 0.25f, edgeBack = kPi * 0.75f;
+				const float h = kGaitHysteresis;
+				switch( s_gait )
+				{
+					case kGaitForward:
+						if( ad > edgeFwd + h ) gait = ad > edgeBack ? kGaitBack : ( d > 0 ? kGaitRight : kGaitLeft );
+						break;
+					case kGaitBack:
+						if( ad < edgeBack - h ) gait = d > 0 ? kGaitRight : kGaitLeft;
+						break;
+					default:
+						if( ad < edgeFwd - h ) gait = kGaitForward;
+						else if( ad > edgeBack + h ) gait = kGaitBack;
+						else gait = d > 0 ? kGaitRight : kGaitLeft;
+						break;
+				}
+				s_gait = gait;
+				// Hip twist: the legs keep part of the way toward the body's facing.
+				const float ref = gait == kGaitBack ? facing + kPi : facing;
+				target = WrapPi( ref + vr.m_strafeBodyBlend * WrapPi( s_bodyYaw - ref ) - facing );
+			}
+			else
+			{
+				s_gait = kGaitForward;
+				target = WrapPi( s_bodyYaw - facing );
+				target = target > 1.75f ? 1.75f : ( target < -1.75f ? -1.75f : target );
+			}
+			const float ease = dt / kLegEaseSeconds > 1.0f ? 1.0f : dt / kLegEaseSeconds;
+			s_legTurn = WrapPi( s_legTurn + WrapPi( target - s_legTurn ) * ease );
+		}
+
+		// The whole skeleton below the root turns about the vertical through the waist.
+		void TurnBody( float *out, const uint8_t *records, float angle )
+		{
+			if( std::fabs( angle ) < 0.001f )
+			{
+				return;
+			}
+			const D3DXMATRIX delta = YawAbout( angle, Position( out, kWaistBone ) );
+			for( int b = 0; b < kBoneCount; ++b )
+			{
+				if( Parent( records, b ) >= 0 )
+				{
+					D3DXMATRIX *m = reinterpret_cast< D3DXMATRIX * >( out + b * 16 );
+					D3DXMatrixMultiply( m, m, &delta );
+				}
+			}
+		}
+
+		// Extra yaw for the legs only (subtrees hanging off the root or the hips, not the waist's).
+		void TurnLegs( float *out, const uint8_t *records, float angle, bool log )
+		{
+			if( std::fabs( angle ) < 0.001f )
+			{
+				return;
+			}
+			// Rotate every leg subtree (children of the root, or of a bone above the waist, that
+			// are not the waist's own) about the vertical through the waist.
+			const D3DXVECTOR3 pivot = Position( out, kWaistBone );
+			const D3DXMATRIX delta = YawAbout( angle, pivot );
+			for( int b = 0; b < kBoneCount; ++b )
+			{
+				const int parent = Parent( records, b );
+				if( parent < 0 || Below( records, b, kWaistBone ) || Below( records, kWaistBone, b ) )
+				{
+					continue;
+				}
+				if( Parent( records, parent ) < 0 || Below( records, kWaistBone, parent ) )
+				{
+					ApplyToSubtree( out, records, b, delta );
+				}
+			}
+#ifdef _DEBUG
+			if( log )
+			{
+				PSU_LOG( "VRStrafe: speed %.1f gait %d body %.0f leg extra %.0f deg\n", s_speed,
+					static_cast< int >( s_gait ), s_bodyYaw * 57.29578f, angle * 57.29578f );
+			}
+#endif
+		}
+	}
+
 	namespace VRHands
 	{
+		bool EyeLean( float &dx, float &dz )
+		{
+			if( !Config::Get().vr.m_fpEyeFollowsNeck || GetTickCount() - s_leanTick > 300 )
+			{
+				return false;
+			}
+			dx = s_lean[ 0 ];
+			dz = s_lean[ 1 ];
+			return true;
+		}
+
 		void AfterPlayerDraw( void *model )
 		{
 			if( !Config::Get().vr.m_handsFollow || !VRCamera::FirstPersonActive() || s_inWorldQuery )
@@ -564,8 +833,366 @@ namespace PSUVR
 			return status;
 		}
 
+		// The skeleton's bind pose relative to the root bone (inverse of each record's inverse bind,
+		// flag 0x8 = no inverse bind), cached per record array.
+		const uint8_t *s_restRecords = nullptr;
+		D3DXMATRIX s_rest[ kBoneCount ];
+		bool s_restValid[ kBoneCount ]{};
+		float s_bodyFit = 1.0f;
+
+		void RestPose( float *out, const uint8_t *skeleton )
+		{
+			__try
+			{
+				const int count = *reinterpret_cast< const int * >( skeleton + 0x28 );
+				const uint8_t *records = *reinterpret_cast< const uint8_t * const * >( skeleton + 0x30 );
+				if( count != kBoneCount || !Readable( records, kBoneCount * kRecordSize ) || !Readable( out, kBoneCount * 64 ) )
+				{
+					return;
+				}
+				if( s_restRecords != records )
+				{
+					D3DXMATRIX bind[ kBoneCount ];
+					bool ok[ kBoneCount ]{};
+					for( int b = 0; b < kBoneCount; ++b )
+					{
+						const uint8_t *r = records + b * kRecordSize;
+						const D3DXMATRIX inverseBind = *reinterpret_cast< const D3DXMATRIX * >( r + 0x30 );
+						// No inverse bind (flag 0x8) means the identity, as in the reference skeleton.
+						ok[ b ] = true;
+						if( ( *reinterpret_cast< const uint32_t * >( r ) & 0x8u ) || !D3DXMatrixInverse( &bind[ b ], nullptr, &inverseBind ) ||
+							!std::isfinite( bind[ b ]._41 ) || !std::isfinite( bind[ b ]._42 ) || !std::isfinite( bind[ b ]._43 ) )
+						{
+							D3DXMatrixIdentity( &bind[ b ] );
+						}
+					}
+					D3DXMATRIX rootInverse;
+					const bool haveRoot = ok[ 0 ] && D3DXMatrixInverse( &rootInverse, nullptr, &bind[ 0 ] );
+					for( int b = 0; b < kBoneCount; ++b )
+					{
+						s_restValid[ b ] = haveRoot && ok[ b ];
+						if( s_restValid[ b ] )
+						{
+							D3DXMatrixMultiply( &s_rest[ b ], &bind[ b ], &rootInverse );
+						}
+					}
+					s_restRecords = records;
+#ifdef _DEBUG
+					for( int b = 0; b < kBoneCount; ++b )
+					{
+						PSU_LOG( "VRBones: %2d parent %2d rest %7.2f %7.2f %7.2f%s\n", b, Parent( records, b ), s_rest[ b ]._41, s_rest[ b ]._42,
+							s_rest[ b ]._43, s_restValid[ b ] ? "" : " (no bind)" );
+					}
+#endif
+					PSU_LOG( "VRHands: rest pose cached (%d bones, root %s)\n", kBoneCount, haveRoot ? "ok" : "no bind" );
+				}
+				// The root keeps the game's placement; every other bone sits at its bind pose on it.
+				const D3DXMATRIX root = *reinterpret_cast< const D3DXMATRIX * >( out );
+				// Optionally scale the whole body about the root so the eyes (neck + ~6 cm) sit at fpEyeHeight.
+				float fit = 1.0f;
+				if( Config::Get().vr.m_bodyFitHeight && s_restValid[ kNeckBone ] )
+				{
+					const float eyes = s_rest[ kNeckBone ]._42 + 0.6f;
+					fit = eyes > 1.0f ? Config::Get().vr.m_fpEyeHeight * VRCamera::kGameUnitsPerMeter / eyes : 1.0f;
+					fit = std::clamp( fit, 0.5f, 2.0f );
+					static float s_loggedFit = 0.0f;
+					if( s_loggedFit != fit )
+					{
+						s_loggedFit = fit;
+						PSU_LOG( "VRHands: body fit %.3f (rest eyes %.2f)\n", fit, eyes );
+					}
+				}
+				s_bodyFit = fit;
+				const bool keepLegs = Config::Get().vr.m_bodyKeepLegAnim;
+				for( int b = 1; b < kBoneCount; ++b )
+				{
+					// Bones 1-8: pelvis, hip node and both legs.
+					if( s_restValid[ b ] && !( keepLegs && b <= 8 ) )
+					{
+						D3DXMATRIX scaled = s_rest[ b ];
+						for( int i = 0; i < 4; ++i )
+						{
+							for( int j = 0; j < 3; ++j )
+							{
+								scaled.m[ i ][ j ] *= fit;
+							}
+						}
+						D3DXMatrixMultiply( reinterpret_cast< D3DXMATRIX * >( out + b * 16 ), &scaled, &root );
+					}
+				}
+			}
+			__except( EXCEPTION_EXECUTE_HANDLER )
+			{
+				PSU_LOG( "VRHands: rest pose exception\n" );
+			}
+		}
+
+		// Body IK on the rest pose (needs the rest pose): the hips follow the head's height and
+		// part of its offset, the spine leans the rest of the way to the head, and each foot stays
+		// planted in the world, stepping to a new spot when the hips move away from it.
+		constexpr int kPelvisBone = 1;
+		constexpr Arm kLegs[ 2 ] = { { 2, 3, 4, 5 }, { 2, 6, 7, 8 } };
+		constexpr int kChestBone = 10;
+		constexpr float kStepSeconds = 0.28f;
+		constexpr float kStepLift = 0.9f;
+		constexpr float kStepDistance = 2.5f;
+		// The body sits this far behind the eye (game units) so the camera isn't inside the neck and shoulders.
+		constexpr float kEyeAheadOfNeck = 2.0f;
+		constexpr float kLeanLimit = 40.0f * ( kPi / 180.0f );
+		struct Foot
+		{
+			D3DXVECTOR3 planted, from, to, current;
+			float t = 0.0f;
+			float duration = 0.28f;
+			bool stepping = false;
+			bool settled = false; // already re-centred since the last time the body moved
+		};
+		Foot s_feet[ 2 ];
+		bool s_feetInit = false;
+		DWORD s_feetTick = 0;
+		D3DXVECTOR3 s_pelvisLast( 0.0f, 0.0f, 0.0f ), s_pelvisVel( 0.0f, 0.0f, 0.0f );
+		float s_idleSeconds = 0.0f;
+
+		D3DXVECTOR3 ToWorld( const D3DXMATRIX &world, const D3DXVECTOR3 &v )
+		{
+			D3DXVECTOR3 r;
+			D3DXVec3TransformCoord( &r, &v, &world );
+			return r;
+		}
+
+		D3DXMATRIX RotationPart( const D3DXMATRIX &m )
+		{
+			D3DXMATRIX r;
+			D3DXMatrixIdentity( &r );
+			for( int i = 0; i < 3; ++i )
+			{
+				D3DXVECTOR3 row( m( i, 0 ), m( i, 1 ), m( i, 2 ) );
+				row = Normalized( row, D3DXVECTOR3( i == 0 ? 1.0f : 0.0f, i == 1 ? 1.0f : 0.0f, i == 2 ? 1.0f : 0.0f ) );
+				r( i, 0 ) = row.x;
+				r( i, 1 ) = row.y;
+				r( i, 2 ) = row.z;
+			}
+			return r;
+		}
+
+		// Rotate unit a toward unit b by at most limit, about pivot.
+		D3DXMATRIX LimitedTurn( const D3DXVECTOR3 &a, const D3DXVECTOR3 &b, float limit, const D3DXVECTOR3 &pivot )
+		{
+			const float c = std::clamp( D3DXVec3Dot( &a, &b ), -1.0f, 1.0f );
+			const float angle = std::acos( c );
+			D3DXVECTOR3 to = b;
+			if( angle > limit && angle > 1.0e-4f )
+			{
+				const float t = limit / angle;
+				to = Normalized( a * ( 1.0f - t ) + b * t, b );
+			}
+			return RotationAbout( a, to, pivot );
+		}
+
+		void BodyIk( float *out, const uint8_t *records, const D3DXMATRIX &world, const D3DXMATRIX &toModel,
+			const float *headWorld, bool upper, bool legs, float dt, bool log )
+		{
+			const float fit = s_bodyFit;
+			const auto model = [ & ]( const D3DXVECTOR3 &v ) {
+				D3DXVECTOR3 r;
+				D3DXVec3TransformNormal( &r, &v, &toModel );
+				return r;
+			};
+			// Body forward (level) in the world, from the pelvis.
+			// Same as the torso turn: the thigh line (left is +X) squared to the facing.
+			const D3DXVECTOR3 acrossModel = Position( out, kLegs[ 0 ].upper ) - Position( out, kLegs[ 1 ].upper );
+			const D3DXVECTOR3 forwardModel = Normalized( D3DXVECTOR3( -acrossModel.z, 0.0f, acrossModel.x ), kModelForward );
+			D3DXVECTOR3 forward, leftWorld;
+			D3DXVec3TransformNormal( &forward, &forwardModel, &world );
+			D3DXVec3TransformNormal( &leftWorld, &acrossModel, &world );
+			forward.y = 0.0f;
+			leftWorld.y = 0.0f;
+			forward = Normalized( forward, D3DXVECTOR3( 0.0f, 0.0f, 1.0f ) );
+			const D3DXVECTOR3 left = Normalized( leftWorld, D3DXVECTOR3( forward.z, 0.0f, -forward.x ) );
+
+			if( upper && headWorld )
+			{
+				const D3DXVECTOR3 target = D3DXVECTOR3( headWorld[ 0 ], headWorld[ 1 ], headWorld[ 2 ] ) -
+					D3DXVECTOR3( 0.0f, Config::Get().vr.m_fpNeckDrop * VRCamera::kGameUnitsPerMeter, 0.0f ) - forward * kEyeAheadOfNeck;
+				const D3DXVECTOR3 neck = ToWorld( world, Position( out, kNeckBone ) );
+				const D3DXVECTOR3 d = target - neck;
+				// Hips: the neck goes straight under the head; the spine only takes up what is left.
+				D3DXVECTOR3 shift( d.x, std::clamp( d.y, -8.0f, 1.5f ), d.z );
+				D3DXMATRIX move;
+				const D3DXVECTOR3 shiftModel = model( shift );
+				D3DXMatrixTranslation( &move, shiftModel.x, shiftModel.y, shiftModel.z );
+				ApplyToSubtree( out, records, kPelvisBone, move );
+				// Spine: the waist, then the chest, turn the neck toward the head (shared, each limited).
+				for( int step = 0; step < 2; ++step )
+				{
+					const int bone = step == 0 ? kWaistBone : kChestBone;
+					const D3DXVECTOR3 pivotModel = Position( out, bone );
+					const D3DXVECTOR3 pivot = ToWorld( world, pivotModel );
+					const D3DXVECTOR3 now = ToWorld( world, Position( out, kNeckBone ) ) - pivot;
+					const D3DXVECTOR3 want = target - pivot;
+					if( D3DXVec3Length( &now ) < 1.0e-3f || D3DXVec3Length( &want ) < 1.0e-3f )
+					{
+						continue;
+					}
+					const D3DXVECTOR3 a = Normalized( model( Normalized( now, forward ) ), kModelForward );
+					const D3DXVECTOR3 b = Normalized( model( Normalized( want, forward ) ), kModelForward );
+					ApplyToSubtree( out, records, bone, LimitedTurn( a, b, kLeanLimit * ( step == 0 ? 0.5f : 0.5f ), pivotModel ) );
+				}
+				if( log )
+				{
+#ifdef _DEBUG
+					const D3DXVECTOR3 after = target - ToWorld( world, Position( out, kNeckBone ) );
+					PSU_LOG( "VRBody: hips shift %.2f %.2f %.2f, neck error %.2f -> %.2f (after %.2f %.2f %.2f), forward %.2f %.2f\n", shift.x, shift.y,
+						shift.z, D3DXVec3Length( &d ), D3DXVec3Length( &after ), after.x, after.y, after.z, forward.x, forward.z );
+#endif
+				}
+			}
+
+			if( !legs )
+			{
+				return;
+			}
+			const D3DXVECTOR3 pelvis = ToWorld( world, Position( out, kPelvisBone ) );
+			const float groundY = ToWorld( world, Position( out, 0 ) ).y;
+			const float ankleHeight = s_rest[ kLegs[ 0 ].hand ]._42 * fit;
+			const float side = std::fabs( s_rest[ kLegs[ 0 ].hand ]._41 ) * fit;
+			const float ahead = s_rest[ kLegs[ 0 ].hand ]._43 * fit;
+			const float legLength = ( s_rest[ kLegs[ 0 ].upper ]._42 - s_rest[ kLegs[ 0 ].hand ]._42 ) * fit;
+			const DWORD now = GetTickCount();
+			const float elapsed = s_feetTick ? static_cast< float >( now - s_feetTick ) / 1000.0f : 0.0f;
+			const D3DXVECTOR3 pelvisGround( pelvis.x, groundY, pelvis.z );
+			D3DXVECTOR3 home[ 2 ];
+			for( int i = 0; i < 2; ++i )
+			{
+				home[ i ] = pelvisGround + left * ( i == 0 ? side : -side ) + forward * ahead;
+			}
+			if( !s_feetInit || s_feetTick == 0 || now - s_feetTick > 500 || ( s_pelvisLast.x - pelvisGround.x ) * ( s_pelvisLast.x - pelvisGround.x ) + ( s_pelvisLast.z - pelvisGround.z ) * ( s_pelvisLast.z - pelvisGround.z ) > 225.0f )
+			{
+				for( int i = 0; i < 2; ++i )
+				{
+					s_feet[ i ].planted = s_feet[ i ].current = home[ i ];
+					s_feet[ i ].stepping = false;
+				}
+				s_pelvisVel = D3DXVECTOR3( 0.0f, 0.0f, 0.0f );
+				s_pelvisLast = pelvisGround;
+				s_feetTick = now;
+				s_feetInit = true;
+			}
+			// Update once per game frame: Apply also runs for the second eye and the world query.
+			if( elapsed >= 0.012f )
+			{
+				const D3DXVECTOR3 vel = ( pelvisGround - s_pelvisLast ) / elapsed;
+				s_pelvisVel += ( vel - s_pelvisVel ) * ( std::min )( 1.0f, elapsed * 8.0f );
+				s_pelvisLast = pelvisGround;
+				s_feetTick = now;
+				s_idleSeconds = D3DXVec3Length( &s_pelvisVel ) < 3.0f ? s_idleSeconds + elapsed : 0.0f;
+				if( s_idleSeconds == 0.0f )
+				{
+					s_feet[ 0 ].settled = s_feet[ 1 ].settled = false;
+				}
+				for( int i = 0; i < 2; ++i )
+				{
+					Foot &f = s_feet[ i ];
+					// Running: the feet alternate, so the next one may start once the other is half way.
+					const Foot &other = s_feet[ 1 - i ];
+					const bool fast = D3DXVec3Length( &s_pelvisVel ) > 20.0f;
+					const bool otherStepping = other.stepping && !( fast && other.t > 0.5f );
+					if( f.stepping )
+					{
+						f.t += elapsed / f.duration;
+						if( f.t >= 1.0f )
+						{
+							f.planted = f.to;
+							f.stepping = false;
+						}
+						continue;
+					}
+					D3DXVECTOR3 miss = home[ i ] - f.planted;
+					miss.y = 0.0f;
+					const D3DXVECTOR3 reach = pelvis - D3DXVECTOR3( f.planted.x, groundY + ankleHeight, f.planted.z );
+					const bool tooFar = D3DXVec3Length( &reach ) > legLength * 0.97f && !otherStepping;
+					// Standing still: settle back to shoulder width instead of staying wherever the last step ended.
+					const bool settle = s_idleSeconds > 0.5f && !f.settled && D3DXVec3Length( &miss ) > 1.5f * fit;
+					if( ( ( D3DXVec3Length( &miss ) > kStepDistance * fit || settle ) && !otherStepping ) || tooFar )
+					{
+						D3DXVECTOR3 lead = s_pelvisVel;
+						lead.y = 0.0f;
+						const float speed = D3DXVec3Length( &lead );
+						// Quicker steps when moving fast; land where the hips will be when the foot arrives,
+						// plus half a step so the stride is centred on them.
+						f.duration = std::clamp( 0.32f - speed * 0.0025f, 0.16f, 0.30f );
+						lead = speed > 1.0f ? lead * ( ( std::min )( speed * f.duration + 0.5f * kStepDistance * fit, 14.0f * fit ) / speed )
+							: D3DXVECTOR3( 0.0f, 0.0f, 0.0f );
+						f.settled = s_idleSeconds > 0.5f;
+						f.from = f.planted;
+						f.to = home[ i ] + lead;
+						f.t = 0.0f;
+						f.stepping = true;
+					}
+				}
+			}
+			for( int i = 0; i < 2; ++i )
+			{
+				Foot &f = s_feet[ i ];
+				D3DXVECTOR3 p = f.planted;
+				float lift = 0.0f;
+				if( f.stepping )
+				{
+					const float t = std::clamp( f.t, 0.0f, 1.0f );
+					const float e = t * t * ( 3.0f - 2.0f * t );
+					p = f.from + ( f.to - f.from ) * e;
+					lift = std::sin( t * kPi ) * kStepLift * fit;
+				}
+				// Never cross the legs: each foot stays on its own side of the body.
+				const D3DXVECTOR3 fromPelvis = p - pelvisGround;
+				const float lateral = D3DXVec3Dot( &fromPelvis, &left ) * ( i == 0 ? 1.0f : -1.0f );
+				if( lateral < side * 0.5f )
+				{
+					p += left * ( ( side * 0.5f - lateral ) * ( i == 0 ? 1.0f : -1.0f ) );
+				}
+				f.current = p;
+				const D3DXVECTOR3 ankle( p.x, groundY + ankleHeight + lift, p.z );
+				const D3DXVECTOR3 targetModel = [ & ]() {
+					D3DXVECTOR3 r;
+					D3DXVec3TransformCoord( &r, &ankle, &toModel );
+					return r;
+				}();
+				SolveArm( out, records, kLegs[ i ], targetModel, model( forward + left * ( i == 0 ? 0.2f : -0.2f ) ) );
+				// Level the foot: the rest orientation of the foot on the pelvis' current orientation.
+				const D3DXMATRIX *restFoot = &s_rest[ kLegs[ i ].hand ];
+				D3DXMATRIX restPelvisInverse;
+				if( D3DXMatrixInverse( &restPelvisInverse, nullptr, &s_rest[ kPelvisBone ] ) )
+				{
+					D3DXMATRIX desired, current, currentInverse, turn;
+					D3DXMatrixMultiply( &desired, restFoot, &restPelvisInverse );
+					D3DXMatrixMultiply( &desired, &desired, reinterpret_cast< const D3DXMATRIX * >( out + kPelvisBone * 16 ) );
+					desired = RotationPart( desired );
+					current = RotationPart( *reinterpret_cast< const D3DXMATRIX * >( out + kLegs[ i ].hand * 16 ) );
+					D3DXMatrixTranspose( &currentInverse, &current );
+					D3DXMatrixMultiply( &turn, &currentInverse, &desired );
+					const D3DXVECTOR3 pivot = Position( out, kLegs[ i ].hand );
+					turn._41 = pivot.x - ( pivot.x * turn._11 + pivot.y * turn._21 + pivot.z * turn._31 );
+					turn._42 = pivot.y - ( pivot.x * turn._12 + pivot.y * turn._22 + pivot.z * turn._32 );
+					turn._43 = pivot.z - ( pivot.x * turn._13 + pivot.y * turn._23 + pivot.z * turn._33 );
+					ApplyToSubtree( out, records, kLegs[ i ].hand, turn );
+				}
+			}
+			if( log )
+			{
+#ifdef _DEBUG
+				PSU_LOG( "VRBody: feet planted %.1f,%.1f / %.1f,%.1f  stepping %d %d  pelvis speed %.1f\n", s_feet[ 0 ].current.x, s_feet[ 0 ].current.z,
+					s_feet[ 1 ].current.x, s_feet[ 1 ].current.z, s_feet[ 0 ].stepping, s_feet[ 1 ].stepping, D3DXVec3Length( &s_pelvisVel ) );
+#endif
+			}
+		}
+
 		void Apply( void *model, float *out, const uint8_t *skeleton )
 		{
+			const bool restPose = Config::Get().vr.m_bodyRestPose;
+			if( restPose )
+			{
+				RestPose( out, skeleton );
+			}
 			// Also runs inside the world query's pose rebuild, so the second eye keeps the arms.
 			if( !Config::Get().vr.m_handsFollow )
 			{
@@ -660,7 +1287,7 @@ namespace PSUVR
 				PSUCombat::State combat{};
 				const bool haveCombat = PSUCombat::Read( combat );
 				const bool attacking = haveCombat && ( combat.comboStep > 0 || PSUCombat::Swinging( combat ) );
-				const bool animation = haveCombat && ( combat.photonArt ? Config::Get().vr.m_handsPhotonArtAnimation
+				const bool animation = haveCombat && !restPose && ( combat.photonArt ? Config::Get().vr.m_handsPhotonArtAnimation
 					: ( attacking && Config::Get().vr.m_handsAttack == "animation" ) );
 				const float goal = animation ? 0.0f : 1.0f;
 				const float step = dt / kBlendSeconds;
@@ -720,12 +1347,24 @@ namespace PSUVR
 					barrelLocal = Normalized( barrelLocal, D3DXVECTOR3( 1.0f, 0.0f, 0.0f ) );
 				}
 
-				// The game turns the character only when it moves; turn the upper body to where
-				// you look, so the shoulders sit where your arms are.
+				// The game turns the character only when it moves. With strafeBody the whole body
+				// trails the head (dead-zone), the chest twists toward the head within a limit and
+				// the legs step against the travel direction; without it the chest follows the head.
 				float lookYaw = 0.0f;
 				if( w > 0.0f && VRCamera::LookYaw( lookYaw ) )
 				{
-					const D3DXVECTOR3 lookWorld( std::sin( lookYaw ), 0.0f, std::cos( lookYaw ) );
+					const bool strafe = vr.m_strafeBody && haveCombat;
+					float torsoYaw = lookYaw, legExtra = 0.0f;
+					if( strafe )
+					{
+						StrafeUpdate( combat, lookYaw, dt );
+						const float facing = static_cast< float >( combat.facing ) * ( 2.0f * kPi / 65536.0f );
+						const float whole = WrapPi( s_bodyYaw - facing ) * w;
+						TurnBody( out, records, whole );
+						legExtra = WrapPi( s_legTurn * w - whole );
+						torsoYaw = s_bodyYaw + std::clamp( WrapPi( lookYaw - s_bodyYaw ), -kTorsoLimit, kTorsoLimit );
+					}
+					const D3DXVECTOR3 lookWorld( std::sin( torsoYaw ), 0.0f, std::cos( torsoYaw ) );
 					D3DXVECTOR3 lookModel;
 					D3DXVec3TransformNormal( &lookModel, &lookWorld, &toModel );
 					// Where the chest faces now: square to the shoulder line (left side is +X, so
@@ -739,13 +1378,29 @@ namespace PSUVR
 					const float angle = chestYaw + delta * w;
 					const D3DXVECTOR3 turned( std::sin( angle ), 0.0f, std::cos( angle ) );
 					ApplyToSubtree( out, records, kWaistBone, RotationAbout( chest, turned, Position( out, kWaistBone ) ) );
+					if( strafe && !( restPose && vr.m_bodyProceduralLegs ) )
+					{
+						TurnLegs( out, records, legExtra, log );
+					}
 					if( log )
 					{
 #ifdef _DEBUG
-						PSU_LOG( "VRHands: torso turn %.0f deg (chest was %.0f), weight %.2f\n", delta * w * 57.29578f,
-							chestYaw * 57.29578f, w );
+						PSU_LOG( "VRHands: torso turn %.0f deg (chest was %.0f), look %.0f body %.0f, weight %.2f\n", delta * w * 57.29578f,
+							chestYaw * 57.29578f, lookYaw * 57.29578f, s_bodyYaw * 57.29578f, w );
 #endif
 					}
+				}
+
+				if( restPose && w > 0.0f && ( vr.m_bodyIk || vr.m_bodyProceduralLegs ) )
+				{
+					float head[ 3 ];
+					const bool haveHead = vr.m_bodyIk && VRCamera::HeadWorld( head );
+					BodyIk( out, records, world, toModel, haveHead ? head : nullptr, haveHead, vr.m_bodyProceduralLegs, dt, log );
+				}
+
+				if( haveCombat && vr.m_fpEyeFollowsNeck && !( restPose && vr.m_bodyIk ) )
+				{
+					UpdateEyeLean( out, world, combat, forward, dt, log );
 				}
 
 				if( w <= 0.0f && !captureNow )
@@ -798,13 +1453,46 @@ namespace PSUVR
 #endif
 					}
 					SolveArm( out, records, arm, reach, pole );
-					if( vr.m_fpBody == "hands" )
 					{
-						// No arm to show, so no reach limit: the hand goes the rest of the way.
-						const D3DXVECTOR3 gap = reach - Position( out, arm.hand );
-						D3DXMATRIX shift;
-						D3DXMatrixTranslation( &shift, gap.x, gap.y, gap.z );
-						ApplyToSubtree( out, records, arm.hand, shift );
+						// The character's arm is shorter than yours: the solved arm stops at its own
+						// length. "hands" has no arm to show, so the hand goes the rest of the way; with a
+						// visible arm (armStretch) it stretches, half the gap at the elbow and half at the
+						// wrist, up to half its length.
+						D3DXVECTOR3 gap = reach - Position( out, arm.hand );
+						if( vr.m_fpBody != "hands" )
+						{
+							if( !vr.m_armStretch )
+							{
+								gap = D3DXVECTOR3( 0.0f, 0.0f, 0.0f );
+							}
+							else
+							{
+								const D3DXVECTOR3 upperArm = Position( out, arm.fore ) - Position( out, arm.upper );
+								const D3DXVECTOR3 foreArm = Position( out, arm.hand ) - Position( out, arm.fore );
+								const float chain = D3DXVec3Length( &upperArm ) + D3DXVec3Length( &foreArm );
+								const float gl = D3DXVec3Length( &gap );
+								if( gl > chain * 0.5f && gl > 1.0e-4f )
+								{
+									gap *= chain * 0.5f / gl;
+								}
+							}
+						}
+						if( D3DXVec3LengthSq( &gap ) > 1.0e-8f )
+						{
+							const D3DXVECTOR3 half = gap * 0.5f;
+							D3DXMATRIX shift;
+							if( vr.m_fpBody != "hands" )
+							{
+								D3DXMatrixTranslation( &shift, half.x, half.y, half.z );
+								ApplyToSubtree( out, records, arm.fore, shift );
+								D3DXMatrixTranslation( &shift, gap.x - half.x, gap.y - half.y, gap.z - half.z );
+							}
+							else
+							{
+								D3DXMatrixTranslation( &shift, gap.x, gap.y, gap.z );
+							}
+							ApplyToSubtree( out, records, arm.hand, shift );
+						}
 					}
 
 					// Hand angle: hand axes = calibration x controller axes (both in world).
@@ -926,7 +1614,7 @@ namespace PSUVR
 					s_haveWeaponRest[ 0 ] = s_haveWeaponRest[ 1 ] = false;
 					s_weaponRestClass = haveCombat ? combat.weaponClass : 0;
 				}
-				if( techWeapon && vr.m_techWeaponStill && w > 0.0f )
+				if( techWeapon && vr.m_techWeaponStill && w > 0.0f && !restPose )
 				{
 					if( combat.comboStep > 0 || PSUCombat::Swinging( combat ) )
 					{
