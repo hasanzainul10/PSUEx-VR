@@ -290,9 +290,18 @@ namespace PSUVR
 					{
 						return;  // the open key is still held: its release must not land in the text
 					}
-					for( const char c : s_chatText )
+					// Straight into the game's text subclass (0x004C9070): the PSUEx overlay's window
+					// hook in front of it can swallow posted messages (ImGui, WantCaptureMouse).
 					{
-						PostMessageA( Global::hWnd, WM_CHAR, static_cast< WPARAM >( static_cast< unsigned char >( c ) ), 1 );
+						using WndProcFn = LRESULT( CALLBACK * )( HWND, UINT, WPARAM, LPARAM );
+						const WndProcFn gameProc = reinterpret_cast< WndProcFn >( 0x004C9070 );
+						PSUMemory::WriteAbsoluteMemory< uint8_t >( 0x00B9D4C4, 0 );
+						for( const char c : s_chatText )
+						{
+							gameProc( Global::hWnd, WM_CHAR, static_cast< WPARAM >( static_cast< unsigned char >( c ) ), 1 );
+						}
+						PSU_LOG( "VRSpeech: typed %u chars, landed flag %u\n", static_cast< unsigned >( s_chatText.size() ),
+							PSUMemory::ReadAbsoluteMemory< uint8_t >( 0x00B9D4C4 ) );
 					}
 					s_chatTick = GetTickCount();
 					s_chatStep = ChatStep::Settle;
