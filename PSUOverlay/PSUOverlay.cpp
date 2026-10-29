@@ -366,6 +366,41 @@ HRESULT APIENTRY PSUOverlay::Hook_Reset( LPDIRECT3DDEVICE9 pDevice, D3DPRESENT_P
 	return tmpReset;
 }
 
+
+// The game's own return address for a draw call. With another D3D9 hook layered over ours (Rogue's
+// Toolkit) the immediate caller is that mod's code, which hides the game's draw sites that the eye
+// passes recognize (e.g. the sprite drawer 0x00747248): walk up the stack to the first call site in the exe.
+static __forceinline bool InGameExe( uintptr_t a )
+{
+	return a >= 0x00401000 && a < 0x00B00000;
+}
+
+static __forceinline void *GameRet( void *returnAddressSlot, void *ret )
+{
+	if( InGameExe( reinterpret_cast< uintptr_t >( ret ) ) )
+	{
+		return ret;
+	}
+	const uintptr_t *slot = static_cast< const uintptr_t * >( returnAddressSlot );
+	for( int i = 1; i < 96; ++i )
+	{
+		const uintptr_t a = slot[ i ];
+		if( !InGameExe( a ) )
+		{
+			continue;
+		}
+		const unsigned char *p = reinterpret_cast< const unsigned char * >( a );
+		const auto indirectCall = []( unsigned char op, unsigned char modrm ) { return op == 0xFF && ( ( modrm >> 3 ) & 7 ) == 2; };
+		// call rel32, call [reg+disp32] / [abs], call [reg+disp8], call reg / [reg]
+		if( p[ -5 ] == 0xE8 || indirectCall( p[ -6 ], p[ -5 ] ) || indirectCall( p[ -3 ], p[ -2 ] ) || indirectCall( p[ -2 ], p[ -1 ] ) )
+		{
+			return reinterpret_cast< void * >( a );
+		}
+	}
+	return ret;
+}
+#define GAME_RET() GameRet( _AddressOfReturnAddress(), _ReturnAddress() )
+
 #ifdef _DEBUG
 // Where a screen-space draw happens, for the VREffect log: 0 eye pass, 1 pass B / UI, 2 other.
 static int EffectDrawWhere()
@@ -378,19 +413,19 @@ static int EffectDrawWhere()
 HRESULT APIENTRY PSUOverlay::Hook_DrawPrimitive( LPDIRECT3DDEVICE9 pDevice, D3DPRIMITIVETYPE PrimitiveType, UINT StartVertex, UINT PrimitiveCount )
 {
 #ifdef _DEBUG
-	PSUVR::StereoRenderer::CountLayerDraw( _ReturnAddress() );
+	PSUVR::StereoRenderer::CountLayerDraw( GAME_RET() );
 #endif
-	if( PSUVR::StereoRenderer::SkipEyeEffectDraw( _ReturnAddress() ) )
+	if( PSUVR::StereoRenderer::SkipEyeEffectDraw( GAME_RET() ) )
 	{
 		return D3D_OK;
 	}
 	FrameTrace::OnDrawPrimitive( false );
 #ifdef _DEBUG
-	PSUVR::StereoRenderer::NoteShaderDraw( pDevice, PrimitiveCount, _ReturnAddress() );
+	PSUVR::StereoRenderer::NoteShaderDraw( pDevice, PrimitiveCount, GAME_RET() );
 	PSUVR::StereoRenderer::NoteEffectDraw( pDevice, EffectDrawWhere(), static_cast< unsigned >( PrimitiveType ), PrimitiveCount,
-		nullptr, 0, _ReturnAddress() );
+		nullptr, 0, GAME_RET() );
 #endif
-	if( PSUVR::StereoRenderer::ShouldSkipScreenQuad( pDevice, _ReturnAddress(), PrimitiveCount, false ) )
+	if( PSUVR::StereoRenderer::ShouldSkipScreenQuad( pDevice, GAME_RET(), PrimitiveCount, false ) )
 	{
 		return D3D_OK;
 	}
@@ -405,16 +440,16 @@ HRESULT APIENTRY PSUOverlay::Hook_DrawPrimitive( LPDIRECT3DDEVICE9 pDevice, D3DP
 	if( SUCCEEDED( hr ) && hud.Active() && FrameTrace::CurrentPassAddress() == 0x004FDBC0 )
 	{
 		hud.CaptureMapMeshDraw( pDevice, 0, static_cast< unsigned >( PrimitiveType ), 0, 0, 0, StartVertex,
-			PrimitiveCount, nullptr, 0, nullptr, 0, _ReturnAddress() );
+			PrimitiveCount, nullptr, 0, nullptr, 0, GAME_RET() );
 	}
 	return hr;
 }
 
 HRESULT APIENTRY PSUOverlay::Hook_SetVertexShaderConstantF( LPDIRECT3DDEVICE9 pDevice, UINT StartRegister, CONST float *pConstantData, UINT Vector4fCount )
 {
-	FrameTrace::OnVertexShaderConstantF( StartRegister, Vector4fCount, _ReturnAddress() );
+	FrameTrace::OnVertexShaderConstantF( StartRegister, Vector4fCount, GAME_RET() );
 #ifdef _DEBUG
-	PSUVR::StereoRenderer::NoteVertexConstants( StartRegister, pConstantData, Vector4fCount, _ReturnAddress() );
+	PSUVR::StereoRenderer::NoteVertexConstants( StartRegister, pConstantData, Vector4fCount, GAME_RET() );
 #endif
 	return m_pOriginalSetVertexShaderConstantF( pDevice, StartRegister, pConstantData, Vector4fCount );
 }
@@ -422,19 +457,19 @@ HRESULT APIENTRY PSUOverlay::Hook_SetVertexShaderConstantF( LPDIRECT3DDEVICE9 pD
 HRESULT APIENTRY PSUOverlay::Hook_DrawIndexedPrimitive( LPDIRECT3DDEVICE9 pDevice, D3DPRIMITIVETYPE PrimitiveType, INT BaseVertexIndex, UINT MinIndex, UINT NumVertices, UINT StartIndex, UINT PrimitiveCount )
 {
 #ifdef _DEBUG
-	PSUVR::StereoRenderer::CountLayerDraw( _ReturnAddress() );
+	PSUVR::StereoRenderer::CountLayerDraw( GAME_RET() );
 #endif
-	if( PSUVR::StereoRenderer::SkipEyeEffectDraw( _ReturnAddress() ) )
+	if( PSUVR::StereoRenderer::SkipEyeEffectDraw( GAME_RET() ) )
 	{
 		return D3D_OK;
 	}
-	FrameTrace::OnDrawIndexed( _ReturnAddress() );
+	FrameTrace::OnDrawIndexed( GAME_RET() );
 #ifdef _DEBUG
-	PSUVR::StereoRenderer::NoteShaderDraw( pDevice, PrimitiveCount, _ReturnAddress() );
+	PSUVR::StereoRenderer::NoteShaderDraw( pDevice, PrimitiveCount, GAME_RET() );
 	PSUVR::StereoRenderer::NoteEffectDraw( pDevice, EffectDrawWhere(), static_cast< unsigned >( PrimitiveType ), PrimitiveCount,
-		nullptr, 0, _ReturnAddress() );
+		nullptr, 0, GAME_RET() );
 #endif
-	if( PSUVR::StereoRenderer::ShouldSkipScreenQuad( pDevice, _ReturnAddress(), PrimitiveCount, false ) )
+	if( PSUVR::StereoRenderer::ShouldSkipScreenQuad( pDevice, GAME_RET(), PrimitiveCount, false ) )
 	{
 		return D3D_OK;
 	}
@@ -453,12 +488,12 @@ HRESULT APIENTRY PSUOverlay::Hook_DrawIndexedPrimitive( LPDIRECT3DDEVICE9 pDevic
 	{
 		hudDip.CaptureXyzrhwIndexed( pDevice,
 			static_cast< unsigned >( PrimitiveType ), BaseVertexIndex, MinIndex, NumVertices,
-			StartIndex, PrimitiveCount, _ReturnAddress() );
+			StartIndex, PrimitiveCount, GAME_RET() );
 	}
 	if( SUCCEEDED( hr ) && hudDip.Active() && FrameTrace::CurrentPassAddress() == 0x004FDBC0 )
 	{
 		hudDip.CaptureMapMeshDraw( pDevice, 1, static_cast< unsigned >( PrimitiveType ), BaseVertexIndex, MinIndex,
-			NumVertices, StartIndex, PrimitiveCount, nullptr, 0, nullptr, 0, _ReturnAddress() );
+			NumVertices, StartIndex, PrimitiveCount, nullptr, 0, nullptr, 0, GAME_RET() );
 	}
 	return hr;
 }
@@ -466,21 +501,21 @@ HRESULT APIENTRY PSUOverlay::Hook_DrawIndexedPrimitive( LPDIRECT3DDEVICE9 pDevic
 HRESULT APIENTRY PSUOverlay::Hook_DrawPrimitiveUP( LPDIRECT3DDEVICE9 pDevice, D3DPRIMITIVETYPE PrimitiveType, UINT PrimitiveCount, const void *pVertexStreamZeroData, UINT VertexStreamZeroStride )
 {
 #ifdef _DEBUG
-	PSUVR::StereoRenderer::CountLayerDraw( _ReturnAddress() );
+	PSUVR::StereoRenderer::CountLayerDraw( GAME_RET() );
 #endif
-	if( PSUVR::StereoRenderer::SkipEyeEffectDraw( _ReturnAddress() ) )
+	if( PSUVR::StereoRenderer::SkipEyeEffectDraw( GAME_RET() ) )
 	{
 		return D3D_OK;
 	}
 	FrameTrace::OnDrawPrimitive( true );
 #ifdef _DEBUG
-	PSUVR::StereoRenderer::NoteShaderDraw( pDevice, PrimitiveCount, _ReturnAddress() );
+	PSUVR::StereoRenderer::NoteShaderDraw( pDevice, PrimitiveCount, GAME_RET() );
 	PSUVR::StereoRenderer::NoteEffectDraw( pDevice, EffectDrawWhere(), static_cast< unsigned >( PrimitiveType ), PrimitiveCount,
-		pVertexStreamZeroData, VertexStreamZeroStride, _ReturnAddress() );
+		pVertexStreamZeroData, VertexStreamZeroStride, GAME_RET() );
 	PSUVR::StereoRenderer::NoteNearCameraDraw( pDevice, static_cast< unsigned >( PrimitiveType ), PrimitiveCount,
-		pVertexStreamZeroData, VertexStreamZeroStride, _ReturnAddress() );
+		pVertexStreamZeroData, VertexStreamZeroStride, GAME_RET() );
 #endif
-	if( PSUVR::StereoRenderer::ShouldSkipScreenQuad( pDevice, _ReturnAddress(), PrimitiveCount, true ) )
+	if( PSUVR::StereoRenderer::ShouldSkipScreenQuad( pDevice, GAME_RET(), PrimitiveCount, true ) )
 	{
 		return D3D_OK;
 	}
@@ -495,14 +530,14 @@ HRESULT APIENTRY PSUOverlay::Hook_DrawPrimitiveUP( LPDIRECT3DDEVICE9 pDevice, D3
 	bool reprojectedSprite = false;
 	if( const void *reprojected = PSUVR::StereoRenderer::ReprojectSpriteIfNeeded(
 			pDevice, static_cast< unsigned >( PrimitiveType ), PrimitiveCount,
-			pVertexStreamZeroData, VertexStreamZeroStride, _ReturnAddress() ) )
+			pVertexStreamZeroData, VertexStreamZeroStride, GAME_RET() ) )
 	{
 		verts = reprojected;
 		reprojectedSprite = true;
 	}
 	else if( const void *stretched = PSUVR::StereoRenderer::StretchScreenQuadIfNeeded(
 			pDevice, static_cast< unsigned >( PrimitiveType ), PrimitiveCount,
-			pVertexStreamZeroData, VertexStreamZeroStride, _ReturnAddress() ) )
+			pVertexStreamZeroData, VertexStreamZeroStride, GAME_RET() ) )
 	{
 		verts = stretched;
 	}
@@ -528,7 +563,7 @@ HRESULT APIENTRY PSUOverlay::Hook_DrawPrimitiveUP( LPDIRECT3DDEVICE9 pDevice, D3
 	{
 		hud.CapturePassBDraw( pDevice,
 			static_cast< unsigned >( PrimitiveType ), PrimitiveCount,
-			pVertexStreamZeroData, VertexStreamZeroStride, _ReturnAddress() );
+			pVertexStreamZeroData, VertexStreamZeroStride, GAME_RET() );
 	}
 	const HRESULT hr = captureFirst && hud.NameplateOnMonitor() ? D3D_OK
 		: m_pOriginalDrawPrimitiveUP( pDevice, PrimitiveType, PrimitiveCount, verts, VertexStreamZeroStride );
@@ -542,7 +577,7 @@ HRESULT APIENTRY PSUOverlay::Hook_DrawPrimitiveUP( LPDIRECT3DDEVICE9 pDevice, D3
 	{
 		hud.CapturePassBDraw( pDevice,
 			static_cast< unsigned >( PrimitiveType ), PrimitiveCount,
-			pVertexStreamZeroData, VertexStreamZeroStride, _ReturnAddress() );
+			pVertexStreamZeroData, VertexStreamZeroStride, GAME_RET() );
 	}
 	return hr;
 }
@@ -550,9 +585,9 @@ HRESULT APIENTRY PSUOverlay::Hook_DrawPrimitiveUP( LPDIRECT3DDEVICE9 pDevice, D3
 HRESULT APIENTRY PSUOverlay::Hook_DrawIndexedPrimitiveUP( LPDIRECT3DDEVICE9 pDevice, D3DPRIMITIVETYPE Type, UINT MinVertexIndex, UINT NumVertices, UINT PrimitiveCount, const void *pIndexData, D3DFORMAT IndexDataFormat, const void *pVertexStreamZeroData, UINT VertexStreamZeroStride )
 {
 #ifdef _DEBUG
-	PSUVR::StereoRenderer::CountLayerDraw( _ReturnAddress() );
+	PSUVR::StereoRenderer::CountLayerDraw( GAME_RET() );
 #endif
-	if( PSUVR::StereoRenderer::SkipEyeEffectDraw( _ReturnAddress() ) )
+	if( PSUVR::StereoRenderer::SkipEyeEffectDraw( GAME_RET() ) )
 	{
 		return D3D_OK;
 	}
@@ -565,7 +600,7 @@ HRESULT APIENTRY PSUOverlay::Hook_DrawIndexedPrimitiveUP( LPDIRECT3DDEVICE9 pDev
 	{
 		hud.CaptureMapMeshDraw( pDevice, 2, static_cast< unsigned >( Type ), 0, MinVertexIndex, NumVertices, 0,
 			PrimitiveCount, pIndexData, static_cast< unsigned >( IndexDataFormat ), pVertexStreamZeroData,
-			VertexStreamZeroStride, _ReturnAddress() );
+			VertexStreamZeroStride, GAME_RET() );
 	}
 	return hr;
 }
@@ -583,7 +618,7 @@ void PrintMatrix( const Matrix4x4 &matrix, const char *name )
 
 HRESULT APIENTRY PSUOverlay::Hook_BeginScene( LPDIRECT3DDEVICE9 pDevice )
 {
-	FrameTrace::OnBeginScene( _ReturnAddress() );
+	FrameTrace::OnBeginScene( GAME_RET() );
 	return m_pOriginalBeginScene( pDevice );
 }
 
@@ -596,7 +631,7 @@ HRESULT APIENTRY PSUOverlay::Hook_EndScene( LPDIRECT3DDEVICE9 pDevice )
 		PSU_LOG( "EndScene hooked (first call) device=%p\n", pDevice );
 	}
 
-	FrameTrace::OnEndScene( _ReturnAddress() );
+	FrameTrace::OnEndScene( GAME_RET() );
 
 	if( !m_bInitialized )
 	{

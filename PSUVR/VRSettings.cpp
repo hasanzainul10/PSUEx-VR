@@ -40,6 +40,9 @@ namespace
 	X( m_fpEyeFollowsNeck, "fpEyeFollowsNeck" ) \
 	X( m_bodyRestPose, "bodyRestPose" ) \
 	X( m_bodyFitHeight, "bodyFitHeight" ) \
+	X( m_bodyKeepLegAnim, "bodyKeepLegAnim" ) \
+	X( m_bodyIk, "bodyIk" ) \
+	X( m_bodyProceduralLegs, "bodyProceduralLegs" ) \
 	X( m_snapTurnDegrees, "snapTurnDegrees" ) \
 	X( m_fpTurnSpeed, "fpTurnSpeed" ) \
 	X( m_fpMoveDirection, "fpMoveDirection" ) \
@@ -174,7 +177,7 @@ namespace
 
 	// Stable JSON keys for the bindings (labels are for display only).
 	const char *const kActionKeys[ kVRActionCount ] = {
-		"recenter", "toggleCameraMode", "toggleSettings", "togglePause", "toggleSnapTurn", "toggleHudFollow" };
+		"recenter", "toggleCameraMode", "toggleSettings", "togglePause", "toggleSnapTurn", "toggleHudFollow", "toggleToolkitMenu" };
 }
 
 const char *VRActionLabel( VRAction action )
@@ -187,6 +190,7 @@ const char *VRActionLabel( VRAction action )
 		case VRAction::TogglePause: return "Pause VR";
 		case VRAction::ToggleSnapTurn: return "Snap / smooth turn";
 		case VRAction::ToggleHudFollow: return "Body-locked HUD on / off";
+		case VRAction::ToggleToolkitMenu: return "Open Rogue's Toolkit menu";
 		default: return "?";
 	}
 }
@@ -199,6 +203,8 @@ std::array< VRBinding, kVRActionCount > DefaultVRBindings()
 	bindings[ static_cast< int >( VRAction::ToggleCameraMode ) ] = { VK_F7, XINPUT_GAMEPAD_Y, kVRModCtrl };
 	bindings[ static_cast< int >( VRAction::ToggleSettings ) ] = { VK_F10, XINPUT_GAMEPAD_START, kVRModCtrl };
 	bindings[ static_cast< int >( VRAction::TogglePause ) ] = { VK_F8, 0, kVRModCtrl };
+	// The toolkit's own key is plain F6; Ctrl+F6 here sends it. Back+A on the pad.
+	bindings[ static_cast< int >( VRAction::ToggleToolkitMenu ) ] = { VK_F6, XINPUT_GAMEPAD_A, kVRModCtrl };
 	return bindings;
 }
 

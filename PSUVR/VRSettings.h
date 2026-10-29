@@ -16,6 +16,7 @@ enum class VRAction : int
 	TogglePause,
 	ToggleSnapTurn,
 	ToggleHudFollow,
+	ToggleToolkitMenu,
 	Count
 };
 
@@ -92,6 +93,12 @@ struct VRSettings
 	bool m_bodyRestPose = false;
 	// With the rest pose: scale the whole body so its eyes sit at fpEyeHeight (your real height).
 	bool m_bodyFitHeight = false;
+	// With the rest pose, first person: hips follow the head (crouch), the spine leans to it.
+	// With the rest pose: leave the pelvis and legs on the game's own animation (walk, idle).
+	bool m_bodyKeepLegAnim = false;
+	bool m_bodyIk = false;
+	// With the rest pose: feet stay planted in the world and step when the hips move away (replaces the strafe legs).
+	bool m_bodyProceduralLegs = false;
 	// Right-stick snap turn step in degrees (snapTurn = true).
 	float m_snapTurnDegrees = 30.0f;
 	// Right-stick smooth turn speed in degrees per second (snapTurn = false).

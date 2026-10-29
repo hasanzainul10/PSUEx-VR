@@ -19,6 +19,50 @@ namespace PSUVR
 		bool s_settingsRequested = false;
 		bool s_chatLogRequested = false;
 
+		// Rogue's Toolkit menu key: it reads real key state, so send a real F6.
+		constexpr WORD kToolkitKey = VK_F6;
+		constexpr DWORD kToolkitHoldMs = 80;
+		bool s_toolkitPending = false;
+		bool s_toolkitDown = false;
+		DWORD s_toolkitDownTick = 0;
+
+		void SendToolkitKey( bool down )
+		{
+			INPUT input{};
+			input.type = INPUT_KEYBOARD;
+			input.ki.wVk = kToolkitKey;
+			input.ki.wScan = static_cast< WORD >( MapVirtualKeyA( kToolkitKey, MAPVK_VK_TO_VSC ) );
+			input.ki.dwFlags = down ? 0 : KEYEVENTF_KEYUP;
+			SendInput( 1, &input, sizeof( input ) );
+		}
+
+		void TickToolkitKey()
+		{
+			if( s_toolkitDown )
+			{
+				if( GetTickCount() - s_toolkitDownTick >= kToolkitHoldMs )
+				{
+					SendToolkitKey( false );
+					s_toolkitDown = false;
+				}
+				return;
+			}
+			if( !s_toolkitPending )
+			{
+				return;
+			}
+			// The toolkit only takes the key alone (Ctrl+F6 from the shortcut itself is still held).
+			if( ( GetAsyncKeyState( VK_CONTROL ) | GetAsyncKeyState( VK_SHIFT ) | GetAsyncKeyState( VK_MENU ) ) & 0x8000 )
+			{
+				return;
+			}
+			s_toolkitPending = false;
+			SendToolkitKey( true );
+			s_toolkitDown = true;
+			s_toolkitDownTick = GetTickCount();
+			PSU_LOG( "VRToolkit: sent F6\n" );
+		}
+
 		constexpr DWORD kToastMs = 1500;
 		constexpr DWORD kToastFadeMs = 400;
 	}
@@ -96,6 +140,17 @@ namespace PSUVR
 			{
 				s_settingsRequested = true;
 			}
+			if( actions & Bit( VRAction::ToggleToolkitMenu ) )
+			{
+				OpenToolkitMenu();
+			}
+			TickToolkitKey();
+		}
+
+		void OpenToolkitMenu()
+		{
+			s_toolkitPending = true;
+			ShowToast( "Rogue's Toolkit menu" );
 		}
 
 		void ShowToast( const char *text )

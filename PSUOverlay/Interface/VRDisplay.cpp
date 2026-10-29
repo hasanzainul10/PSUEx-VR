@@ -27,6 +27,11 @@ VRDisplay::VRDisplay() : IFWinCtrl( "VRDisplay", false )
 		m_bEnabled = false;
 		VRSetupDisplay::RequestOpen();
 	};
+	m_context.openToolkit = [this]()
+	{
+		m_bEnabled = false;
+		PSUVR::VRBindings::OpenToolkitMenu();
+	};
 }
 
 void VRDisplay::DrawToast()

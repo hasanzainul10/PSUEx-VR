@@ -291,6 +291,54 @@ and pushed to origin `psu_vr` unless noted.
    on the monitor they sit over the right people; the headset is unchanged. Committed with phase 2.
    **Next:** phase 3 (eye resolution scale, LOCAL-space layer, quality presets).
 
+7. **Rogue's Toolkit 0.7.2 alongside PSUEx (UPDATED 2026-10-30, see "Status 2026-10-30" at the end of this item; the chain described next is superseded).** Plan:
+   `C:\Users\hasan\.claude\plans\plan-to-make-our-giggly-sifakis.md`. The toolkit is a Rust `dinput8.dll` proxy
+   (hooks D3D9 Present / Reset / DP-UP / SetRenderTarget, DirectInput devices, Get(Async)KeyState, game text draw,
+   archive loader, network (theirs only)). Game folder now: toolkit `dinput8.dll` + `RoguesToolkit\`;
+   **our proxy was renamed `psuex_dinput8.dll`** (original backed up in `BACKUP_pre_toolkit\dinput8.dll`);
+   `roguestoolkit.toml`: `chain_dll = "psuex_dinput8.dll"`, `trigger_fix = false`, `settings_pad = ""` (Back+Start is
+   our VR settings chord). Chain: PSUC -> toolkit -> psuex_dinput8 -> system dinput8. To undo: delete toolkit
+   `dinput8.dll` + `RoguesToolkit\`, rename `psuex_dinput8.dll` back to `dinput8.dll`.
+   **Shortcut to the toolkit menu (built, untested):** new rebindable action `ToggleToolkitMenu` (default Ctrl+F6, pad
+   Back+A; `VRBindings::OpenToolkitMenu` sends a real F6 with `SendInput` once Ctrl/Shift/Alt are up, log
+   `VRToolkit: sent F6`); button "Open Rogue's Toolkit menu" in VR Settings > General. Not done: a motion-controller
+   gesture (all face buttons in the both-grips chord are taken), a `toolkitMenuShortcut` on/off setting.
+   **Pending tests (in order):** A flat, VR off: both load (`RoguesToolkit\logs\roguestoolkit.log`, `dinput8_proxy.log`
+   says "Loaded PSUExD.dll"; the toolkit may stop on "unknown PSUC.exe build" because our PSUC.exe is modified);
+   B VR on: are the toolkit panels (damage meter, drop panel, HP bars) in the headset or only on the monitor;
+   C shortcut: Ctrl+F6 / Back+A / panel button open the toolkit menu; pad and motion input still work.
+
+   **Status 2026-10-30.**
+   - **Defender** removed the toolkit's `dinput8.dll` once (`Behavior:Win32/DefenseEvasion.A!ml`, heuristic on an
+     unsigned DLL-proxy). The user restored it. The pristine copy is `D:\Games\rogues-toolkit-v0.7.2\dinput8.dll`
+     (5,214,208 bytes, hash starts `EC01FCCA`). Changing Defender is the user's call, never ours.
+   - **The toolkit-first chain failed:** with the toolkit as `dinput8.dll` and `chain_dll` = our proxy, the toolkit loads
+     our proxy ~1 s late (at the first DirectInput8Create), after the launcher's `PSUEx.dll` is in, so `PSUExD.dll`
+     logs "Skip Detours/VR - another PSUEx is already loaded" and nothing hooks. (Flat "worked" only because
+     Clementine's own PSUEx.dll ran.) The toolkit's build check says "this is PSUC.exe (Clementine)" for the game
+     process and "unknown build" for `online.exe` (expected).
+   - **Fix, built + deployed:** reversed chain. Game folder: `dinput8.dll` = OUR proxy (new build, 135,680 bytes), which
+     now forwards DirectInput to `toolkit_dinput8.dll` if present (`dinput8_proxy.cpp` `LoadRealDInput8`, log "Forwarding
+     DirectInput to toolkit_dinput8.dll"), else the system DLL; `toolkit_dinput8.dll` = the toolkit's DLL, its
+     `roguestoolkit.toml` has `chain_dll = ""`, `trigger_fix = false`, `settings_pad = ""`. Build the proxy with
+     `tools/dinput8_proxy/build.ps1 -GameDir NONE` (the default GameDir copies over the game's dinput8.dll; the
+     "vswhere" line is harmless). Old proxy backup: `BACKUP_pre_toolkit\dinput8.dll`.
+   - **Result:** VR works and the toolkit loads. **Open bug:** with the toolkit loaded, technique effects render
+     wrongly in VR ("like our first release"). **Test in progress:** rename `toolkit_dinput8.dll` ->
+     `toolkit_dinput8.dll.off` (game closed) and see if techniques render right in VR. If yes: the toolkit's D3D9 hooks
+     (SetViewport / SetRenderTarget / DrawPrimitiveUP / Present) clash with our eye passes: follow plan Step 2
+     (hook order, who is outermost) and look for a toolkit setting to reduce what it hooks. If no: it is our own
+     effect handling (layers / glare, see item 3). Undo = rename back.
+   - **Technique effects bug FIXED (2026-10-30):** not the toolkit's drawing, `ui_scale`, or its archive/minimap patches
+     (all bisected, no effect). The toolkit's DLL calls `DrawPrimitiveUP` for the game, so `_ReturnAddress()` in our draw
+     hooks was `toolkit_dinput8.dll`, not the game site `0x00747248`, and `ReprojectSpriteIfNeeded` (exact ret match)
+     never fired. `PSUOverlay.cpp` now uses `GAME_RET()` (`GameRet`): if the caller is outside the exe, scan the stack for
+     the first call site in the exe (`E8` or `FF /2`). User confirmed effects fine. Toolkit toml is back to the original
+     (backups `.pre_uiscale`, `.pre_nodraw`, `.pre_nopatch`, `.bisect` in `RoguesToolkit\`).
+     Note: the `StereoRenderer`/`VRHud` ret checks for other sites go through the same hooks, so they benefit too.
+     The 'stereo submit miss' log is just the headset going inactive (OpenXR session state 3), not a bug.
+   - **Still untested:** F6 and the shortcut (Ctrl+F6, Back+A, panel button) in VR; toolkit panels in the headset (plan Step 3).
+
 ## Features done this stretch (all toggles in the VR settings panel)
 
 - Combat by weapon category (`+0x2D4`/`+0x2D8`): trigger/swing = attack / tech slot 1, grip + = PA /
@@ -379,3 +427,18 @@ and pushed to origin `psu_vr` unless noted.
    `s_world` inverse), then in `Apply` after RestPose: waist -> translate/rotate the hip subtree (`ApplyToSubtree`, bone kWaistBone) and replace `StrafeUpdate`'s inferred
    body yaw with the waist yaw; feet -> two-bone leg IK (reuse `SolveArm` on thigh/shin/foot, pole from the knee direction = foot forward); elbows -> pole vector for
    `SolveArm`. Keep strafe legs as the fallback when a tracker is absent (per-role validity flags). Calibration: stand in a T pose, record tracker-to-bone offsets (like hand calibration).
+
+   **Body IK, phases 0-3 (built + deployed Debug 2026-10-29, untested):** rest-pose confirmed by the user (arms follow, weapon stays, height fit OK; `rest pose cached ... root ok`, `body fit 1.028`).
+   Bone map from the `VRBones` dump (1 unit = 10 cm): 0 root, 1 pelvis, 2 hip node, **left leg 3 thigh / 4 knee / 5 ankle, right 6 / 7 / 8** (no toe bone), 9 waist, 10 chest, 11 shoulder level,
+   12 neck, 13 head, 14-18 left arm, 19-23 right arm, 24/25 chest extras, 26 waist extra, 27 extra. New `VRHands.cpp` `BodyIk` (after the torso block, before the eye lean, needs `bodyRestPose`):
+   `bodyIk` (first person; `VRCamera::HeadWorld`): hips take the head's height (down to -0.8 m, up 0.15 m) and 60% of its sideways offset, waist + chest each lean the neck toward the head (limited to 20 deg each);
+   eye-lean is skipped while it is on. `bodyProceduralLegs`: ankle targets stay planted in the world; a foot steps (0.28 s, 9 cm lift, led by the hip velocity) when it is more than 35 cm from its home spot
+   (under the pelvis, shoulder width) or the leg would over-stretch; one foot at a time; feet re-leveled to the pelvis' orientation; replaces `TurnLegs` (strafe legs). Both reuse `SolveArm` for the legs.
+   Checkboxes under "Body in rest pose" (Camera > First person), settings in `psuex_vr.json` / `config.json`. Log: `tools/lastlog.sh 'VRBody'`.
+   Pending test: crouch (hips drop, no mesh shear), lean forward, walk (feet plant and step, no sliding/crossing), stand still (feet planted shoulder width), turn on the spot (feet step), strafe.
+   Not started: phase 4-6 (Standable / Vive tracker input via OpenXR, tracker -> IK, calibration).
+
+   **Body IK update (2026-10-30, deployed Debug):** user confirms the body/camera position is right after the fixes (hips take the full head offset, neck = eye - `fpNeckDrop` and 20 cm back,
+   body facing from the thigh line, real HMD position via `VRCamera::HeadWorld`). `bodyKeepLegAnim` ("Keep the game's leg animation"): rest pose skips bones 1-8, so the strafe layer's game leg
+   animation stays (user: works like before). Planted-feet tuning (untested): step at 25 cm (was 35), step time 0.16-0.30 s by speed, lead 0.2 s of velocity, settle back to shoulder width after 0.35 s idle,
+   legs never cross (each foot >= half the stance on its own side), knee pole 20% outward. Open: decide between planted feet and the game leg animation after the next test; tracker phases 4-6 not started.

@@ -271,6 +271,13 @@ namespace PSUVR
 			{
 				context.runSetup();
 			}
+			if( context.inGame && context.openToolkit && ImGui::Button( "Open Rogue's Toolkit menu" ) )
+			{
+				context.openToolkit();
+			}
+			Help( "Opens the Rogue's Toolkit settings menu (it sends the toolkit's F6 key; this window closes). "
+				"Also on the shortcut under Controls (default Ctrl + F6, or Back + A on the pad). "
+				"Needs the toolkit installed; set its settings_pad to \"\" so Back + Start only opens VR settings." );
 		}
 
 		if( Section( Tab::Camera, "First person" ) )
@@ -302,6 +309,12 @@ namespace PSUVR
 			{
 				ImGui::Checkbox( "Scale body to my height", &s.m_bodyFitHeight );
 				Help( "Scales the model so its eyes are at the Eye height above. Set Eye height to your real eye height." );
+				ImGui::Checkbox( "Keep the game's leg animation", &s.m_bodyKeepLegAnim );
+				Help( "The pelvis and legs keep the walk / idle animation (the strafe legs turn them); the rest of the body is the plain skeleton." );
+				ImGui::Checkbox( "Body follows my head (hips, spine)", &s.m_bodyIk );
+				Help( "First person. The hips drop when you crouch and the spine leans toward your head." );
+				ImGui::Checkbox( "Planted feet that step", &s.m_bodyProceduralLegs );
+				Help( "The feet stay where they are in the world and step to a new spot when the hips move away. Replaces the strafe legs." );
 			}
 			ImGui::SliderFloat( "Neck cut below eyes (m)", &s.m_fpNeckDrop, 0.05f, 0.5f, "%.2f" );
 			ImGui::SliderFloat( "Lean limit (m)", &s.m_fpLeanLimit, 0.0f, 0.5f, "%.2f" );
