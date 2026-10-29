@@ -686,6 +686,9 @@ HRESULT APIENTRY PSUOverlay::Hook_DrawPrimitiveUP( LPDIRECT3DDEVICE9 pDevice, D3
 	// A world sprite placed for this eye: hidden behind whatever is nearer (the weapon in your
 	// hand), whatever depth test the game left set for its flat screen; it never writes depth.
 	DWORD savedZEnable = 0, savedZFunc = 0, savedZWrite = 0;
+	// Rogue's Toolkit ui_sharpness "sharp" sets point filtering on the game's 2D sprite draws (it takes them
+	// for UI); magnified in the eyes, technique effects then look pixelated. Linear for world sprites.
+	DWORD savedMinFilter = D3DTEXF_LINEAR, savedMagFilter = D3DTEXF_LINEAR;
 	if( reprojectedSprite )
 	{
 		pDevice->GetRenderState( D3DRS_ZENABLE, &savedZEnable );
@@ -694,6 +697,25 @@ HRESULT APIENTRY PSUOverlay::Hook_DrawPrimitiveUP( LPDIRECT3DDEVICE9 pDevice, D3
 		pDevice->SetRenderState( D3DRS_ZENABLE, D3DZB_TRUE );
 		pDevice->SetRenderState( D3DRS_ZFUNC, D3DCMP_LESSEQUAL );
 		pDevice->SetRenderState( D3DRS_ZWRITEENABLE, FALSE );
+		pDevice->GetSamplerState( 0, D3DSAMP_MINFILTER, &savedMinFilter );
+		pDevice->GetSamplerState( 0, D3DSAMP_MAGFILTER, &savedMagFilter );
+		if( savedMinFilter == D3DTEXF_POINT || savedMagFilter == D3DTEXF_POINT )
+		{
+			static unsigned s_pointLogs = 0;
+			if( s_pointLogs < 4 )
+			{
+				++s_pointLogs;
+				PSU_LOG( "VRToolkit: eye sprite had point filtering (min=%lu mag=%lu), drawn linear\n", savedMinFilter, savedMagFilter );
+			}
+			if( savedMinFilter == D3DTEXF_POINT )
+			{
+				pDevice->SetSamplerState( 0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR );
+			}
+			if( savedMagFilter == D3DTEXF_POINT )
+			{
+				pDevice->SetSamplerState( 0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR );
+			}
+		}
 	}
 	// Pass B chrome, or DP-UP nested inside 0x793C40 — not every post-frame fullscreen blit.
 	auto &hud = PSUVR::VRHud::Get();
@@ -714,6 +736,14 @@ HRESULT APIENTRY PSUOverlay::Hook_DrawPrimitiveUP( LPDIRECT3DDEVICE9 pDevice, D3
 		pDevice->SetRenderState( D3DRS_ZENABLE, savedZEnable );
 		pDevice->SetRenderState( D3DRS_ZFUNC, savedZFunc );
 		pDevice->SetRenderState( D3DRS_ZWRITEENABLE, savedZWrite );
+		if( savedMinFilter == D3DTEXF_POINT )
+		{
+			pDevice->SetSamplerState( 0, D3DSAMP_MINFILTER, savedMinFilter );
+		}
+		if( savedMagFilter == D3DTEXF_POINT )
+		{
+			pDevice->SetSamplerState( 0, D3DSAMP_MAGFILTER, savedMagFilter );
+		}
 	}
 	if( SUCCEEDED( hr ) && capture && !captureFirst )
 	{
