@@ -276,6 +276,11 @@ namespace PSUVR
 				context.openToolkit();
 			}
 			Help( "Opens the Rogue's Toolkit settings menu (it sends the toolkit's F6 key; this window closes). "
+			ImGui::Checkbox( "Toolkit panels on the VR HUD", &s.m_toolkitOnHud );
+			Help( "Rogue's Toolkit's damage meter, drop panel, timers and menu are drawn onto the HUD panel in the headset. "
+				"They then no longer show on the flat monitor. Off: monitor only." );
+			ImGui::Checkbox( "Pointer drives the toolkit menu", &s.m_toolkitPointer );
+			Help( "While the toolkit menu is open, the right controller's pointer moves and clicks the system mouse over it." );
 				"Also on the shortcut under Controls (default Ctrl + F6, or Back + A on the pad). "
 				"Needs the toolkit installed; set its settings_pad to \"\" so Back + Start only opens VR settings." );
 		}

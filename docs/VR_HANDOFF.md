@@ -337,7 +337,67 @@ and pushed to origin `psu_vr` unless noted.
      (backups `.pre_uiscale`, `.pre_nodraw`, `.pre_nopatch`, `.bisect` in `RoguesToolkit\`).
      Note: the `StereoRenderer`/`VRHud` ret checks for other sites go through the same hooks, so they benefit too.
      The 'stereo submit miss' log is just the headset going inactive (OpenXR session state 3), not a bug.
-   - **Still untested:** F6 and the shortcut (Ctrl+F6, Back+A, panel button) in VR; toolkit panels in the headset (plan Step 3).
+   - **Toolkit panels on the HUD (plan Step 3, built + deployed 2026-10-30, UNTESTED):** the toolkit draws inside its own
+     Present hook, which sits below ours, so our back-buffer capture never saw it. `Hook_Present` (`PSUOverlay.cpp`) now
+     points the render target at the HUD user surface (`HudUserSurface`), depth off, full-surface viewport, around the real
+     `Present` call; draws that arrive meanwhile are counted (`NOTE_TOOLKIT_DRAW`) and, if any, `MarkUserContent()` is set
+     (log once: `VRToolkit: N draws inside Present went to the HUD panel`). Setting `toolkitOnHud` (default on; checkbox
+     "Toolkit panels on the VR HUD" in VR Settings > General). Side effect: toolkit panels leave the flat monitor while on.
+     Guess to verify: that the toolkit does not rebind the back buffer itself (its SetRenderTarget hook); if panels still
+     only show on the monitor, the log line is missing and its draws bypass these hooks (e.g. a different vtable/thunk).
+   - **Toolkit menu + VR pointer (built, UNTESTED):** the menu's open state cannot be observed, so `VRBindings::Poll` assumes
+     it toggles on a plain F6 (ours sent, or the real key) and closes on Esc (logs `VRToolkit: menu assumed open/closed`).
+     While assumed open and `toolkitPointer` is on (default, checkbox "Pointer drives the toolkit menu"), `VRUiPointer`
+     (`SetToolkitMenuOpen`) is wanted and `DriveSystemMouse()` moves the system cursor (panel pixel -> client pixel) and sends
+     left down/up from the trigger and wheel from the right stick, so the toolkit sees a normal mouse. Needs the game window
+     foreground. If the menu is closed by its own button the assumption is stale: press F6 twice or Esc to resync.
+   - **Update (user confirmed panels work in the headset):** the toolkit does not draw inside the real Present; it opens its own
+     scene (`BeginScene`/`EndScene` called from `toolkit_dinput8.dll`, text via `d3dx9_43.dll` DIP, DP-UP). `Hook_BeginScene` /
+     `Hook_EndScene` now detect a caller outside the game exe and this DLL (`CallerIsOther`) and redirect that scene to the HUD
+     user surface (`BeginToolkitRedirect`/`EndToolkitRedirect`), marking the panel; the Present-window path remains as fallback.
+     Log `VRToolkit: <call> from <module>` (first 24). Pointer fix (built, deploy + test pending): menu open state is now toggled
+     when WE send F6 (previously only focused physical F6 was seen, so VR never switched the pointer on); before sending F6 and
+     for the mouse, the game window is found with `VRBindings::GameWindow()` and brought to the foreground.
+   - **Fixes after the first VR test (built + deployed, untested):** (1) the free-aim reticle (and other draws of our own, e.g.
+     beams) vanished with the toolkit: `GameRet` scanned the stack for a game call site even when the caller was our own DLL
+     (`VRControllers::DrawReticle` through the device), so our draws were taken for game draws; `GameRet` now keeps the return
+     address when it is in the exe or in our DLL (`InOwnModule`). (2) The pointer could not click: `DriveSystemMouse` only
+     worked with the game window in the foreground (VR leaves it behind); now it uses `VRBindings::GameWindow()`, real mouse
+     input when that window is in front, else `PostMessage` WM_MOUSEMOVE/LBUTTON to it. Log `VRToolkit: pointer real
+     input|posted messages hit= click=` (first 12). If clicks still do nothing with "posted messages", the toolkit reads the
+     cursor itself (GetCursorPos / raw input) and needs the window in front.
+   - **Second round (built + deployed, untested):** user: reticle still missing, shortcut often did not open the menu, clicks
+     moved the cursor but did not register (log said `posted messages`: the game window was behind). Changes:
+     `VRBindings::BringGameToFront()` (AttachThreadInput + SetForegroundWindow) before sending F6 (waits up to 0.8 s for focus)
+     and, throttled to 0.4 s, from `DriveSystemMouse`, so real `mouse_event` input is used (the toolkit reads the button
+     state, not messages). Reticle hypothesis: the toolkit's `DrawPrimitiveUP` hook (UI scaling, ui_scale 2.0) moves our
+     screen-space marker verts, so `VRControllers::DrawMarkers` now draws through a one-call dynamic VB + `DrawPrimitive`
+     (`DrawVerts`). If the reticle is still missing, test toolkit `ui_scale = 1.0` to confirm the cause.
+   - **Round 2 result:** clicks and the shortcut work, our reticle is back. **Open:** a white "+" shaped flash after each free-aim
+     shot, not there without the toolkit. Hypothesis: the game's reticle pieces (layer 48 crosslines/ticks, `IsGameReticle` in
+     `VRHud.cpp`) no longer match its size thresholds because the toolkit's `ui_scale` 2.0 enlarges the game's UI. A log
+     `VRHud reticle: layer 48 piece box=…` (first 80, built, NOT yet deployed because the game was running) will show their sizes;
+     quick check: toolkit `ui_scale = 1.0` (then the flash should be gone) and tune the thresholds from the log.
+   - **"+" flash result:** persists with toolkit `ui_scale` 1.0, so not the scale. The log shows the reticle's tick sprites
+     (66x66 at y 357 / 1083, 88x50 at x 796 / 1764) sitting just outside `IsGameReticle`'s bounds (dy 363 > 0.25 h); they
+     spread further out right after a shot, so they escape the matcher for a moment. Widened in `VRHud.cpp`: square sprite
+     vertical 0.25 -> 0.4 of height, layer-48 central horizontal 0.3 -> 0.45 of width (built, NOT deployed - game was
+     running). Test: fire in manual aim; the "+" should be gone. Check nothing else got hidden while aiming.
+   - **"+" flash, correction (2026-10-30):** the widened `IsGameReticle` bounds (deployed) did NOT fix it, and the user clarifies it is
+     not a UI element: a sudden cross-shaped flash spanning the area where the shot lands, for a split second (looks like a
+     world impact sprite / glare star in the eyes). Not `ui_scale` (same at 1.0). Glare layer counters are 0 and `eyeGlare` is off,
+     so not the TGlare blend. Suspects: an impact/muzzle sprite whose draw site is no longer recognized because the toolkit sits
+     between the game and our hooks (`GAME_RET` stack scan may pick a wrong or stale game call site), or a draw path the toolkit
+     reroutes. Next: (1) confirm by renaming `toolkit_dinput8.dll` -> `.off` (cross should vanish); (2) find the draw with the
+     Debug draw-site bisect (Ctrl+Shift+Insert / Delete) while shooting; (3) check its return address against what `GAME_RET()`
+     reports (log both); `VREffect: new #N other ret=…` lines show every new site.
+   - **Motion-controller shortcut (built + deployed, untested):** both grips + left stick pushed up (>0.8, once per push) sends
+     `VRAction::ToggleToolkitMenu` (`VRSyntheticPad.cpp` before the layout loop; `VRMotionLayout` entry so the label cards and
+     diagram show it; `VR_GUIDE.md`).
+   - **Pending tests (Step 3 / Test E):** VR on, toolkit enabled: damage meter / drop panel / timers / HP bars visible on
+     the HUD panel and readable; Ctrl+F6, pad Back+A and the General-tab button open the menu; menu visible in the headset
+     and operable with the right controller (hover, click, scroll); `tools/lastlog.sh VRToolkit`. Toolkit `ui_scale` 2.0
+     and `panel_x/y` are in game pixels: check placement on the panel. Not done: motion-controller gesture.
 
 ## Features done this stretch (all toggles in the VR settings panel)
 

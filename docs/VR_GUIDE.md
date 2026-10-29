@@ -141,7 +141,7 @@ Your own head is cut away so you don't see inside it; your hands, body and legs 
 | Grip | L1 | R1 |
 | Trigger | L2, or that hand's weapon (see below) | R2, or that hand's weapon |
 
-**Hold both grips** for VR shortcuts: + Cross recenter, + Circle first / third person, + Square VR settings, + Triangle pause VR, + left stick click switches the left stick to the D-pad (it switches by itself in menus, shops and the weapon palette), + right stick click R3, + **both triggers: hand calibration**. Left grip + left stick click is L3.
+**Hold both grips** for VR shortcuts: + Cross recenter, + Circle first / third person, + Square VR settings, + Triangle pause VR, + left stick click switches the left stick to the D-pad (it switches by itself in menus, shops and the weapon palette), + right stick click R3, + **left stick pushed up: Rogue's Toolkit menu** (with the toolkit installed; also Ctrl+F6, Back + A, or the VR Settings button), + **both triggers: hand calibration**. Left grip + left stick click is L3.
 
 **Fighting.** Each hand uses the weapon the game puts in it:
 

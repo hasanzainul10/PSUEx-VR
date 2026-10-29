@@ -2,6 +2,8 @@
 
 #include "VRSettings.h"
 
+#include <Windows.h>
+
 namespace PSUVR
 {
 	// Runtime side of the VR shortcuts in Config::vr.m_bindings: keyboard keys and
@@ -12,6 +14,11 @@ namespace PSUVR
 
 		// Actions pressed this frame. Keys only count while the game window has focus.
 		unsigned Poll( bool windowFocused );
+
+		// The game's main window (largest visible top-level window of this process), or null.
+		HWND GameWindow();
+		// Brings the game window to the foreground (VR leaves it behind). True once it is in front.
+		bool BringGameToFront();
 
 		// Applies the toggles in `actions` (camera mode, pause, snap turn, HUD follow,
 		// settings panel request) and shows their toasts. Recenter is applied by the caller.

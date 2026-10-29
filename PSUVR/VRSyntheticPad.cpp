@@ -1430,6 +1430,18 @@ namespace PSUVR
 			const bool rightGripPa = Config::Get().vr.m_gripPhotonArt && roles.Any( 1 );
 			if( r1 && !modifier && !freeAim && !rightGripPa ) pad.buttons |= Bit( kPadR1 );
 			if( s_leftClickL3 ) pad.buttons |= Bit( kPadL3 );
+			// Both grips + left stick pushed up (once per push): the Rogue's Toolkit menu.
+			{
+				static bool s_toolkitStickUp = false;
+				const bool up = modifier && hands[ 0 ]->stick[ 1 ] > 0.8f;
+				if( up && !s_toolkitStickUp )
+				{
+					s_actions |= 1u << static_cast< int >( VRAction::ToggleToolkitMenu );
+					Buzz( 0 );
+					Buzz( 1 );
+				}
+				s_toolkitStickUp = up;
+			}
 			for( const VRMotionLayout::Entry &entry : VRMotionLayout::kLayout )
 			{
 				if( entry.control == Control::Grip || entry.control == Control::Stick )

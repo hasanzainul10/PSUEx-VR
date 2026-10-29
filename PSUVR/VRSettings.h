@@ -81,6 +81,11 @@ struct VRSettings
 	// Menu overlays bigger than the screen (mission menu scanlines) go on the menu panel in their
 	// draw order instead of being dropped as a background.
 	bool m_hudOverlays = true;
+	// Rogue's Toolkit panels and menu (drawn inside its Present hook) go on the HUD panel in the headset
+	// instead of only the monitor's back buffer. They then no longer show on the flat monitor.
+	bool m_toolkitOnHud = true;
+	// The VR UI pointer drives the Rogue's Toolkit menu (moves and clicks the system mouse over it).
+	bool m_toolkitPointer = true;
 	// Degrees the head may look away before the panel glides back in front.
 	float m_hudFollowAngle = 35.0f;
 	// How far below eye level the panel sits (meters).

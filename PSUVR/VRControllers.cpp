@@ -161,6 +161,25 @@ namespace PSUVR
 			DWORD m_stage[ kStages ]{};
 		};
 
+		// Rogue's Toolkit hooks DrawPrimitiveUP (its UI scaling) and moves our screen-space pixels, so the markers go
+		// through a vertex buffer and DrawPrimitive instead; the buffer lives for one DrawMarkers call.
+		IDirect3DVertexBuffer9 *s_markerVb = nullptr;
+
+		void DrawVerts( IDirect3DDevice9 *device, D3DPRIMITIVETYPE type, UINT primitives, const Vertex *verts, UINT vertexCount )
+		{
+			const UINT bytes = vertexCount * sizeof( Vertex );
+			void *data = nullptr;
+			if( s_markerVb && bytes <= 4096 && SUCCEEDED( s_markerVb->Lock( 0, bytes, &data, D3DLOCK_DISCARD ) ) )
+			{
+				memcpy( data, verts, bytes );
+				s_markerVb->Unlock();
+				device->SetStreamSource( 0, s_markerVb, 0, sizeof( Vertex ) );
+				device->DrawPrimitive( type, 0, primitives );
+				return;
+			}
+			device->DrawPrimitiveUP( type, primitives, verts, sizeof( Vertex ) );
+		}
+
 		// Filled circle (triangle fan).
 		void DrawDisc( IDirect3DDevice9 *device, float cx, float cy, float radius, DWORD color )
 		{
@@ -172,7 +191,7 @@ namespace PSUVR
 				const float a = 6.2831853f * static_cast< float >( i ) / kSegments;
 				fan[ i + 1 ] = { cx + std::cos( a ) * radius, cy + std::sin( a ) * radius, 0.0f, 1.0f, color };
 			}
-			device->DrawPrimitiveUP( D3DPT_TRIANGLEFAN, kSegments, fan, sizeof( Vertex ) );
+			DrawVerts( device, D3DPT_TRIANGLEFAN, kSegments, fan, kSegments + 2 );
 		}
 
 		// Ring + centre dot (with a dark outline so it reads on bright and dark backgrounds).
@@ -188,7 +207,7 @@ namespace PSUVR
 				strip[ i * 2 + 0 ] = { cx + c * inner, cy + s * inner, 0.0f, 1.0f, color };
 				strip[ i * 2 + 1 ] = { cx + c * outer, cy + s * outer, 0.0f, 1.0f, color };
 			}
-			device->DrawPrimitiveUP( D3DPT_TRIANGLESTRIP, kSegments * 2, strip, sizeof( Vertex ) );
+			DrawVerts( device, D3DPT_TRIANGLESTRIP, kSegments * 2, strip, ( kSegments + 1 ) * 2 );
 		}
 
 		// Free aim shot start relative to the player (game world units), from the last free aim bullet.
@@ -232,7 +251,7 @@ namespace PSUVR
 			const Vertex strip[ 4 ] = {
 				{ x0 + nx, y0 + ny, 0.0f, 1.0f, color }, { x0 - nx, y0 - ny, 0.0f, 1.0f, color },
 				{ x1 + nx, y1 + ny, 0.0f, 1.0f, color }, { x1 - nx, y1 - ny, 0.0f, 1.0f, color } };
-			device->DrawPrimitiveUP( D3DPT_TRIANGLESTRIP, 2, strip, sizeof( Vertex ) );
+			DrawVerts( device, D3DPT_TRIANGLESTRIP, 2, strip, 4 );
 		}
 
 		void DrawReticle( IDirect3DDevice9 *device, float cx, float cy, float radius, bool firing )
@@ -394,6 +413,25 @@ namespace PSUVR
 			}
 
 			OverlayState state( device );
+			struct VbScope
+			{
+				explicit VbScope( IDirect3DDevice9 *d )
+				{
+					if( FAILED( d->CreateVertexBuffer( 4096, D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY, D3DFVF_XYZRHW | D3DFVF_DIFFUSE,
+							D3DPOOL_DEFAULT, &s_markerVb, nullptr ) ) )
+					{
+						s_markerVb = nullptr;
+					}
+				}
+				~VbScope()
+				{
+					if( s_markerVb )
+					{
+						s_markerVb->Release();
+						s_markerVb = nullptr;
+					}
+				}
+			} markerVb( device );
 			// Pointing at the PSUEx overlay: a beam from the right controller to the panel.
 			float beamFrom[ 3 ], beamTo[ 3 ];
 			bool beamHit = false;

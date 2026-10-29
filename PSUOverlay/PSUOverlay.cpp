@@ -375,9 +375,29 @@ static __forceinline bool InGameExe( uintptr_t a )
 	return a >= 0x00401000 && a < 0x00B00000;
 }
 
+// Our own DLL's image: its draws (controller reticle, beams, overlay) must keep their own return address,
+// not be mistaken for a game draw site found further up the stack.
+static bool InOwnModule( uintptr_t a )
+{
+	static uintptr_t s_base = 0, s_end = 0;
+	if( !s_base )
+	{
+		HMODULE self = nullptr;
+		if( GetModuleHandleExA( GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+				reinterpret_cast< LPCSTR >( &InOwnModule ), &self ) )
+		{
+			const auto *dos = reinterpret_cast< const IMAGE_DOS_HEADER * >( self );
+			const auto *nt = reinterpret_cast< const IMAGE_NT_HEADERS * >( reinterpret_cast< const char * >( self ) + dos->e_lfanew );
+			s_base = reinterpret_cast< uintptr_t >( self );
+			s_end = s_base + nt->OptionalHeader.SizeOfImage;
+		}
+	}
+	return a >= s_base && a < s_end;
+}
+
 static __forceinline void *GameRet( void *returnAddressSlot, void *ret )
 {
-	if( InGameExe( reinterpret_cast< uintptr_t >( ret ) ) )
+	if( InGameExe( reinterpret_cast< uintptr_t >( ret ) ) || InOwnModule( reinterpret_cast< uintptr_t >( ret ) ) )
 	{
 		return ret;
 	}
@@ -401,6 +421,97 @@ static __forceinline void *GameRet( void *returnAddressSlot, void *ret )
 }
 #define GAME_RET() GameRet( _AddressOfReturnAddress(), _ReturnAddress() )
 
+// Draws issued while the real Present runs: that is Rogue's Toolkit drawing its panels and menu from its
+// Present hook (it sits below ours). Counted so the HUD panel is only marked when it actually drew.
+static bool s_inToolkitPresent = false;
+static unsigned s_toolkitPresentDraws = 0;
+typedef HRESULT( APIENTRY *RtFn )( LPDIRECT3DDEVICE9, DWORD, IDirect3DSurface9 * );
+typedef HRESULT( APIENTRY *VpFn )( LPDIRECT3DDEVICE9, CONST D3DVIEWPORT9 * );
+static bool s_toolkitScene = false;
+static IDirect3DSurface9 *s_toolkitSavedRt = nullptr;
+static IDirect3DSurface9 *s_toolkitSavedDs = nullptr;
+static D3DVIEWPORT9 s_toolkitSavedVp{};
+
+// A caller that is neither the game nor this DLL: Rogue's Toolkit (or D3DX working for it).
+static bool CallerIsOther( void *ret )
+{
+	if( InGameExe( reinterpret_cast< uintptr_t >( ret ) ) )
+	{
+		return false;
+	}
+	HMODULE self = nullptr;
+	GetModuleHandleExA( GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+		reinterpret_cast< LPCSTR >( &CallerIsOther ), &self );
+	HMODULE caller = nullptr;
+	GetModuleHandleExA( GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+		reinterpret_cast< LPCSTR >( ret ), &caller );
+	return caller != self;
+}
+
+// Log where the toolkit's calls come from (first few), to find its drawing path.
+static void LogToolkitCall( const char *what, void *ret )
+{
+	static unsigned s_logged = 0;
+	if( s_logged >= 24 )
+	{
+		return;
+	}
+	HMODULE caller = nullptr;
+	char name[ MAX_PATH ] = "?";
+	if( GetModuleHandleExA( GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+			reinterpret_cast< LPCSTR >( ret ), &caller ) )
+	{
+		GetModuleFileNameA( caller, name, MAX_PATH );
+	}
+	++s_logged;
+	PSU_LOG( "VRToolkit: %s from %s (ret %p) inPresent=%d inScene=%d\n", what, name, ret, s_inToolkitPresent ? 1 : 0,
+		s_toolkitScene ? 1 : 0 );
+}
+
+// Point drawing at the HUD panel (and back).
+static bool BeginToolkitRedirect( IDirect3DDevice9 *pDevice, RtFn setRt, VpFn setVp )
+{
+	auto &hud = PSUVR::VRHud::Get();
+	PSUVR::D3D11Bridge *bridge = PSUVR::System::Get().StereoBridge();
+	IDirect3DSurface9 *hudSurface = bridge ? bridge->HudUserSurface() : nullptr;
+	if( !Config::Get().vr.m_enabled || !Config::Get().vr.m_toolkitOnHud || !hud.Active() || !hudSurface )
+	{
+		return false;
+	}
+	D3DSURFACE_DESC desc{};
+	hudSurface->GetDesc( &desc );
+	pDevice->GetRenderTarget( 0, &s_toolkitSavedRt );
+	pDevice->GetDepthStencilSurface( &s_toolkitSavedDs );
+	pDevice->GetViewport( &s_toolkitSavedVp );
+	setRt( pDevice, 0, hudSurface );
+	pDevice->SetDepthStencilSurface( nullptr );
+	const D3DVIEWPORT9 vp{ 0, 0, desc.Width, desc.Height, 0.0f, 1.0f };
+	setVp( pDevice, &vp );
+	return true;
+}
+
+static void EndToolkitRedirect( IDirect3DDevice9 *pDevice, RtFn setRt, VpFn setVp )
+{
+	setRt( pDevice, 0, s_toolkitSavedRt );
+	pDevice->SetDepthStencilSurface( s_toolkitSavedDs );
+	setVp( pDevice, &s_toolkitSavedVp );
+	if( s_toolkitSavedRt )
+	{
+		s_toolkitSavedRt->Release();
+		s_toolkitSavedRt = nullptr;
+	}
+	if( s_toolkitSavedDs )
+	{
+		s_toolkitSavedDs->Release();
+		s_toolkitSavedDs = nullptr;
+	}
+}
+
+#define NOTE_TOOLKIT_DRAW( name ) do { \
+	if( s_inToolkitPresent ) { ++s_toolkitPresentDraws; } \
+	if( ( s_inToolkitPresent || s_toolkitScene ) && CallerIsOther( _ReturnAddress() ) ) { LogToolkitCall( name, _ReturnAddress() ); } \
+} while( 0 )
+
 #ifdef _DEBUG
 // Where a screen-space draw happens, for the VREffect log: 0 eye pass, 1 pass B / UI, 2 other.
 static int EffectDrawWhere()
@@ -412,6 +523,7 @@ static int EffectDrawWhere()
 
 HRESULT APIENTRY PSUOverlay::Hook_DrawPrimitive( LPDIRECT3DDEVICE9 pDevice, D3DPRIMITIVETYPE PrimitiveType, UINT StartVertex, UINT PrimitiveCount )
 {
+	NOTE_TOOLKIT_DRAW( "DrawPrimitive" );
 #ifdef _DEBUG
 	PSUVR::StereoRenderer::CountLayerDraw( GAME_RET() );
 #endif
@@ -456,6 +568,7 @@ HRESULT APIENTRY PSUOverlay::Hook_SetVertexShaderConstantF( LPDIRECT3DDEVICE9 pD
 
 HRESULT APIENTRY PSUOverlay::Hook_DrawIndexedPrimitive( LPDIRECT3DDEVICE9 pDevice, D3DPRIMITIVETYPE PrimitiveType, INT BaseVertexIndex, UINT MinIndex, UINT NumVertices, UINT StartIndex, UINT PrimitiveCount )
 {
+	NOTE_TOOLKIT_DRAW( "DrawIndexedPrimitive" );
 #ifdef _DEBUG
 	PSUVR::StereoRenderer::CountLayerDraw( GAME_RET() );
 #endif
@@ -500,6 +613,7 @@ HRESULT APIENTRY PSUOverlay::Hook_DrawIndexedPrimitive( LPDIRECT3DDEVICE9 pDevic
 
 HRESULT APIENTRY PSUOverlay::Hook_DrawPrimitiveUP( LPDIRECT3DDEVICE9 pDevice, D3DPRIMITIVETYPE PrimitiveType, UINT PrimitiveCount, const void *pVertexStreamZeroData, UINT VertexStreamZeroStride )
 {
+	NOTE_TOOLKIT_DRAW( "DrawPrimitiveUP" );
 #ifdef _DEBUG
 	PSUVR::StereoRenderer::CountLayerDraw( GAME_RET() );
 #endif
@@ -584,6 +698,7 @@ HRESULT APIENTRY PSUOverlay::Hook_DrawPrimitiveUP( LPDIRECT3DDEVICE9 pDevice, D3
 
 HRESULT APIENTRY PSUOverlay::Hook_DrawIndexedPrimitiveUP( LPDIRECT3DDEVICE9 pDevice, D3DPRIMITIVETYPE Type, UINT MinVertexIndex, UINT NumVertices, UINT PrimitiveCount, const void *pIndexData, D3DFORMAT IndexDataFormat, const void *pVertexStreamZeroData, UINT VertexStreamZeroStride )
 {
+	NOTE_TOOLKIT_DRAW( "DrawIndexedPrimitiveUP" );
 #ifdef _DEBUG
 	PSUVR::StereoRenderer::CountLayerDraw( GAME_RET() );
 #endif
@@ -618,6 +733,18 @@ void PrintMatrix( const Matrix4x4 &matrix, const char *name )
 
 HRESULT APIENTRY PSUOverlay::Hook_BeginScene( LPDIRECT3DDEVICE9 pDevice )
 {
+	// A scene opened by Rogue's Toolkit (not the game, not us): its panels and menu draw into it, so point the
+	// scene at the HUD panel until its EndScene (vr.toolkitOnHud).
+	if( !s_toolkitScene && !s_inToolkitPresent && CallerIsOther( _ReturnAddress() ) )
+	{
+		LogToolkitCall( "BeginScene", _ReturnAddress() );
+		const HRESULT hr = m_pOriginalBeginScene( pDevice );
+		if( SUCCEEDED( hr ) && BeginToolkitRedirect( pDevice, m_pOriginalSetRenderTarget, m_pOriginalSetViewport ) )
+		{
+			s_toolkitScene = true;
+		}
+		return hr;
+	}
 	FrameTrace::OnBeginScene( GAME_RET() );
 	return m_pOriginalBeginScene( pDevice );
 }
@@ -629,6 +756,16 @@ HRESULT APIENTRY PSUOverlay::Hook_EndScene( LPDIRECT3DDEVICE9 pDevice )
 	{
 		s_logged = true;
 		PSU_LOG( "EndScene hooked (first call) device=%p\n", pDevice );
+	}
+
+	if( s_toolkitScene && CallerIsOther( _ReturnAddress() ) )
+	{
+		LogToolkitCall( "EndScene", _ReturnAddress() );
+		const HRESULT hr = m_pOriginalEndScene( pDevice );
+		EndToolkitRedirect( pDevice, m_pOriginalSetRenderTarget, m_pOriginalSetViewport );
+		s_toolkitScene = false;
+		PSUVR::VRHud::Get().MarkUserContent();
+		return hr;
 	}
 
 	FrameTrace::OnEndScene( GAME_RET() );
@@ -758,7 +895,31 @@ HRESULT APIENTRY PSUOverlay::Hook_Present( LPDIRECT3DDEVICE9 pDevice, const RECT
 	HRESULT hr;
 	{
 		PSUVR::VRPerf::Scope timer( PSUVR::VRPerf::Stage::Present );
+		// Rogue's Toolkit draws its panels and menu inside its Present hook, below this one. In stereo the headset
+		// never shows the back buffer, so point that drawing at the HUD panel (vr.toolkitOnHud).
+		auto &hud = PSUVR::VRHud::Get();
+		const bool toHud = BeginToolkitRedirect( pDevice, m_pOriginalSetRenderTarget, m_pOriginalSetViewport );
+		if( toHud )
+		{
+			s_toolkitPresentDraws = 0;
+			s_inToolkitPresent = true;
+		}
 		hr = m_pOriginalPresent( pDevice, pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion );
+		if( toHud )
+		{
+			s_inToolkitPresent = false;
+			EndToolkitRedirect( pDevice, m_pOriginalSetRenderTarget, m_pOriginalSetViewport );
+			if( s_toolkitPresentDraws > 0 )
+			{
+				hud.MarkUserContent();
+				static bool s_loggedToolkit = false;
+				if( !s_loggedToolkit )
+				{
+					s_loggedToolkit = true;
+					PSU_LOG( "VRToolkit: %u draws inside Present went to the HUD panel\n", s_toolkitPresentDraws );
+				}
+			}
+		}
 	}
 	{
 		PSUVR::VRPerf::Scope timer( PSUVR::VRPerf::Stage::Submit );

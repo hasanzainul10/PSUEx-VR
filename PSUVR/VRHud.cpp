@@ -827,7 +827,7 @@ namespace PSUVR
 			const float w = maxX - minX;
 			const float h = maxY - minY;
 			const bool squareSprite = w > gw * 0.02f && w < gw * 0.15f && h > w * 0.7f && h < w * 1.4f;
-			if( squareSprite && std::fabs( cx - gw * 0.5f ) < gw * 0.2f && std::fabs( cy - gh * 0.5f ) < gh * 0.25f )
+			if( squareSprite && std::fabs( cx - gw * 0.5f ) < gw * 0.2f && std::fabs( cy - gh * 0.5f ) < gh * 0.4f )
 			{
 				return true;
 			}
@@ -836,9 +836,17 @@ namespace PSUVR
 			{
 				return false;
 			}
+			// Every layer-48 piece the matcher sees while aiming (first 80), to tune it with the toolkit's UI scale.
+			static unsigned s_reticleLogs = 0;
+			if( s_reticleLogs < 80 )
+			{
+				++s_reticleLogs;
+				PSU_LOG( "VRHud reticle: layer 48 piece box=(%.0f,%.0f)-(%.0f,%.0f) w=%.0f h=%.0f of %ux%u\n", minX, minY, maxX, maxY,
+					w, h, width, height );
+			}
 			// Around the centre (ring, corners, ticks), or a thin bar on one of the screen's
 			// centre lines (the four lines reach out to the edges).
-			const bool central = w < gw * 0.6f && std::fabs( cx - gw * 0.5f ) < gw * 0.3f && std::fabs( cy - gh * 0.5f ) < gh * 0.35f;
+			const bool central = w < gw * 0.6f && std::fabs( cx - gw * 0.5f ) < gw * 0.45f && std::fabs( cy - gh * 0.5f ) < gh * 0.35f;
 			const bool crossLine = ( std::fabs( cx - gw * 0.5f ) < gw * 0.02f && w < gw * 0.03f ) ||
 				( std::fabs( cy - gh * 0.5f ) < gh * 0.03f && h < gh * 0.04f );
 			if( !central && !crossLine )
