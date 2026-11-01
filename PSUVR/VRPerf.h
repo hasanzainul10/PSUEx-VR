@@ -94,5 +94,19 @@ namespace PSUVR
 
 		// Draws the overlay window (inside the ImGui frame).
 		void DrawOverlay();
+
+		// Phase 4 probe counters (cumulative; the log line shows them per window). Counted
+		// whether or not the overlay is on.
+		enum class Counter : int
+		{
+			ShadowPass,     // PSU_ShadowBegin calls
+			ShadowPassEye,  // ... of them inside an eye pass
+			BufferRemap,    // MANAGED VB / IB remapped to DEFAULT|DYNAMIC (created)
+			BufferRemapKB,  // their size
+			BufferLock,     // Lock calls on remapped buffers
+			BufferLockKB,   // bytes locked (0 = whole buffer, counted as its size)
+			Count
+		};
+		void Count( Counter counter, uint32_t amount = 1 );
 	}
 }

@@ -936,8 +936,6 @@ namespace PSUVR
 		constexpr float kStepSeconds = 0.28f;
 		constexpr float kStepLift = 0.9f;
 		constexpr float kStepDistance = 2.5f;
-		// The body sits this far behind the eye (game units) so the camera isn't inside the neck and shoulders.
-		constexpr float kEyeAheadOfNeck = 2.0f;
 		constexpr float kLeanLimit = 40.0f * ( kPi / 180.0f );
 		struct Foot
 		{
@@ -1013,7 +1011,8 @@ namespace PSUVR
 			if( upper && headWorld )
 			{
 				const D3DXVECTOR3 target = D3DXVECTOR3( headWorld[ 0 ], headWorld[ 1 ], headWorld[ 2 ] ) -
-					D3DXVECTOR3( 0.0f, Config::Get().vr.m_fpNeckDrop * VRCamera::kGameUnitsPerMeter, 0.0f ) - forward * kEyeAheadOfNeck;
+					D3DXVECTOR3( 0.0f, Config::Get().vr.m_bodyNeckDrop * VRCamera::kGameUnitsPerMeter, 0.0f ) -
+					forward * ( Config::Get().vr.m_bodyBack * VRCamera::kGameUnitsPerMeter );
 				const D3DXVECTOR3 neck = ToWorld( world, Position( out, kNeckBone ) );
 				const D3DXVECTOR3 d = target - neck;
 				// Hips: the neck goes straight under the head; the spine only takes up what is left.
@@ -1109,8 +1108,9 @@ namespace PSUVR
 					}
 					D3DXVECTOR3 miss = home[ i ] - f.planted;
 					miss.y = 0.0f;
-					const D3DXVECTOR3 reach = pelvis - D3DXVECTOR3( f.planted.x, groundY + ankleHeight, f.planted.z );
-					const bool tooFar = D3DXVec3Length( &reach ) > legLength * 0.97f && !otherStepping;
+					// Stretched leg: measured from the hip joint, and only worth a step if it lands somewhere else.
+					const D3DXVECTOR3 reach = ToWorld( world, Position( out, kLegs[ i ].upper ) ) - D3DXVECTOR3( f.planted.x, groundY + ankleHeight, f.planted.z );
+					const bool tooFar = D3DXVec3Length( &reach ) > legLength * 1.02f && D3DXVec3Length( &miss ) > 0.6f * fit && !otherStepping;
 					// Standing still: settle back to shoulder width instead of staying wherever the last step ended.
 					const bool settle = s_idleSeconds > 0.5f && !f.settled && D3DXVec3Length( &miss ) > 1.5f * fit;
 					if( ( ( D3DXVec3Length( &miss ) > kStepDistance * fit || settle ) && !otherStepping ) || tooFar )
@@ -1188,6 +1188,11 @@ namespace PSUVR
 
 		void Apply( void *model, float *out, const uint8_t *skeleton )
 		{
+			// VR paused: the game's own animations, as in the vanilla game.
+			if( !Config::Get().vr.m_enabled || Config::Get().vr.m_paused )
+			{
+				return;
+			}
 			const bool restPose = Config::Get().vr.m_bodyRestPose;
 			if( restPose )
 			{

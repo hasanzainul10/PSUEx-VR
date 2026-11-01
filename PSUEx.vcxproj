@@ -194,6 +194,7 @@
     <ClInclude Include="PSUDetour\Hook_GameFlags.hpp" />
     <ClInclude Include="PSUDetour\Hook_TCameraTaskPlay.hpp" />
     <ClInclude Include="PSUVR\VRHands.h" />
+    <ClInclude Include="PSUVR\VRHolster.h" />
     <ClInclude Include="PSUVR\VRControllerSim.h" />
     <ClInclude Include="PSUDetour\Hook_0074B760_BonePose.hpp" />
     <ClInclude Include="PSUDetour\Hook_005089C0_NearCull.hpp" />
@@ -309,6 +310,7 @@
     <ClCompile Include="PSUVR\VRSettings.cpp" />
     <ClCompile Include="PSUVR\VRPlayerDraw.cpp" />
     <ClCompile Include="PSUVR\VRHands.cpp" />
+    <ClCompile Include="PSUVR\VRHolster.cpp" />
     <ClCompile Include="PSUVR\VRControllerSim.cpp" />
     <ClCompile Include="PSUOverlay\ImageMng.cpp" />
     <ClCompile Include="PSUOverlay\Interface\CameraDisplay.cpp" />

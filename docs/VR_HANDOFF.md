@@ -119,6 +119,11 @@ and pushed to origin `psu_vr` unless noted.
    palette"); no player-side use function and no readable slot contents, so there is no direct call and no
    item-name matching ("Monomate") yet. Game folder: Debug DLL + `PSUExVRConfig.exe` deployed, settings
    files untouched (`voiceItems` off).
+   **2026-10-31 changes:** route `auto` now = the held button's behaviour (command if it matches, else
+   chat; no more "ignored: no weapon out"); route `command` drops unmatched speech and matches by sound
+   (`Skeleton()` consonant key, +-1 on it, 2 letters off for 6+ letter names) plus element words (fire, ice,
+   thunder, lightning, dark, heal for the first technique of each element). Chat sender now calls the game's
+   text proc `0x004C9070` directly (the overlay hook was eating posted WM_CHARs; chat confirmed working).
    **Pending tests:** (1) regression: techniques by voice exactly as before. (2) Turn on *Voice items*,
    Always listening, route Command; with a palette item set say "item two" -> `tools/lastlog.sh VRVoice`
    shows `pad script ... (item 2 = Right)`, `done` or `aborted: the palette never opened`. Watch what the
@@ -324,6 +329,69 @@ and pushed to origin `psu_vr` unless noted.
    "local"** (built Debug + Release; the game folder's settings files already say "local"). Eye resolution scale and
    presets work; the scale barely changes GPU time on this PC (not fill-bound). Phase 3 done; not committed.
    **Next:** phase 4 (separate plan): shadows once per frame, D3D9Ex MANAGED->DYNAMIC remap, the game's frame cap.
+   **Phase 4 RE (2026-10-30, Ghidra; details in `docs/ADDRESS_MAP.md`):**
+   - Shadows: the light camera is built from the game's camera slot, which the eye passes don't move, so both eyes
+     would get the same shadow map. But `PSU_ShadowEnd` restores the game camera through `0x0048CC00`, which calls
+     `PSU_SetProjectionMatrix` with the **flat** projection: with shadows on, the rest of each eye pass would draw with the
+     wrong projection, and the casters go into the shadow map through our eye VIEW. Shadows were off in the game options
+     so far (user, 2026-10-30), which is why nobody saw it.
+   - Frame cap: `0x009CA780` = the game's fps setting (`0x004700A0` sets it; ~200 readers scale frame counts by it,
+     many callers switch it). Logic is frame-counted -> no change planned; the LOCAL layer covers 60 -> 90 Hz.
+   - Buffers: every MANAGED VB / IB becomes DEFAULT|DYNAMIC (`RemapManagedBuffer`); lock frequency was unknown.
+   **Step 1 probe built (Debug + Release) and deployed 2026-10-30 22:09 (Debug `PSUExD.dll` + `PSUExVRConfig.exe`, Release
+   `PSUExVR.dll`); log only, no behaviour change, no settings.** `Perf 5 s:` lines end with
+   `| probe shadow N/frame (eyes N), gameFps N, buffers +N (MB, total N MB), locks N/s KB/s`. Counters:
+   `Hook_ShadowBegin` (`0x005E3630`, `Hook_FrameRender.hpp`; logs `Shadow: first shadow pass (flat|eye pass)` once);
+   remapped VB / IB are tagged with private data and a Lock hook on their vtables (index 11) counts their locks
+   (`D3D9ExCompat.cpp`, logs `D3D9ExCompat: buffer Lock counter on vtable`).
+   **Pending test:** turn shadows on in the game options, `perfOverlay` on (it is, both files): town ~1 min, field mission
+   ~1 min, then `tools/lastlog.sh -a -n 0 'Perf 5 s'` and `tools/lastlog.sh 'Shadow:|Lock counter'`. Expected: shadow
+   ~2/frame in stereo (two eye passes; mirror on), and check the headset for wrong-looking shadows or a mono/flat
+   projection after the shadows. Decide from it: locks ~0 after load -> `perfStaticBuffers` (S); shadows running ->
+   fix the eye projection, then `perfShadowOnce` (W).
+   **Probe result (2026-10-31, Debug, shadows on): "VR doesn't look right anymore with shadows on"** (as predicted).
+   `shadow 2.00/frame (eyes 2.00)` in stereo, `gameFps 60` throughout, GPU eyes ~1.0-1.1 ms each with shadows.
+   **Remapped buffers: total 0** (no `remapped CreateVertexBuffer` line either): the game creates no MANAGED VB / IB, so
+   candidate 2 (static buffers) is dropped; the Lock counter stays as a probe.
+   **Shadow eye fix built (Debug + Release) and deployed 2026-10-31 01:15:** `Hook_ShadowBegin` (in an eye pass) saves the
+   device VIEW / PROJECTION and sets VIEW to identity for the casters; `Hook_ShadowEnd` (`0x005E37B0`, new detour) puts the
+   eye matrices back after the game restores its flat projection. **Pending test:** shadows on, town + field: does the
+   headset look right again, and do the shadows sit under people / stay put when turning the head? If shadows swim with
+   head rotation, the receivers' shadow lookup uses camera-space texgen and needs the eye delta in the texture transform.
+   **Result (2026-10-31): town fine, field mission still broken the same way.** Shadows run in the eye passes there too
+   (2/frame), so something else sets VIEW / PROJECTION mid eye pass in missions. **Diagnostic built + deployed 01:22:**
+   `PSUOverlay::Hook_SetTransform` logs each game call site (ret in 0x400000-0xA00000) that sets VIEW / PROJ inside an eye
+   pass once: `EyeTransform: game sets VIEW|PROJ in an eye pass, ret=... layer 0x.. mode .. | stack ...` (8 dwords above the
+   return; `0x0074ADAA` = the `PSU_SetProjectionMatrix` wrapper, its caller is in the stack dump). Known: the shadow
+   bracket's own calls. **Pending test:** mission with shadows on ~30 s, then `tools/lastlog.sh 'EyeTransform|Shadow:'`.
+   **Result (2026-10-31 01:27):** only `ret=0074ADAA` from `0x0048CC2F` (the shadow end, already handled), so no camera reset
+   in missions; user: "some textures are following the head". **Cause (Ghidra):** field-map nodes get an extra
+   vertex-shader shadow-receive pass; its callback `0x0055BB60` uploads the node's flat world-view-projection to c12
+   (see ADDRESS_MAP). **Fix (built Debug + Release, deployed 2026-10-31 01:35):**
+   `StereoRenderer::EyeShadowReceiverWvp` rebuilds c12 per eye (flat x inv game PROJ x inv game VIEW x eye VIEW x eye
+   PROJ) in `Hook_SetVertexShaderConstantF`; logs once `ShadowRecv: eye WVP rebuilt ... col4 = 0 0 0 1` (that column
+   proves c12 = model-view x game PROJ; anything else = wrong guess). The `EyeTransform:` diagnostic stays until the
+   user confirms missions look right, then remove it (`PSUOverlay::Hook_SetTransform`).
+   **`perfShadowOnce` (W) built, default off:** right eye skips `PSU_ShadowBegin`, layer 2 (disabled byte, restored in
+   the end hook) and `PSU_ShadowEnd`, reusing the left eye's map and shadow obj `+0x40` (eye-independent light camera;
+   receivers read only `+0x40` and the map). Checkbox "Draw shadows once for both eyes" (Performance tab), letter `W`
+   after `M` in the `fast` field. Log once: `Shadow: right eye reuses the left eye's shadow map (perfShadowOnce)`.
+   Expected: probe `shadow 1.00/frame (eyes 1.00)` and lower GPU eyeR with W.
+   **Pending tests:** (1) mission + town, shadows on, W off: textures no longer follow the head, shadows sit under
+   things; `tools/lastlog.sh 'ShadowRecv|EyeTransform|Shadow:'`. (2) A/B W off / on ~1 min each in the same spot:
+   `tools/lastlog.sh -a -n 0 'Perf 5 s'`; with W the right eye's shadows must match the left (no shadow swimming).
+   **Result (2026-10-31 ~01:50, W off):** `ShadowRecv ... col4 = 0.000 0.000 0.000 1.000` (c12 guess confirmed), one eye
+   right, the other eye's shadow-receive layer drawn in the wrong place. Cause: `0x0055BB60` uploads c12 only while
+   `[0xB9DB09]` is 0; the node update `0x0055B280` clears it once per frame, so eye 2 kept eye 1's c12. **Fix deployed
+   01:55:** `RenderEyes` clears `0xB9DB09` before each eye pass. **Pending:** same test 1 + 2 again.
+   **Result (2026-10-31, user):** W on: both eyes' shadows correct. W off: the LEFT eye's shadow-receive layer is still
+   drawn in the wrong place (right eye fine). A/B (different spots): W on eyeR 1.34 vs eyeL 1.63 ms GPU; W off eyeR 1.13 vs
+   eyeL 1.05 -> W saves ~0.3 ms. **`perfShadowOnce` now defaults to true** (user's call; game json already true);
+   `EyeTransform` diagnostic removed. Built + deployed 02:44 (Debug `PSUExD.dll` + `PSUExVRConfig.exe`, Release `PSUExVR.dll`).
+   **Open (low priority, W off only):** eye 1 differs from eye 2 only by the state the previous frame's eye-2 shadow
+   bracket leaves behind (with W on, eye 2 runs no bracket and eye 1 is right). Suspects: something `0x005E34C0` /
+   end `0x0048C3D0` reads or leaves for the receivers' setup `LAB_0055B9E0` (not decompiled yet; Ghidra has no function
+   there), e.g. another once-per-frame value like `[0xB9DB09]`, or the camera slot `[0xB9CB24]` / shadow obj `+0x34`.
 
 7. **Rogue's Toolkit 0.7.2 alongside PSUEx (UPDATED 2026-10-30, see "Status 2026-10-30" at the end of this item; the chain described next is superseded).** Plan:
    `C:\Users\hasan\.claude\plans\plan-to-make-our-giggly-sifakis.md`. The toolkit is a Rust `dinput8.dll` proxy
@@ -455,6 +523,99 @@ and pushed to origin `psu_vr` unless noted.
      and operable with the right controller (hover, click, scroll); `tools/lastlog.sh VRToolkit`. Toolkit `ui_scale` 2.0
      and `panel_x/y` are in game pixels: check placement on the panel. Not done: motion-controller gesture.
 
+11. **Shop / mission menus flat (built Debug + Release, deployed 2026-10-31 09:41: `PSUExD.dll`, `PSUExVRConfig.exe`, `PSUExVR.dll`; no settings-file
+   changes, the new keys default on; untested).** In town these menus keep scene mode 5, so `SceneAllowsStereo` now also returns false while a
+   game task named in `vr.flatMenuTasks` is alive (default `TCounterSequence,TDressShop,TBeautyParlor`; JSON only). Then the eyes, the left-eye
+   mirror and first person stand down and the flat frame goes to the menu panel like the other 2D menus. Setting `flatMenus` (default on), checkbox
+   HUD > HUD and menus "Shop and mission menus on a flat screen". `StereoRenderer.cpp` `FlatMenuOpen`: walks the TTask tree from the static root
+   `0x009CA8D4` (`+0x18` child, `+0x10` next, name at `+0x04`; see ADDRESS_MAP) at most every 100 ms. Logs (all builds): `VRMenu: flat menu open (<task>)`
+   / `VRMenu: flat menu closed`. Debug only: `VRMenu: task tree has N tasks` once, then `VRMenu: task + <name>` / `task - <name>` as tasks come and go.
+   Open questions: whether TCounterSequence lives only while the mission menu is open (it is made by TDungeonCounterCtrl state 5); if the counter
+   stays mono after leaving, or doesn't go mono, read the `task +/-` lines around opening it and change the default list. Hook_FrameRender's own
+   stereo gate wasn't touched (RenderEyes checks SceneAllowsStereo itself).
+   **Pending test:** in town open the mission counter (mission list), a clothing shop and the beauty parlor; each should switch to the flat panel and
+   go back to stereo on leaving. `tools/lastlog.sh 'VRMenu|scene mode='`.
+   **First run (2026-10-31, salon + mission counter): no `VRMenu` lines at all.** The static TTask `0x009CA8D4` has no children at runtime, so it
+   is not the root. Fix (built + deployed 09:54, untested): `Hook_TCameraTaskPlay` passes the camera task to `StereoRenderer::NoteGameTask`;
+   `FlatMenuOpen` climbs `+0x14` from it to the top task and walks the tree from there. Log once: `VRMenu: task root <p> (<name>), N levels above
+   <p> (TCameraTaskPlay)`. If that line is missing, the camera update never ran; if the root is found but no `task + TBeautyParlor` / `TDressShop`
+   / `TCounterSequence` shows when a menu opens, those tasks hang off another tree.
+   **Second run (2026-10-31): root found (`TMainTask` 0x00BA18A8, 3 levels above TCameraTaskPlay, 247 tasks). User: mission counter works well;
+   salon and clothes shop go flat too early (already while talking to the NPC). Log: TBeautyParlor is created with the NPC's TWindowSelect;
+   after the choice TCharaMakeDoll, TPlayerStatue, TWindowCharaMakeBack appear (the salon menu). The clothes shop's tasks weren't logged (cap
+   reached on area loads). Change (built Debug + Release, NOT deployed: the game was running): default `flatMenuTasks` =
+   `TCounterSequence,TCharaMakeDoll,TDressShopList` (TDressShopList is a guess from the string table); both settings files edited to it
+   (backups `psuex_vr.json.bak11`, `config.json.bak_flatmenus`; edited while the game ran, so a save from the panel may undo it). Debug log:
+   a walk with more than 16 name changes logs one `VRMenu: N task names changed (area load)` line instead of the names.
+   Also reported: "at the back of the flat screen the background animation is playing" (asked the user whether it's the game's own salon
+   backdrop inside the picture, or something around the panel in VR).
+   **User answer: in VR space behind the panel** (not inside the flat picture): something animated still shows around / behind the menu panel
+   while a flat menu is open. Not investigated yet. Suspects: HUD quads (`SubmitHudQuads`, user / world panels from pass B) still submitted in
+   the flat path, the salon backdrop (`TWindowCharaMakeBack`) captured into a HUD panel, or eye swapchains not cleared (`menuBackdrop` off?).
+   Check `VRSystem::OnPresentSubmit` order for the `!stereoSubmitted` branch.
+   **Found (2026-10-31 10:30): it happens on exit, not during the menu.** The flat path's layers are right (dark backdrop
+   projection + panel; no HUD quads, no stereo; no ClearEyes / xrEndFrame failures in the log). User: the animation is the
+   shop's own background (also seen in the flat picture), out in VR space, when leaving. Log order on leaving the salon:
+   `TCharaMakeDoll -` -> `flat menu closed` -> stereo back -> `TWindowCharaMakeBack -` later: the animated backdrop window
+   outlives the menu and was drawn in stereo while it faded out. Ghidra: the TDressShop ctor `0x00658E60` (mode 1) also makes
+   two TWindowCharaMakeBack (ctor `0x005B9B00`), so the clothes shop has the same backdrop, but made with TDressShop
+   (during the NPC talk), so it can't be a trigger. `TDressShopList` is only a name in a table next to "TDressShop"
+   (`0x009B9E48`), no RTTI class: it may never be a task.
+   Fix (built Debug + Release, deployed 10:31; settings files unchanged, still `TCounterSequence,TCharaMakeDoll,TDressShopList`):
+   new JSON-only setting `flatMenuHoldTasks` (default `TWindowCharaMakeBack`): once a flat menu is open, it stays open while
+   one of these tasks lives (they never open it). `FlatMenuOpen` list matching moved into `FindListedTask`. Log (all builds):
+   `VRMenu: flat menu held open by TWindowCharaMakeBack` once per hold.
+   **Pending test:** salon: NPC talk stereo, menu flat, on leaving the screen stays flat until the backdrop is gone, then
+   stereo with no animated background in VR space. Clothes shop: same; if it never goes flat, read the Debug
+   `VRMenu: task +` lines after the shop choice and put the shop menu's task in `flatMenuTasks` (VRSettings.h + both
+   settings files). Mission counter unchanged. `tools/lastlog.sh 'VRMenu: (flat|task [+-] T(Dress|Chara|Beauty|Counter|WindowChara))'`.
+
+   **User (2026-10-31): seems to work** (salon / shop exit no longer shows the backdrop in VR space).
+
+12. **Planet selector: planet models locked to the head -> flat panel (built Debug + Release, deployed 2026-10-31 10:48 after the game closed;
+   untested).** The spaceport planet selector stays in scene mode 5 and renders in stereo (log:
+   `scene mode=5 stereo=1`), but the planets follow head rotation. Debug log on opening it: `task + TLobbyCounterManager`,
+   `TLobbyCounterDisplayer`, `TWindowTitle`, `TLobbyCounterCamera`, `TWindowSelect`; on leaving `TWindowTitle -`,
+   `TWindowSelect -`, then the area load (planet travel). Ghidra: TLobbyCounterCamera ctor `0x006C8CB0` (stores itself in
+   `0x00BA0B8C`), made only by `0x006C8BF0` (callers `0x005D5780`, `0x006C87F0`, `0x00602440`). It is its own camera task,
+   not TCameraTaskPlay. Cause not proven (no live test): head-locked means the planets ignore our per-eye D3D VIEW, most
+   likely drawn with a shader WVP constant built from the lobby camera (like the shadow receivers before
+   `EyeShadowReceiverWvp`) or via an offscreen picture shown as a screen quad. A world-fixed fix would need that found per
+   draw, not cheap. Fix: `TLobbyCounterCamera` added to the default `flatMenuTasks` (`VRSettings.h`) and to both settings
+   files (backups `psuex_vr.json.bak12`, `config.json.bak11`; edited while the game ran, so a save from the VR panel before
+   restarting may undo it: re-check line `flatMenuTasks`).
+   **Pending test:** spaceport counter -> planet selector: should switch to the flat menu panel (mono) instead of stereo,
+   and go back to stereo after travel or after cancelling. Watch: cancelling out of the selector without travelling (if
+   TLobbyCounterCamera outlives the window, the view stays flat until it goes; then use `TWindowTitle`/a shorter-lived task
+   instead). `tools/lastlog.sh -a 'VRMenu: (flat|task [+-] T(LobbyCounter|WindowTitle|WindowSelect))|scene mode='`.
+   **User (2026-10-31): planet selector is flat now (works).**
+
+13. **Mall crowd ("mirage" NPCs) only in the left eye (built Debug + Release, deployed 2026-10-31 11:14; no settings changes; untested).**
+   Cause (Ghidra): the fake town crowd (`TObjLODModelPlayer`, low-poly `LodManModel` / `pl_lod_walk`) and far players are batched by
+   `TPlayerLODModelShader` (`[0x00B91140]`, 6 buckets, see ADDRESS_MAP). The batch is filled once per frame in the update, and its layer
+   `0x14` draw (`0x00551890`) zeroes each bucket's count after drawing, so the right eye got an empty batch (with `flatMirrorEye` off
+   the flat pass would empty it before both eyes). Fix: `StereoRenderer::SaveCrowdBatch` at the start of `Hook_PassA` saves the six
+   counts; `RestoreCrowdBatch` puts them back before each eye pass in `RenderEyes` (next to the `0x00B9DB09` shadow clear). Not a
+   setting (plain bug fix). Log (all builds, first 8): `VRCrowd: restored N LOD crowd instances for eye 1 (shader …)`.
+   **Pending test:** town mall with the crowd: NPC crowd in both eyes, same place and depth in each (close one eye at a time), no
+   doubled / flickering figures, far real players also in both eyes. `tools/lastlog.sh 'VRCrowd'`. If no `VRCrowd` line shows while
+   the crowd is in view, the right eye is missing them for another reason (check the layer `0x0B` draw `0x005517D0`).
+   **User (2026-10-31): works perfectly** (crowd in both eyes).
+
+14. **Settings UX rework + toolkit shortcut + eye-height chord (built Debug, deployed 2026-10-31 after the game closed; uncommitted, untested).**
+   - **Toolkit chord / partner card:** both grips + left stick up already ran the same `VRBindings::OpenToolkitMenu` path as the panel button;
+     the difference was that the pushed left stick (or D-pad) still went to the game. `VRSyntheticPad.cpp`: `s_chordStick` is set while both
+     grips are held and the left stick is up (> 0.8, released under 0.3) or down, and the left stick / D-pad output is then dropped.
+   - **Eye height chord:** both grips + left stick pushed down (free; up = toolkit) calls `MeasureEyeHeight()` (head height above floor
+     from `System::HeadHeightAboveFloor`, clamped 1.2-2.0, saved, toast "Eye height set to X m", buzz). Label cards (both grips) show
+     "Up: Rogue's Toolkit menu / Down: measure eye height" on the left stick. Log: `tools/lastlog.sh 'eye height'`.
+   - **Panel:** opens at the centre of the view (`ImGuiCond_Appearing`), text scaled by new `vr.panelTextScale` (default 1.5, 1.0-2.5; window
+     size follows). Three pages (`vr.settingsPage` presets / simple / advanced, remembered): Presets (picture quality, comfort, camera,
+     controls, text size), Simple (safe toggles, Measure my eye height, toolkit menu), Advanced (the old tabs, all keys unchanged).
+   **Pending test:** (1) both grips + stick up: toolkit menu opens, no partner card; same as the panel button. (2) Both grips + stick down
+   standing straight: toast with your eye height. (3) Open VR settings (Back+Start / left Square chord): centred, larger text, page buttons,
+   presets change values, Advanced is the old tabs; flat game (vr.enabled off) unchanged. Settings files untouched.
+
 ## Features done this stretch (all toggles in the VR settings panel)
 
 - Combat by weapon category (`+0x2D4`/`+0x2D8`): trigger/swing = attack / tech slot 1, grip + = PA /
@@ -558,3 +719,27 @@ and pushed to origin `psu_vr` unless noted.
    body facing from the thigh line, real HMD position via `VRCamera::HeadWorld`). `bodyKeepLegAnim` ("Keep the game's leg animation"): rest pose skips bones 1-8, so the strafe layer's game leg
    animation stays (user: works like before). Planted-feet tuning (untested): step at 25 cm (was 35), step time 0.16-0.30 s by speed, lead 0.2 s of velocity, settle back to shoulder width after 0.35 s idle,
    legs never cross (each foot >= half the stance on its own side), knee pole 20% outward. Open: decide between planted feet and the game leg animation after the next test; tracker phases 4-6 not started.
+   **Body IK update 2026-10-31 (deployed Debug, user-confirmed working):** sliders `bodyNeckDrop` (neck below eyes, default 0.22 m) and `bodyBack` (body behind eyes, 0.20 m) added to Camera > First person. Standing-still stomping fixed: the "leg too stretched" step test (`tooFar`) now measures reach from the hip joint (`legLength * 1.02`) and needs `miss > 0.6 * fit`. VR paused or disabled: `VRHands::Apply` returns first, so rest pose, body IK and hand IK are all off and the game's own animations are back (user: both work). Open: choose planted feet vs game leg animation; tracker phases 4-6 (Standable via `XR_HTCX_vive_tracker_interaction`, `PSUVR/VRTrackers.cpp/.h`) not started; do them in a fresh session.
+
+## Holster gestures (built + deployed Debug 2026-10-31, untested, uncommitted)
+
+`PSUVR/VRHolster.{h,cpp}` (zones) + `VRSyntheticPad::Holster()`. Grip **press** edge (grip still `Pending`) with that hand's
+grip pose inside a zone fires once and sets the grip `Consumed` (no L1/R1): back of the head = script `hold:cancel wait:0.12 tap:up
+wait:0.15` (Circle + D-pad up), back of the waist = same with `down`, mouth = `holsterItemScript` (default `hold:cancel wait:0.12 tap:left wait:0.15`, user-confirmed input: Circle + D-pad left = use current item; the voice item
+script/buttons, **a guess**, no confirmed item-use button yet). Zones are in the HMD yaw frame (mouth: full head rotation), offsets
+for 1.7 m head height scaled by `HeadHeightAboveFloor / 1.7` (0.6-1.3); smallest distance/radius wins. Skipped in menus, with the
+palette open, a script running or the UI pointer active. Haptic on trigger. Log: `tools/lastlog.sh VRHolster`.
+Settings (Controllers tab, "Holster gestures"): `holsterEnabled` (default off), `holsterHeadRadius` 0.22, `holsterWaistRadius` 0.22,
+`holsterMouthRadius` 0.13, `holsterItemScript`, `holsterShowZones` (discs in the eye pass, needs Show controllers). Keys added to
+both game settings files (off; `.bak13` / `config.json.bak12` = before). Game folder: Debug `PSUExD.dll` + `PSUExVRConfig.exe` deployed.
+**Pending test:** turn on Holster gestures + Show zones; hand behind head + grip -> weapon up; behind waist -> down; at mouth -> item
+use (check whether the palette script does the right thing, else tune `voiceItemScript`/`voiceItemButtons`); grip anywhere else behaves
+as before; one switch per press. Tune offsets/radii in `VRHolster.cpp` (`ZoneCenter`) if zones feel off.
+
+## Voice items, palette-aware (2026-10-31)
+`VRSyntheticPad::UseItemSlot(slot)` (slot -1 = current item) now runs: hold Cancel (kPadA by default, via the layout), wait for the palette, `ItemRow` (tap Left until `PSUCombat::ReadItemPalette` shows the item row), `Seek` (tap Up/Down until the cursor is on the slot; learns which button adds +1; takes the short way), wait 0.2 s, release Cancel (uses the item). Commands: "item one".."item seven" = palette position (filled slots only), "use item" = current. vr.voiceItemScript / voiceItemButtons are no longer used. UNTESTED: palette offsets come from Ghidra only; check the Debug log lines "VRVoice: item palette read: row .. cursor .. of .." and "VRVoice: item script ..". If the palette reads "unreadable", send that log line; the current-item command still works by a blind Left tap.
+
+## Right swing hit the sub weapon (2026-10-31, built Debug, not deployed, untested)
+With a wand/staff on the right and a TCSM on the left, a right trigger/swing fired the TCSM. `Gun()` (`VRSyntheticPad.cpp`) held R1 for the left hand whenever `s_turning` or an X/Y pulse was active, whatever hand started it. Now the turn, pulse and comboStep only count when `s_lastAttackHand == hand` (`ownAttack`). Voice casts are unchanged (`s_gunShot`). **Pending test:** wand main + TCSM sub: right trigger / swing casts the wand's technique; left trigger and "voice slot 3/4" still cast the TCSM. If it still misfires, `tools/lastlog.sh 'VRSwing|VRGun|VRVoice'`.
+Follow-up (voice-session review): RequestAttack now sets s_lastAttackHand = hand at request time, so a right swing queued during a left combo (comboStep > 0) no longer inherits the left hand's R1. Holster is off by default and does not touch this state.
+**Holster zones enlarged (2026-10-31, built Debug, NOT deployed: PSUC was running).** Zones are now ellipsoids (`VRHolster::ZoneShape`, half extents right/up/forward at 1.7 m, x radius setting / default): head-back centre (0, +0.12, -0.20) half (0.28, 0.30, 0.30) (up and back, forward to the shoulders); waist centre (0, -0.72, -0.28) half (0.34, 0.28, 0.30); mouth centre (0, -0.20, +0.14) in head axes, half (0.20, 0.25, 0.20) (face to chest, out front). The radius sliders now scale the whole zone (defaults unchanged). Debug discs mark the centre and six extreme points. Deploy `Debug\PSUExD.dll` + `PSUExVRConfig.exe` when the game is closed.

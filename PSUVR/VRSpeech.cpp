@@ -368,9 +368,13 @@ namespace PSUVR
 			{ "slotone", "one", "first" }, { "slottwo", "two", "second" },
 			{ "slotthree", "three", "third" }, { "slotfour", "four", "fourth" } };
 
-		const char *const kItemWords[ 4 ][ 2 ] = {
-			{ "itemone", "item1" }, { "itemtwo", "item2" }, { "itemthree", "item3" }, { "itemfour", "item4" } };
-		const char *const kItemPhrases[ 4 ] = { "item one", "item two", "item three", "item four" };
+		// Palette positions one..seven; "use item" is the item the palette opens on (Command arg -1).
+		const char *const kItemWords[ 7 ][ 2 ] = {
+			{ "itemone", "item1" }, { "itemtwo", "item2" }, { "itemthree", "item3" }, { "itemfour", "item4" },
+			{ "itemfive", "item5" }, { "itemsix", "item6" }, { "itemseven", "item7" } };
+		const char *const kItemPhrases[ 7 ] = { "item one", "item two", "item three", "item four", "item five", "item six",
+			"item seven" };
+		const char *const kCurrentItemWords[] = { "useitem", "currentitem", "useitnow" };
 
 		// ---- Command registry ------------------------------------------------------------------
 		// Spoken aliases -> an action. Rebuilt about every 500 ms from the live game state, so it
@@ -383,6 +387,7 @@ namespace PSUVR
 			int arg;
 			std::vector< std::string > exact;  // Normalize()d words that must match whole
 			std::string fuzzy;                 // lower-case name matched within an edit distance ("" = none)
+			std::string sound;                 // Skeleton() of the name, for the command route
 		};
 		std::vector< Command > s_commands;
 
@@ -390,6 +395,7 @@ namespace PSUVR
 		bool s_slotsValid = false;
 		bool s_stateValid = false;
 		int s_mode = 0;  // registry inputs: 1 items, 2 techniques
+		uint32_t s_paletteSignature = 0;  // item palette contents the registry was built from
 		DWORD s_slotsTick = 0;
 		std::string s_keyterms;
 
@@ -455,6 +461,42 @@ namespace PSUVR
 			return row[ b.size() ];
 		}
 
+		// Spoken element words for the first technique of each element.
+		struct TechAlias
+		{
+			uint8_t id;
+			const char *word;
+		};
+		const TechAlias kTechAliases[] = {
+			{ 1, "fire" }, { 11, "ice" }, { 21, "thunder" }, { 21, "lightning" }, { 51, "dark" }, { 41, "heal" },
+		};
+
+		// A rough consonant skeleton of a word, so spellings of the same sound meet: voiced and
+		// unvoiced pairs merge (b/p, d/t, g/k/c/q, s/z, f/v), vowels and repeats go.
+		std::string Skeleton( const std::string &word )
+		{
+			std::string out;
+			for( const char c : word )
+			{
+				char m;
+				switch( c )
+				{
+					case 'a': case 'e': case 'i': case 'o': case 'u': case 'y': case 'h': case 'w': continue;
+					case 'p': m = 'b'; break;
+					case 'd': m = 't'; break;
+					case 'g': case 'c': case 'q': m = 'k'; break;
+					case 'z': case 'x': m = 's'; break;
+					case 'v': m = 'f'; break;
+					default: m = c; break;
+				}
+				if( out.empty() || out.back() != m )
+				{
+					out += m;
+				}
+			}
+			return out;
+		}
+
 		const char *TechLabel( int slot )
 		{
 			const char *name = TechNameFor( s_slots.id[ slot ] );
@@ -478,7 +520,16 @@ namespace PSUVR
 			const bool itemsOn = stateValid && Config::Get().vr.m_voiceItems;
 			const bool techsOn = Config::Get().vr.m_voiceCommands;
 			const int mode = ( itemsOn ? 1 : 0 ) | ( techsOn ? 2 : 0 );
-			const bool changed = valid != s_slotsValid || memcmp( slots.id, s_slots.id, 4 ) != 0 || mode != s_mode;
+			PSUCombat::ItemPalette palette;
+			const bool paletteValid = itemsOn && PSUCombat::ReadItemPalette( palette );
+			uint32_t signature = paletteValid ? static_cast< uint32_t >( palette.count ) + 1u : 0u;
+			for( int i = 0; paletteValid && i < palette.count; ++i )
+			{
+				signature = signature * 31u + ( palette.entry[ i ] & 0xFFFFFFu );
+			}
+			const bool changed = valid != s_slotsValid || memcmp( slots.id, s_slots.id, 4 ) != 0 || mode != s_mode ||
+				signature != s_paletteSignature;
+			s_paletteSignature = signature;
 			s_slots = slots;
 			s_slotsValid = valid;
 			s_stateValid = stateValid;
@@ -497,7 +548,7 @@ namespace PSUVR
 					{
 						continue;  // only slots holding a technique count
 					}
-					Command command{ CommandKind::Tech, slot, {}, {} };
+					Command command{ CommandKind::Tech, slot, {}, {}, {} };
 					for( const char *word : kSlotWords[ slot ] )
 					{
 						command.exact.push_back( word );
@@ -505,6 +556,14 @@ namespace PSUVR
 					if( const char *name = TechNameFor( s_slots.id[ slot ] ) )
 					{
 						command.fuzzy = Lower( name );
+						command.sound = Skeleton( command.fuzzy );
+						for( const TechAlias &alias : kTechAliases )
+						{
+							if( alias.id == s_slots.id[ slot ] )
+							{
+								command.exact.push_back( alias.word );
+							}
+						}
 						keyterms += keyterms.empty() ? "" : ",";
 						keyterms += name;
 					}
@@ -513,9 +572,23 @@ namespace PSUVR
 			}
 			if( itemsOn )
 			{
-				for( int item = 0; item < 4; ++item )
+				// The item the palette opens on, whatever the palette holds.
+				Command current{ CommandKind::Item, -1, {}, {}, {} };
+				for( const char *word : kCurrentItemWords )
 				{
-					Command command{ CommandKind::Item, item, {}, {} };
+					current.exact.push_back( word );
+				}
+				s_commands.push_back( std::move( current ) );
+				keyterms += keyterms.empty() ? "" : ",";
+				keyterms += "use item";
+				// By palette position, for the filled slots only.
+				for( int item = 0; paletteValid && item < palette.count; ++item )
+				{
+					if( !( palette.entry[ item ] & 0xFF ) )
+					{
+						continue;
+					}
+					Command command{ CommandKind::Item, item, {}, {}, {} };
 					for( const char *word : kItemWords[ item ] )
 					{
 						command.exact.push_back( word );
@@ -524,6 +597,11 @@ namespace PSUVR
 					keyterms += keyterms.empty() ? "" : ",";
 					keyterms += kItemPhrases[ item ];
 				}
+				PSU_LOG( "VRVoice: item palette %s: row %d cursor %d of %d, ids %06X %06X %06X %06X %06X %06X %06X\n",
+					paletteValid ? "read" : "unreadable", palette.itemRow ? 1 : 0, palette.cursor, palette.count,
+					palette.entry[ 0 ] & 0xFFFFFF, palette.entry[ 1 ] & 0xFFFFFF, palette.entry[ 2 ] & 0xFFFFFF,
+					palette.entry[ 3 ] & 0xFFFFFF, palette.entry[ 4 ] & 0xFFFFFF, palette.entry[ 5 ] & 0xFFFFFF,
+					palette.entry[ 6 ] & 0xFFFFFF );
 			}
 			PSU_LOG( "VRVoice: slots %u/%u/%u/%u (lv %u/%u/%u/%u) = %s / %s / %s / %s; right %08X [%02X %02X %02X %02X %02X %02X %02X %02X] "
 				"left %08X [%02X %02X %02X %02X %02X %02X %02X %02X], categories %X / %X; %u commands\n",
@@ -543,7 +621,7 @@ namespace PSUVR
 		}
 
 		// The registry entry the words name, or -1.
-		int MatchCommand( const std::string &text )
+		int MatchCommand( const std::string &text, bool loose )
 		{
 			const std::string said = Normalize( text );
 			if( said.empty() )
@@ -566,13 +644,58 @@ namespace PSUVR
 				{
 					continue;
 				}
-				const int distance = EditDistance( said, command.fuzzy );
+				int distance = EditDistance( said, command.fuzzy );
 				// Exact, or one letter off for longer names ("gibarda").
-				const int allowed = command.fuzzy.size() >= 5 ? 1 : 0;
+				int allowed = command.fuzzy.size() >= 5 ? 1 : 0;
+				if( loose )
+				{
+					// Command route: sounds-alike. Same consonant skeleton ("parter" = Barta), or one
+					// off it; a longer name may also be two letters off.
+					const std::string skeleton = Skeleton( said );
+					const int soundDistance = skeleton.size() >= 3 && command.sound.size() >= 3 ?
+						EditDistance( skeleton, command.sound ) : 1000;
+					if( soundDistance == 0 )
+					{
+						distance = 0;
+					}
+					else if( soundDistance == 1 && command.sound.size() >= 4 )
+					{
+						distance = ( std::min )( distance, 1 );
+						allowed = ( std::max )( allowed, 1 );
+					}
+					else if( command.fuzzy.size() >= 6 )
+					{
+						allowed = ( std::max )( allowed, 2 );
+					}
+				}
 				if( distance <= allowed && distance < bestDistance )
 				{
 					best = static_cast< int >( index );
 					bestDistance = distance;
+				}
+			}
+			if( best < 0 && loose && said.size() <= 12 )
+			{
+				// Hard-to-say short names ("Foie" comes out as "fui", "fully", "for we"): the same
+				// first letter and a skeleton no more than one consonant longer. Only when exactly
+				// one technique fits, so two names sharing a first letter don't guess.
+				const std::string skeleton = Skeleton( said );
+				int fits = 0;
+				for( size_t index = 0; index < s_commands.size(); ++index )
+				{
+					const Command &command = s_commands[ index ];
+					if( command.fuzzy.empty() || command.sound.empty() || skeleton.empty() ||
+						said[ 0 ] != command.fuzzy[ 0 ] || skeleton[ 0 ] != command.sound[ 0 ] ||
+						skeleton.size() > command.sound.size() + 1 || said.size() > command.fuzzy.size() + 4 )
+					{
+						continue;
+					}
+					++fits;
+					best = static_cast< int >( index );
+				}
+				if( fits != 1 )
+				{
+					best = -1;
 				}
 			}
 			return best;
@@ -595,15 +718,20 @@ namespace PSUVR
 				PSU_LOG( "VRVoice: \"%s\" -> slot %d (id %u)\n", text.c_str(), command.arg + 1, s_slots.id[ command.arg ] );
 				return true;
 			}
+			char which[ 24 ] = "current item";
+			if( command.arg >= 0 )
+			{
+				snprintf( which, sizeof( which ), "item %d", command.arg + 1 );
+			}
 			if( VRSyntheticPad::UseItemSlot( command.arg ) )
 			{
-				Toast( "Voice: item %d", command.arg + 1 );
+				Toast( "Voice: %s", which );
 			}
 			else
 			{
-				Toast( "Voice: item %d can't be used right now", command.arg + 1 );
+				Toast( "Voice: %s can't be used right now", which );
 			}
-			PSU_LOG( "VRVoice: \"%s\" -> item %d\n", text.c_str(), command.arg + 1 );
+			PSU_LOG( "VRVoice: \"%s\" -> %s\n", text.c_str(), which );
 			return true;
 		}
 
@@ -634,16 +762,14 @@ namespace PSUVR
 			{
 				return Route::Chat;
 			}
-			if( route == "command" || WeaponOutInField() )
-			{
-				return Route::Command;
-			}
-			return automatic ? Route::Ignore : Route::Chat;
+			// "command" and "auto" both try a command first; only "command" drops the rest.
+			(void)automatic;
+			return Route::Command;
 		}
 
 		const char *RouteLabel( const std::string &route )
 		{
-			return route == "command" ? "Command" : route == "chat" ? "Chat" : "Auto (command in battle)";
+			return route == "command" ? "Command" : route == "chat" ? "Chat" : "Auto (command, else chat)";
 		}
 
 		void HandleFinal( const std::string &text, bool automatic )
@@ -656,6 +782,7 @@ namespace PSUVR
 				return;
 			}
 			const Route route = ResolveRoute( automatic );
+			const bool commandOnly = vr.m_voiceRoute == "command";
 			if( route == Route::Ignore )
 			{
 				PSU_LOG( "VRVoice: ignored \"%s\" (no weapon out in the field)\n", text.c_str() );
@@ -664,15 +791,15 @@ namespace PSUVR
 			if( route == Route::Command && ( vr.m_voiceCommands || vr.m_voiceItems ) )
 			{
 				RefreshCommands();
-				const int match = MatchCommand( text );
+				const int match = MatchCommand( text, commandOnly );
 				if( match >= 0 )
 				{
 					Execute( s_commands[ match ], text );
 					return;
 				}
-				if( automatic )
+				if( automatic && commandOnly )
 				{
-					// Always-on chatter that names no technique: nothing to do.
+					// Command route: chatter that names no command is dropped.
 					PSU_LOG( "VRVoice: no command in \"%s\"\n", text.c_str() );
 #ifdef _DEBUG
 					Toast( "Heard: %s (no command)", text.c_str() );
@@ -680,7 +807,7 @@ namespace PSUVR
 					return;
 				}
 			}
-			else if( route == Route::Command && automatic )
+			else if( route == Route::Command && automatic && commandOnly )
 			{
 				PSU_LOG( "VRVoice: \"%s\" dropped (voice commands are off)\n", text.c_str() );
 				return;

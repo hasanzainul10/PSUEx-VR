@@ -175,6 +175,88 @@ namespace FrameRender
 		pOriginalDeferredFlush();
 	}
 
+	// PSU_ShadowBegin / PSU_ShadowEnd (0x005E3630 / 0x005E37B0, cdecl void) bracket the shadow
+	// casters (layer 2) at the start of pass A. The game draws them with its own light camera and
+	// projection, and the end restores the flat camera: PSU_SetProjectionMatrix puts the flat
+	// projection on the device. In an eye pass the device holds the eye VIEW / PROJECTION, so
+	// begin sets VIEW to identity (the game's own VIEW: its world matrices are in camera space)
+	// for the casters, and end puts the eye matrices back.
+	// perfShadowOnce: the light camera comes from the game camera, so the left eye's shadow map (and the
+	// light matrix in shadow object +0x40 the receivers read) holds for the right eye: there, begin and end
+	// are skipped and the casters' layer 2 is turned off in between (g_DrawLayers entry +6).
+	typedef void( __cdecl *ShadowBegin_t )();
+	ShadowBegin_t pOriginalShadowBegin = reinterpret_cast< ShadowBegin_t >( 0x005E3630 );
+	ShadowBegin_t pOriginalShadowEnd = reinterpret_cast< ShadowBegin_t >( 0x005E37B0 );
+
+	static bool s_shadowEyeSaved = false;
+	static uint8_t *s_shadowSkipLayer = nullptr;
+	static uint8_t s_shadowSkipLayerWas = 0;
+	static uint8_t *LayerDisabledByte( int layer );
+	static D3DMATRIX s_shadowEyeView{};
+	static D3DMATRIX s_shadowEyeProj{};
+
+	void __cdecl Hook_ShadowEnd()
+	{
+		if( s_shadowSkipLayer )
+		{
+			*s_shadowSkipLayer = s_shadowSkipLayerWas;
+			s_shadowSkipLayer = nullptr;
+			return;
+		}
+		pOriginalShadowEnd();
+		if( s_shadowEyeSaved )
+		{
+			s_shadowEyeSaved = false;
+			if( IDirect3DDevice9 *device = PSUOverlay::Device() )
+			{
+				device->SetTransform( D3DTS_VIEW, &s_shadowEyeView );
+				device->SetTransform( D3DTS_PROJECTION, &s_shadowEyeProj );
+			}
+		}
+	}
+
+	void __cdecl Hook_ShadowBegin()
+	{
+		const bool eye = PSUVR::StereoRenderer::InEyePass();
+		if( eye && PSUVR::StereoRenderer::PassEyeIndex() == 1 && Config::Get().vr.m_perfShadowOnce )
+		{
+			s_shadowSkipLayer = LayerDisabledByte( 2 );
+			if( s_shadowSkipLayer )
+			{
+				s_shadowSkipLayerWas = *s_shadowSkipLayer;
+				*s_shadowSkipLayer = 1;
+				static bool s_skipLogged = false;
+				if( !s_skipLogged )
+				{
+					s_skipLogged = true;
+					PSU_LOG( "Shadow: right eye reuses the left eye's shadow map (perfShadowOnce)\n" );
+				}
+				return;
+			}
+		}
+		IDirect3DDevice9 *device = eye ? PSUOverlay::Device() : nullptr;
+		if( device && SUCCEEDED( device->GetTransform( D3DTS_VIEW, &s_shadowEyeView ) ) &&
+			SUCCEEDED( device->GetTransform( D3DTS_PROJECTION, &s_shadowEyeProj ) ) )
+		{
+			s_shadowEyeSaved = true;
+			D3DMATRIX identity{};
+			identity._11 = identity._22 = identity._33 = identity._44 = 1.0f;
+			device->SetTransform( D3DTS_VIEW, &identity );
+		}
+		PSUVR::VRPerf::Count( PSUVR::VRPerf::Counter::ShadowPass );
+		if( eye )
+		{
+			PSUVR::VRPerf::Count( PSUVR::VRPerf::Counter::ShadowPassEye );
+		}
+		static bool s_logged = false;
+		if( !s_logged )
+		{
+			s_logged = true;
+			PSU_LOG( "Shadow: first shadow pass (%s pass)\n", eye ? "eye" : "flat" );
+		}
+		pOriginalShadowBegin();
+	}
+
 	static void RunPassA()
 	{
 		s_enterA4 = DeferredCount( 0x00B911A4 );
@@ -320,6 +402,8 @@ namespace FrameRender
 	{
 		PollLayerBisect();
 		PollLayerDump();
+		// Before any 3D pass empties it, so RenderEyes can give each eye the crowd.
+		PSUVR::StereoRenderer::SaveCrowdBatch();
 		// A pass A layer picked by the bisect: off for this frame's flat and eye passes.
 		uint8_t *hidden = s_hiddenLayer >= 0x02 && s_hiddenLayer <= 0x29 ? LayerDisabledByte( s_hiddenLayer ) : nullptr;
 		const uint8_t hiddenWas = hidden ? *hidden : 0;
@@ -553,6 +637,8 @@ namespace FrameRender
 		DetourAttach( &( PVOID & )pOriginalPassA, reinterpret_cast< PVOID >( Hook_PassA ) );
 		DetourAttach( &( PVOID & )pOriginalPassB, reinterpret_cast< PVOID >( Hook_PassB ) );
 		DetourAttach( &( PVOID & )pOriginalDeferredFlush, reinterpret_cast< PVOID >( Hook_DeferredFlush ) );
+		DetourAttach( &( PVOID & )pOriginalShadowBegin, reinterpret_cast< PVOID >( Hook_ShadowBegin ) );
+		DetourAttach( &( PVOID & )pOriginalShadowEnd, reinterpret_cast< PVOID >( Hook_ShadowEnd ) );
 		DetourAttach( &( PVOID & )pOriginalDrawAgg, reinterpret_cast< PVOID >( Hook_DrawAgg ) );
 		DetourAttach( &( PVOID & )pOriginalDipWrap, reinterpret_cast< PVOID >( Hook_DipWrap ) );
 	}

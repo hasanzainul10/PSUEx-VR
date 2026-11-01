@@ -32,6 +32,9 @@ namespace
 	X( m_hudMapFitScale, "hudMapFitScale" ) \
 	X( m_hudFollow, "hudFollow" ) \
 	X( m_menuBackdrop, "menuBackdrop" ) \
+	X( m_flatMenus, "flatMenus" ) \
+	X( m_flatMenuTasks, "flatMenuTasks" ) \
+	X( m_flatMenuHoldTasks, "flatMenuHoldTasks" ) \
 	X( m_hudOverlays, "hudOverlays" ) \
 	X( m_toolkitOnHud, "toolkitOnHud" ) \
 	X( m_toolkitPointer, "toolkitPointer" ) \
@@ -44,6 +47,8 @@ namespace
 	X( m_bodyFitHeight, "bodyFitHeight" ) \
 	X( m_bodyKeepLegAnim, "bodyKeepLegAnim" ) \
 	X( m_bodyIk, "bodyIk" ) \
+	X( m_bodyNeckDrop, "bodyNeckDrop" ) \
+	X( m_bodyBack, "bodyBack" ) \
 	X( m_bodyProceduralLegs, "bodyProceduralLegs" ) \
 	X( m_snapTurnDegrees, "snapTurnDegrees" ) \
 	X( m_fpTurnSpeed, "fpTurnSpeed" ) \
@@ -68,6 +73,8 @@ namespace
 	X( m_snapTurn, "snapTurn" ) \
 	X( m_comfortVignette, "comfortVignette" ) \
 	X( m_showControllers, "showControllers" ) \
+	X( m_panelTextScale, "panelTextScale" ) \
+	X( m_settingsPage, "settingsPage" ) \
 	X( m_uiPointer, "uiPointer" ) \
 	X( m_controllerLabels, "controllerLabels" ) \
 	X( m_controllerLabelsGrip, "controllerLabelsGrip" ) \
@@ -98,6 +105,12 @@ namespace
 	X( m_swingAttack, "swingAttack" ) \
 	X( m_paGesture, "paGesture" ) \
 	X( m_gripPhotonArt, "gripPhotonArt" ) \
+	X( m_holsterEnabled, "holsterEnabled" ) \
+	X( m_holsterHeadRadius, "holsterHeadRadius" ) \
+	X( m_holsterWaistRadius, "holsterWaistRadius" ) \
+	X( m_holsterMouthRadius, "holsterMouthRadius" ) \
+	X( m_holsterItemScript, "holsterItemScript" ) \
+	X( m_holsterShowZones, "holsterShowZones" ) \
 	X( m_triangleChatL2, "triangleChatL2" ) \
 	X( m_strafeBody, "strafeBody" ) \
 	X( m_strafeBodyBlend, "strafeBodyBlend" ) \
@@ -152,6 +165,7 @@ namespace
 	X( m_perfHudLockRanges, "perfHudLockRanges" ) \
 	X( m_perfLogBatching, "perfLogBatching" ) \
 	X( m_flatMirrorEye, "flatMirrorEye" ) \
+	X( m_perfShadowOnce, "perfShadowOnce" ) \
 	X( m_stereoLayerSpace, "stereoLayerSpace" ) \
 	X( m_eyeResolutionScale, "eyeResolutionScale" )
 

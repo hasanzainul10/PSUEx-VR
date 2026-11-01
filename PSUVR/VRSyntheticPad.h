@@ -45,8 +45,10 @@ namespace PSUVR
 		// combat can't press it now (menu, palette, no technique weapon).
 		bool CastTechSlot( int slot );
 
-		// Voice command: uses palette item slot 0..3 by running vr.voiceItemScript on the virtual pad
-		// (experimental, see VRSettings.h). False when busy, in a menu, or the palette is already open.
+		// Voice command: uses the item at palette position 0..6 (-1 = the item the palette opens on).
+		// Holds Cancel, picks the item row with Left, presses Up / Down until the palette cursor
+		// (PSUCombat::ReadItemPalette) is on the item, then releases Cancel. False when busy, in a
+		// menu, the palette is already open, or the slot is empty / the palette unreadable.
 		bool UseItemSlot( int slot );
 
 		// state: DIJOYSTATE2. axisMin / axisMax: the device range of lX, lY, lZ, lRx, lRy,

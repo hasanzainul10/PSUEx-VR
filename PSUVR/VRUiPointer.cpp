@@ -300,6 +300,12 @@ namespace PSUVR
 
 			if( VRControllers::Pressed( kHand ) & kControllerSecondary )
 			{
+				if( s_toolkitOpen && !s_windowOpen && !s_wizardOpen )
+				{
+					// The toolkit menu's open state is only assumed (its own close buttons aren't seen), so this
+					// is the way out of a stale "open": Circle sends its key again and the pointer lets go.
+					VRBindings::OpenToolkitMenu();
+				}
 				s_closeRequest = true;
 			}
 

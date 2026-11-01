@@ -1,6 +1,7 @@
 #include "VRControllers.h"
 
 #include "VRCamera.h"
+#include "VRHolster.h"
 #include "../PSUStructs/PSUCombat.h"
 #include "VRControllerSim.h"
 #include "VRSyntheticPad.h"
@@ -517,6 +518,41 @@ namespace PSUVR
 						float radius = 0.03f * proj.Scale( depth );
 						radius = radius < 3.0f ? 3.0f : radius;
 						DrawDisc( device, sx, sy, radius, color );
+					}
+				}
+			}
+			// Holster zones (debug): translucent discs at the zone centres, brighter with a hand in.
+			if( Config::Get().vr.m_holsterEnabled && Config::Get().vr.m_holsterShowZones )
+			{
+				const VRHolster::Zone zones[ 3 ] = { VRHolster::Zone::Head, VRHolster::Zone::Waist, VRHolster::Zone::Mouth };
+				const DWORD rgb[ 3 ] = { 0x40E040, 0xE0E040, 0xE04040 };
+				const VRHolster::Zone inside[ 2 ] = { VRHolster::ZoneAtHand( 0 ), VRHolster::ZoneAtHand( 1 ) };
+				for( int i = 0; i < 3; ++i )
+				{
+					float center[ 3 ], axes[ 3 ][ 3 ], half[ 3 ];
+					if( !VRHolster::ZoneShape( zones[ i ], center, axes, half ) )
+					{
+						continue;
+					}
+					const bool active = inside[ 0 ] == zones[ i ] || inside[ 1 ] == zones[ i ];
+					const DWORD color = ( active ? 0xA0000000u : 0x40000000u ) | rgb[ i ];
+					// The ellipsoid's six extreme points as discs, plus a bigger one in the middle.
+					for( int p = 0; p < 7; ++p )
+					{
+						V3 point{ center[ 0 ], center[ 1 ], center[ 2 ] };
+						if( p < 6 )
+						{
+							const int axis = p / 2;
+							const float sign = ( p & 1 ) ? -1.0f : 1.0f;
+							point.x += axes[ axis ][ 0 ] * half[ axis ] * sign;
+							point.y += axes[ axis ][ 1 ] * half[ axis ] * sign;
+							point.z += axes[ axis ][ 2 ] * half[ axis ] * sign;
+						}
+						float sx, sy, depth;
+						if( proj.Project( point, sx, sy, depth ) )
+						{
+							DrawDisc( device, sx, sy, ( p < 6 ? 0.025f : 0.05f ) * proj.Scale( depth ), color );
+						}
 					}
 				}
 			}

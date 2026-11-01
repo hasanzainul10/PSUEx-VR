@@ -45,8 +45,12 @@ namespace PSUVR
 		// True while pass() runs for an eye. Used by D3D hooks to skip flat-sourced
 		// screen-space effect quads that would ghost the mono camera over stereo.
 		static bool InEyePass();
+		// The eye being drawn (0 left, 1 right); valid while InEyePass().
+		static int PassEyeIndex();
 		// vr.enabled + vr.stereo and the current scene matches vr.stereoMode (town by default).
 		static bool SceneAllowsStereo();
+		// A live game task (TTask) seen by a hook; its parent chain gives the task tree root.
+		static void NoteGameTask( const void *task );
 		// True while remapping Pass B nameplates/bubbles onto eye RTs (skip HUD capture).
 		static bool InNameplateDraw();
 
@@ -66,6 +70,15 @@ namespace PSUVR
 		// Debug: count a draw call for the layer diagnostics (sky / blur / glare, flat vs eyes).
 		static void CountLayerDraw( void *ret );
 		static void NoteVertexConstants( unsigned startRegister, const float *data, unsigned vector4Count, void *ret );
+		// Eye pass: the shadow receivers' world-view-projection (c12..c15 from 0x0055BB60) is built
+		// with the flat camera. Writes the eye's version to out (16 floats, transposed like the
+		// game's) and returns true; false = upload the game's data unchanged.
+		static bool EyeShadowReceiverWvp( unsigned startRegister, const float *data, unsigned vector4Count, void *ret, float *out );
+		// The town crowd (TObjLODModelPlayer) and far players are batched by TPlayerLODModelShader; its layer 0x14
+		// draw empties the batch, so only the first 3D pass of a frame drew them. Save the batch at the start of
+		// pass A, restore it before each eye pass.
+		static void SaveCrowdBatch();
+		static void RestoreCrowdBatch();
 		static void NoteShaderDraw( IDirect3DDevice9 *device, unsigned primitiveCount, void *ret );
 		static void NoteNearCameraDraw( IDirect3DDevice9 *device, unsigned primitiveType, unsigned primitiveCount,
 			const void *verts, unsigned stride, void *ret );

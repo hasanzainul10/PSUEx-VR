@@ -86,6 +86,9 @@
     <ClCompile Include="..\..\ImGui\backends\imgui_impl_dx11.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ResourceCompile Include="PSUExVRConfig.rc" />
+  </ItemGroup>
+  <ItemGroup>
     <ClInclude Include="..\..\PSUVR\VRSettings.h" />
     <ClInclude Include="..\..\PSUVR\VRSettingsPanel.h" />
     <ClInclude Include="..\..\PSUVR\VRControllerDiagram.h" />

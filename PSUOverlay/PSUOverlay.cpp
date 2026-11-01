@@ -564,6 +564,11 @@ HRESULT APIENTRY PSUOverlay::Hook_SetVertexShaderConstantF( LPDIRECT3DDEVICE9 pD
 #ifdef _DEBUG
 	PSUVR::StereoRenderer::NoteVertexConstants( StartRegister, pConstantData, Vector4fCount, GAME_RET() );
 #endif
+	float eyeWvp[ 16 ];
+	if( PSUVR::StereoRenderer::EyeShadowReceiverWvp( StartRegister, pConstantData, Vector4fCount, GAME_RET(), eyeWvp ) )
+	{
+		return m_pOriginalSetVertexShaderConstantF( pDevice, StartRegister, eyeWvp, Vector4fCount );
+	}
 	return m_pOriginalSetVertexShaderConstantF( pDevice, StartRegister, pConstantData, Vector4fCount );
 }
 

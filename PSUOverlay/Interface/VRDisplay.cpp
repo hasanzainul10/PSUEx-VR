@@ -5,6 +5,7 @@
 #include "../../PSUVR/VRBindings.h"
 #include "../../PSUVR/VRCamera.h"
 #include "../../PSUVR/VRHud.h"
+#include "../../PSUVR/VRSystem.h"
 #include "../../PSUVR/VRUiPointer.h"
 
 #include <cfloat>
@@ -26,6 +27,10 @@ VRDisplay::VRDisplay() : IFWinCtrl( "VRDisplay", false )
 	{
 		m_bEnabled = false;
 		VRSetupDisplay::RequestOpen();
+	};
+	m_context.headHeight = []( float &meters )
+	{
+		return PSUVR::System::Get().HeadHeightAboveFloor( meters );
 	};
 	m_context.openToolkit = [this]()
 	{
@@ -91,10 +96,17 @@ void VRDisplay::Render()
 		PSUVR::VRCamera::TurnFromStick() ? "XInput" : "game camera" );
 	m_context.status.emplace_back( line );
 
-	ImGui::SetNextWindowPos( ImVec2( 80.0f, 80.0f ), ImGuiCond_FirstUseEver );
-	ImGui::SetNextWindowSize( ImVec2( 560.0f, 680.0f ), ImGuiCond_FirstUseEver );
+	// Opens in the middle of the view, sized to the text scale (bigger text needs a bigger window).
+	const ImVec2 display = ImGui::GetIO().DisplaySize;
+	const float textScale = vr.m_panelTextScale < 1.0f ? 1.0f : ( vr.m_panelTextScale > 2.5f ? 2.5f : vr.m_panelTextScale );
+	ImVec2 size( 560.0f * textScale, 680.0f * textScale );
+	size.x = size.x > display.x * 0.9f ? display.x * 0.9f : size.x;
+	size.y = size.y > display.y * 0.9f ? display.y * 0.9f : size.y;
+	ImGui::SetNextWindowPos( ImVec2( display.x * 0.5f, display.y * 0.5f ), ImGuiCond_Appearing, ImVec2( 0.5f, 0.5f ) );
+	ImGui::SetNextWindowSize( size, ImGuiCond_Appearing );
 	if( ImGui::Begin( "VR Settings", &m_bEnabled ) )
 	{
+		ImGui::SetWindowFontScale( textScale );
 		PSUVR::DrawVRSettingsPanel( Config::Get().vr, m_context );
 	}
 	ImGui::End();

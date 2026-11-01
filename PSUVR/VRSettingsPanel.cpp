@@ -216,6 +216,119 @@ namespace PSUVR
 		return true;
 	}
 
+	// Presets page: one choice each, written to the same settings the other pages edit. A choice whose
+	// values don't all match reads as Custom.
+	static void DrawPresetsPage( VRSettings &s )
+	{
+		struct Quality { float scale; bool blur, glare, sprites; };
+		static const Quality quality[] = { { 0.7f, false, false, false }, { 0.85f, false, false, true }, { 1.0f, true, false, true } };
+		int q = 3;
+		for( int i = 0; i < 3; ++i )
+		{
+			if( std::fabs( s.m_eyeResolutionScale - quality[ i ].scale ) < 0.005f && s.m_eyeBlur == quality[ i ].blur &&
+				s.m_eyeGlare == quality[ i ].glare && s.m_reprojectSprites == quality[ i ].sprites )
+			{
+				q = i;
+			}
+		}
+		static const char *const qualityNames[] = { "Fast (lower sharpness)", "Balanced", "Best looking", "Custom" };
+		if( ImGui::Combo( "Picture quality", &q, qualityNames, 4 ) && q < 3 )
+		{
+			s.m_eyeResolutionScale = quality[ q ].scale;
+			s.m_eyeBlur = quality[ q ].blur;
+			s.m_eyeGlare = quality[ q ].glare;
+			s.m_reprojectSprites = quality[ q ].sprites;
+		}
+		Help( "Fast: eye resolution 70%, no screen glow / glare. Balanced: 85%. Best looking: full resolution. Pick Fast if the game stutters." );
+
+		// Comfort: 0 comfortable, 1 standard, 2 immersive.
+		int c = 3;
+		if( s.m_snapTurn && s.m_comfortVignette && s.m_hudFollow )
+		{
+			c = 0;
+		}
+		else if( s.m_snapTurn && !s.m_comfortVignette && s.m_hudFollow )
+		{
+			c = 1;
+		}
+		else if( !s.m_snapTurn && !s.m_comfortVignette )
+		{
+			c = 2;
+		}
+		static const char *const comfortNames[] = { "Comfortable (snap turn, vignette)", "Standard (snap turn)", "Immersive (smooth turn)", "Custom" };
+		if( ImGui::Combo( "Comfort", &c, comfortNames, 4 ) && c < 3 )
+		{
+			s.m_snapTurn = c != 2;
+			s.m_comfortVignette = c == 0;
+			s.m_hudFollow = c != 2 ? true : s.m_hudFollow;
+		}
+		Help( "Comfortable suits new VR players. Immersive turns smoothly and shows no vignette; it can cause motion sickness." );
+
+		static const char *const cameraIds[] = { "firstPerson", "thirdPerson" };
+		static const char *const cameraNames[] = { "First person", "Third person" };
+		Combo( "Camera", s.m_cameraMode, cameraIds, cameraNames, 2 );
+
+		bool motion = s.m_inputMode == "motion";
+		static const char *const inputNames[] = { "Gamepad", "Motion controllers" };
+		int input = motion ? 1 : 0;
+		if( ImGui::Combo( "Controls (next launch)", &input, inputNames, 2 ) )
+		{
+			s.m_inputMode = input == 1 ? "motion" : "gamepad";
+		}
+
+		ImGui::SliderFloat( "Text size", &s.m_panelTextScale, 1.0f, 2.5f, "%.1f" );
+		Help( "Size of the text in this window. Applies at once." );
+	}
+
+	// Simple page: the few settings a normal player needs; all of them are safe to change.
+	static void DrawSimplePage( VRSettings &s, VRPanelContext &context )
+	{
+		if( context.inGame )
+		{
+			ImGui::Checkbox( "Pause VR", &s.m_paused );
+		}
+		static const char *const cameraIds[] = { "firstPerson", "thirdPerson" };
+		static const char *const cameraNames[] = { "First person", "Third person" };
+		Combo( "Camera", s.m_cameraMode, cameraIds, cameraNames, 2 );
+		ImGui::Checkbox( "Snap turn", &s.m_snapTurn );
+		if( s.m_snapTurn )
+		{
+			ImGui::SliderFloat( "Snap step (deg)", &s.m_snapTurnDegrees, 15.0f, 90.0f, "%.0f" );
+		}
+		ImGui::Checkbox( "Vignette while moving / smooth turning", &s.m_comfortVignette );
+		ImGui::Checkbox( "Body-locked HUD panel", &s.m_hudFollow );
+		ImGui::SliderFloat( "HUD distance (m)", &s.m_hudDistance, 0.6f, 4.0f, "%.2f" );
+		ImGui::SliderFloat( "HUD size", &s.m_hudSize, 0.5f, 2.0f, "%.2f" );
+		ImGui::SliderFloat( "HUD below eye level (m)", &s.m_hudDrop, -0.3f, 0.6f, "%.2f" );
+		ImGui::SliderFloat( "Eye height (m)", &s.m_fpEyeHeight, 1.2f, 2.0f, "%.2f" );
+		if( context.inGame && context.headHeight && ImGui::Button( "Measure my eye height" ) )
+		{
+			float head = 0.0f;
+			if( context.headHeight( head ) && head > 0.8f )
+			{
+				s.m_fpEyeHeight = head < 1.2f ? 1.2f : ( head > 2.0f ? 2.0f : head );
+				context.message = "Eye height set from your head height (stand straight). Not saved yet.";
+			}
+			else
+			{
+				context.message = "The headset reports no floor.";
+			}
+		}
+		Help( "Stand straight, then press: sets the eye height from your head above the floor. "
+			"In the game: both grips + left stick down." );
+		ImGui::Checkbox( "Controller labels when you look down", &s.m_controllerLabels );
+		ImGui::Checkbox( "Speech to text (hold left Square)", &s.m_speechToText );
+		ImGui::SliderFloat( "Text size", &s.m_panelTextScale, 1.0f, 2.5f, "%.1f" );
+		if( context.inGame && context.runSetup && ImGui::Button( "Run VR setup again" ) )
+		{
+			context.runSetup();
+		}
+		if( context.inGame && context.openToolkit && ImGui::Button( "Open Rogue's Toolkit menu" ) )
+		{
+			context.openToolkit();
+		}
+	}
+
 	void DrawVRSettingsPanel( VRSettings &s, VRPanelContext &context )
 	{
 		UpdateCapture( s );
@@ -229,7 +342,41 @@ namespace PSUVR
 			ImGui::Separator();
 		}
 
-		if( ImGui::BeginTabBar( "vr_settings_tabs", ImGuiTabBarFlags_FittingPolicyResizeDown ) )
+		// Three pages: Presets (a few choices), Simple (safe settings), Advanced (every setting, in tabs).
+		static const char *const pageIds[] = { "presets", "simple", "advanced" };
+		static const char *const pageNames[] = { "Presets", "Simple", "Advanced" };
+		int page = 0;
+		for( int i = 0; i < 3; ++i )
+		{
+			if( s.m_settingsPage == pageIds[ i ] )
+			{
+				page = i;
+			}
+		}
+		const float pageWidth = ( ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 2.0f ) / 3.0f;
+		for( int i = 0; i < 3; ++i )
+		{
+			if( i > 0 )
+			{
+				ImGui::SameLine();
+			}
+			const bool selected = i == page;
+			if( selected )
+			{
+				ImGui::PushStyleColor( ImGuiCol_Button, ImGui::GetStyleColorVec4( ImGuiCol_ButtonActive ) );
+			}
+			if( ImGui::Button( pageNames[ i ], ImVec2( pageWidth, ImGui::GetFrameHeight() * 1.4f ) ) )
+			{
+				page = i;
+				s.m_settingsPage = pageIds[ i ];
+			}
+			if( selected )
+			{
+				ImGui::PopStyleColor();
+			}
+		}
+		const bool advanced = page == 2;
+		if( advanced && ImGui::BeginTabBar( "vr_settings_tabs", ImGuiTabBarFlags_FittingPolicyResizeDown ) )
 		{
 			for( int i = 0; i < static_cast< int >( Tab::Count ); ++i )
 			{
@@ -244,6 +391,19 @@ namespace PSUVR
 		// The tab scrolls on its own; Save / Reload stay in view below it.
 		const float footer = ImGui::GetFrameHeightWithSpacing() * 2.0f + ImGui::GetStyle().ItemSpacing.y * 2.0f;
 		ImGui::BeginChild( "vr_settings_tab", ImVec2( 0.0f, -footer ) );
+		if( !advanced )
+		{
+			// No section of the Advanced tabs matches while another page shows.
+			s_tab = Tab::Count;
+			if( page == 0 )
+			{
+				DrawPresetsPage( s );
+			}
+			else
+			{
+				DrawSimplePage( s, context );
+			}
+		}
 
 		if( Section( Tab::General, "General" ) )
 		{
@@ -318,6 +478,12 @@ namespace PSUVR
 				ImGui::Checkbox( "Keep the game's leg animation", &s.m_bodyKeepLegAnim );
 				Help( "The pelvis and legs keep the walk / idle animation (the strafe legs turn them); the rest of the body is the plain skeleton." );
 				ImGui::Checkbox( "Body follows my head (hips, spine)", &s.m_bodyIk );
+				if( s.m_bodyIk )
+				{
+					ImGui::SliderFloat( "Neck below eyes (m)", &s.m_bodyNeckDrop, 0.05f, 0.35f, "%.2f" );
+					Help( "Higher keeps the camera out of the shoulders; lower straightens the legs (the hips follow the neck)." );
+					ImGui::SliderFloat( "Body behind eyes (m)", &s.m_bodyBack, 0.0f, 0.4f, "%.2f" );
+				}
 				Help( "First person. The hips drop when you crouch and the spine leans toward your head." );
 				ImGui::Checkbox( "Planted feet that step", &s.m_bodyProceduralLegs );
 				Help( "The feet stay where they are in the world and step to a new spot when the hips move away. Replaces the strafe legs." );
@@ -387,6 +553,9 @@ namespace PSUVR
 				"the menu panel over the menu, as on a flat screen." );
 			Help( "Menus and 2D screens float on a dark background. Off: SteamVR's own space shows "
 				"around them, and with it the play-area boundary." );
+			ImGui::Checkbox( "Shop and mission menus on a flat screen", &s.m_flatMenus );
+			Help( "The mission counter, clothing shop and beauty parlor menus show the plain game picture on "
+				"the menu panel, like the other 2D menus, instead of in 3D." );
 			ImGui::SliderFloat( "Follow angle (deg)", &s.m_hudFollowAngle, 10.0f, 90.0f, "%.0f" );
 			ImGui::SliderFloat( "Distance (m)", &s.m_hudDistance, 0.6f, 4.0f, "%.2f" );
 			Help( "In the headset: hold the right grip while pointing at this panel and move the hand forward / back." );
@@ -515,6 +684,16 @@ namespace PSUVR
 				"attack or cast, pull the trigger of the hand holding a gun to shoot. Two-handed and twin "
 				"weapons swing with either hand; with a rod the left hand casts slots 3 / 4. "
 				"Needs 'Play with motion controllers'." );
+			ImGui::Checkbox( "Holster gestures", &s.m_holsterEnabled );
+			Help( "Press a grip with that hand at the back of your head: weapon up (Circle + D-pad up). At the back of your waist: weapon down. At your mouth: use the current item (Circle + D-pad left). "
+				"Outside these zones the grip works as before." );
+			if( s.m_holsterEnabled )
+			{
+				ImGui::SliderFloat( "Head zone radius (m)", &s.m_holsterHeadRadius, 0.08f, 0.40f, "%.2f" );
+				ImGui::SliderFloat( "Waist zone radius (m)", &s.m_holsterWaistRadius, 0.08f, 0.40f, "%.2f" );
+				ImGui::SliderFloat( "Mouth zone radius (m)", &s.m_holsterMouthRadius, 0.06f, 0.25f, "%.2f" );
+								ImGui::Checkbox( "Show zones (needs Show controllers)", &s.m_holsterShowZones );
+			}
 			if( s.m_swingAttack )
 			{
 				ImGui::Checkbox( "Photon Art gestures", &s.m_paGesture );
@@ -638,10 +817,10 @@ namespace PSUVR
 				"Needs speech to text. A noisy room or loud game audio can set it off: it then only acts when the words "
 				"match a command." );
 			static const char *const routeIds[] = { "auto", "command", "chat" };
-			static const char *const routeNames[] = { "Auto (command in battle)", "Command", "Chat" };
+			static const char *const routeNames[] = { "Auto (command, else chat)", "Command", "Chat" };
 			Combo( "Always-on speech goes to", s.m_voiceRoute, routeIds, routeNames, 3 );
-			Help( "Auto: with a weapon out in the field it is matched to a technique, anything else is ignored. "
-				"Command: a technique, nothing else. Chat: everything you say goes to the game chat. "
+			Help( "Auto: like the held button: a command if it matches, otherwise it goes to the chat. "
+				"Command: a command only (sounds-alike matching), anything else is dropped. Chat: everything goes to the game chat. "
 				"Tap left Square (a short press) to cycle these in the game. The held button always falls back to the chat." );
 		}
 
@@ -698,6 +877,9 @@ namespace PSUVR
 			Help( "In stereo the monitor shows the left eye's picture (cropped to the window) with the HUD on top, "
 				"instead of drawing the whole 3D scene a third time for the monitor. Menus and 2D screens are unchanged. "
 				"Turn off to get the normal flat camera on the monitor." );
+			ImGui::Checkbox( "Draw shadows once for both eyes", &s.m_perfShadowOnce );
+			Help( "With the game's shadows on: the right eye reuses the left eye's shadow map instead of drawing "
+				"everything that casts a shadow again. The shadows come from the game camera, so both eyes get the same map." );
 			ImGui::Checkbox( "Batch log writes", &s.m_perfLogBatching );
 			Help( "Writes psuex.log to disk about once a second instead of after every line. A crash still writes "
 				"what was logged. Turn off when chasing a crash that kills the game outright." );

@@ -5,6 +5,7 @@
 #include "../PSUOverlay/FrameTrace.h"
 #include "../PSUStructs/PSUPlayerData.h"
 #include "../PSUVR/VRCamera.h"
+#include "../PSUVR/StereoRenderer.h"
 #include "../PSUVR/VRProbe.h"
 #include "../PSUVR/VRSyntheticPad.h"
 
@@ -219,6 +220,8 @@ namespace TCameraTaskPlay
 
 		const int result = pOriginal48DA90( thisPtr );
 		PSUVR::VRProbe::NoteCameraTask( camera );
+		// A live game task: its parent chain leads to the task tree root (flat shop / mission menus).
+		PSUVR::StereoRenderer::NoteGameTask( camera );
 
 		// Camera state byte (+0x20): 1 = follow, 2 = LB held (lock-on), 3 = refocus,
 		// 4 = free aim, 5 = NPC talk.

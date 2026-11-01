@@ -8,6 +8,7 @@
 #include <d3d9.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 
 namespace PSUVR
@@ -36,6 +37,8 @@ namespace PSUVR
 			const Stage kGpuRow[ kGpu ] = { Stage::FlatPass, Stage::EyeLeft, Stage::EyeRight, Stage::PassB };
 
 			bool s_enabled = false;
+			std::atomic< uint32_t > s_counters[ static_cast< int >( Counter::Count ) ]{};
+			uint32_t s_countersLogged[ static_cast< int >( Counter::Count ) ]{};
 			int64_t s_qpcFrequency = 0;
 			int64_t s_lastFrame = 0;
 			double s_cur[ kStages ]{};
@@ -279,7 +282,7 @@ namespace PSUVR
 				}
 				char text[ 2048 ];
 				int length = std::snprintf( text, sizeof( text ),
-					"Perf %.0f s: %u frames, %.1f fps, frame avg %.2f max %.2f ms (headset %.0f Hz, %u%% over budget, stereo %u%%, fast %c%c%c%c%c, layer %s, res %.2f) | CPU",
+					"Perf %.0f s: %u frames, %.1f fps, frame avg %.2f max %.2f ms (headset %.0f Hz, %u%% over budget, stereo %u%%, fast %c%c%c%c%c%c, layer %s, res %.2f) | CPU",
 					seconds, w.frames, w.frames / seconds, w.frameSum / w.frames, w.frameMax,
 					s_displayMs > 0.0 ? 1000.0 / s_displayMs : 0.0, w.overBudget * 100u / w.frames, w.stereo * 100u / w.frames,
 					// Phase 1 toggles: F flat copy skipped, C plain copies, H HUD lock ranges, L log batching;
@@ -287,6 +290,8 @@ namespace PSUVR
 					Config::Get().vr.m_perfSkipFlatCopy ? 'F' : '-', Config::Get().vr.m_perfCopyBlits ? 'C' : '-',
 					Config::Get().vr.m_perfHudLockRanges ? 'H' : '-', Config::Get().vr.m_perfLogBatching ? 'L' : '-',
 					Config::Get().vr.m_flatMirrorEye ? 'M' : '-',
+					// phase 4: W right eye reuses the shadow map.
+					Config::Get().vr.m_perfShadowOnce ? 'W' : '-',
 					// phase 3: stereo layer space and eye resolution scale.
 					Config::Get().vr.m_stereoLayerSpace == "local" ? "local" : "view", Config::Get().vr.m_eyeResolutionScale );
 				for( int i = 0; i < kStages && length > 0 && length < static_cast< int >( sizeof( text ) ); ++i )
@@ -308,8 +313,28 @@ namespace PSUVR
 				}
 				if( w.gpuFrameCount && length > 0 && length < static_cast< int >( sizeof( text ) ) )
 				{
-					std::snprintf( text + length, sizeof( text ) - length, " frame %.2f/%.2f",
+					length += std::snprintf( text + length, sizeof( text ) - length, " frame %.2f/%.2f",
 						w.gpuFrameSum / w.gpuFrameCount, w.gpuFrameMax );
+				}
+				// Phase 4 probe: shadow passes per frame, game fps setting (0x009CA780), remapped buffers.
+				uint32_t delta[ static_cast< int >( Counter::Count ) ]{};
+				for( int i = 0; i < static_cast< int >( Counter::Count ); ++i )
+				{
+					const uint32_t now = s_counters[ i ].load( std::memory_order_relaxed );
+					delta[ i ] = now - s_countersLogged[ i ];
+					s_countersLogged[ i ] = now;
+				}
+				if( length > 0 && length < static_cast< int >( sizeof( text ) ) )
+				{
+					const auto c = []( Counter k ) { return static_cast< int >( k ); };
+					std::snprintf( text + length, sizeof( text ) - length,
+						" | probe shadow %.2f/frame (eyes %.2f), gameFps %d, buffers +%u (%.1f MB, total %u %.1f MB), locks %.1f/s %.1f KB/s",
+						static_cast< double >( delta[ c( Counter::ShadowPass ) ] ) / w.frames,
+						static_cast< double >( delta[ c( Counter::ShadowPassEye ) ] ) / w.frames,
+						*reinterpret_cast< const int * >( 0x009CA780 ), delta[ c( Counter::BufferRemap ) ],
+						delta[ c( Counter::BufferRemapKB ) ] / 1024.0, s_countersLogged[ c( Counter::BufferRemap ) ],
+						s_countersLogged[ c( Counter::BufferRemapKB ) ] / 1024.0,
+						delta[ c( Counter::BufferLock ) ] / seconds, delta[ c( Counter::BufferLockKB ) ] / seconds );
 				}
 				PSU_LOG( "%s\n", text );
 			}
@@ -318,6 +343,11 @@ namespace PSUVR
 		bool Enabled()
 		{
 			return s_enabled;
+		}
+
+		void Count( Counter counter, uint32_t amount )
+		{
+			s_counters[ static_cast< int >( counter ) ].fetch_add( amount, std::memory_order_relaxed );
 		}
 
 		Scope::Scope( Stage stage ) : m_stage( stage ), m_start( s_enabled ? Now() : 0 )

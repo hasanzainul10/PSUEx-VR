@@ -78,6 +78,16 @@ struct VRSettings
 	// Menus / 2D scenes: a dark backdrop behind the panel instead of the runtime's own
 	// environment (which also shows the play-area boundary).
 	bool m_menuBackdrop = true;
+	// Mission counter, clothing shop and beauty parlor menus: the flat game picture on the menu panel
+	// (mono) instead of the stereo eyes. Detected by their game tasks (names in flatMenuTasks).
+	bool m_flatMenus = true;
+	// Comma-separated game task names (TTask +4) that turn the flat menu view on while alive. TBeautyParlor /
+	// TDressShop already live during the NPC talk; TCharaMakeDoll (salon) / TDressShopList (clothes) come with the menu.
+	// TLobbyCounterCamera: the spaceport planet selector, whose planets ignore the eye VIEW and would stick to the head.
+	std::string m_flatMenuTasks = "TCounterSequence,TCharaMakeDoll,TDressShopList,TLobbyCounterCamera";
+	// Tasks that keep an open flat menu flat after its flatMenuTasks task is gone (they never open it): the salon /
+	// clothes shop backdrop window outlives the menu and would otherwise animate in VR space while it fades out.
+	std::string m_flatMenuHoldTasks = "TWindowCharaMakeBack";
 	// Menu overlays bigger than the screen (mission menu scanlines) go on the menu panel in their
 	// draw order instead of being dropped as a background.
 	bool m_hudOverlays = true;
@@ -102,6 +112,9 @@ struct VRSettings
 	// With the rest pose: leave the pelvis and legs on the game's own animation (walk, idle).
 	bool m_bodyKeepLegAnim = false;
 	bool m_bodyIk = false;
+	// bodyIk: how far below the eye the neck sits, and how far behind the eye the body stands (meters).
+	float m_bodyNeckDrop = 0.22f;
+	float m_bodyBack = 0.20f;
 	// With the rest pose: feet stay planted in the world and step when the hips move away (replaces the strafe legs).
 	bool m_bodyProceduralLegs = false;
 	// Right-stick snap turn step in degrees (snapTurn = true).
@@ -148,6 +161,10 @@ struct VRSettings
 	bool m_showControllers = true;
 	// Motion controllers: point the right controller at PSUEx windows (VR settings) in the
 	// headset; the trigger clicks, the right stick scrolls, Circle closes.
+	// Text size of the VR settings window (1 = the old small text) and the page it was left on
+	// ("presets" / "simple" / "advanced").
+	float m_panelTextScale = 1.5f;
+	std::string m_settingsPage = "presets";
 	bool m_uiPointer = true;
 	// Controller label cards (what each button does) floating at the controllers: when you look
 	// down at a controller (toggle: both grips + right stick click), and while a grip is held
@@ -198,6 +215,15 @@ struct VRSettings
 	// slot 2 (the right grip sends no R1 while the right weapon has controls). Off: the old
 	// scheme, melee swings only, swing with the trigger held = Photon Art.
 	bool m_gripPhotonArt = true;
+	// Holster gestures (motion input): a grip press with the hand in a body zone switches the
+	// weapon up (back of the head) or down (back of the waist), or uses an item (mouth). Radii in
+	// meters at 1.7 m head height (scaled by the real head height); the mouth zone runs holsterItemScript (pad script: Circle held + D-pad left = use the current item)
+	bool m_holsterEnabled = false;
+	float m_holsterHeadRadius = 0.22f;
+	float m_holsterWaistRadius = 0.22f;
+	float m_holsterMouthRadius = 0.13f;
+	std::string m_holsterItemScript = "hold:cancel wait:0.12 tap:left wait:0.15";
+	bool m_holsterShowZones = false;
 	// Left Triangle in the field: the game's R2 (opens the chat log). Off: the
 	// PSUEx chat log window. Y in menus either way.
 	bool m_triangleChatL2 = true;  // (name kept for old settings files; it now sends R2)
@@ -318,6 +344,9 @@ struct VRSettings
 	bool m_perfLogBatching = true;
 	// Stereo: the monitor shows the left eye instead of a separate flat 3D pass (the HUD still draws on top).
 	bool m_flatMirrorEye = true;
+	// Stereo with the game's shadows on: the right eye reuses the left eye's shadow map (the light camera follows
+	// the game camera, not the eye) instead of drawing the shadow casters again.
+	bool m_perfShadowOnce = true;
 	// Stereo projection layer space: "local" (the rendered head poses, so the runtime's reprojection corrects
 	// head turns when the game is slower than the headset; less judder) or "view" (head-locked, the old behaviour).
 	std::string m_stereoLayerSpace = "local";

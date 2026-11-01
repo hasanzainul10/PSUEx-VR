@@ -264,6 +264,62 @@ namespace PSUCombat
 		uint32_t vtable[ 2 ]{};     // right / left weapon object vtables
 	};
 
+	// The action palette's TWindowCP (docs/ADDRESS_MAP.md, "Item palette"): [0x00B9DBF0] is the
+	// TWindowPlayerCtrl, +0x4C the TWindowActionPalette, +0x90 its TWindowCP. In the CP window
+	// +0xD0 is the row (0 weapons, 1 items), +0xC8 the item cursor, +0xDC the item count and
+	// +0x134 + i * 4 the packed item ids (byte 0 = category, 0 = empty slot; byte 1 / 2 =
+	// kind / index). Layout read from the palette code, check the Debug log on first use.
+	struct ItemPalette
+	{
+		int state = -1;            // TWindowActionPalette +0xA8: 0 closed, 1 open while Cancel is held (0x00578020)
+		bool itemRow = false;      // the item row is the one selected
+		int cursor = 0;
+		int count = 0;
+		uint32_t entry[ 7 ]{};
+	};
+
+	inline bool ReadItemPalette( ItemPalette &out )
+	{
+		using detail::Dword;
+		using detail::Readable;
+		out = {};
+		if( !Readable( 0x00B9DBF0 ) )
+		{
+			return false;
+		}
+		const uintptr_t control = Dword( 0x00B9DBF0 );
+		if( !Readable( control ) || !Readable( control + 0x50 ) )
+		{
+			return false;
+		}
+		const uintptr_t palette = Dword( control + 0x4C );
+		if( !Readable( palette ) || !Readable( palette + 0xAC ) )
+		{
+			return false;
+		}
+		const uintptr_t window = Dword( palette + 0x90 );
+		if( !Readable( window ) || !Readable( window + 0x14C ) )
+		{
+			return false;
+		}
+		const uint32_t row = Dword( window + 0xD0 );
+		const uint32_t cursor = Dword( window + 0xC8 );
+		const uint32_t count = Dword( window + 0xDC );
+		if( row > 1 || count < 1 || count > 7 || cursor >= count )
+		{
+			return false;
+		}
+		out.state = static_cast< int >( Dword( palette + 0xA8 ) );
+		out.itemRow = row == 1;
+		out.cursor = static_cast< int >( cursor );
+		out.count = static_cast< int >( count );
+		for( uint32_t i = 0; i < count; ++i )
+		{
+			out.entry[ i ] = Dword( window + 0x134 + i * 4 );
+		}
+		return true;
+	}
+
 	inline bool ReadTechSlots( const State &state, TechSlots &out )
 	{
 		using detail::Dword;

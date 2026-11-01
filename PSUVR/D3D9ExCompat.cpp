@@ -1,6 +1,7 @@
 #include "D3D9ExCompat.h"
 
 #include "D3D9ExUpgrade.h"
+#include "VRPerf.h"
 #include "../Misc/Log.h"
 #include "detours.h"
 
@@ -151,6 +152,64 @@ namespace PSUVR
 		usage |= D3DUSAGE_DYNAMIC;
 	}
 
+	// Phase 4 probe: remapped buffers carry this private-data tag (their size); a Lock hook on the
+	// VB / IB vtables (index 11) counts locks on tagged buffers only.
+	static const GUID kRemapTag = { 0x5c1d7a40, 0x2b9e, 0x4f61, { 0x9a, 0x3c, 0x71, 0x0e, 0x84, 0x2d, 0x55, 0xb3 } };
+	using BufferLock_t = HRESULT( APIENTRY * )( IDirect3DResource9 *, UINT, UINT, void **, DWORD );
+	static BufferLock_t s_origVBLock = nullptr;
+	static BufferLock_t s_origIBLock = nullptr;
+
+	static void CountLock( IDirect3DResource9 *buffer, UINT size )
+	{
+		UINT length = 0;
+		DWORD tagSize = sizeof( length );
+		if( SUCCEEDED( buffer->GetPrivateData( kRemapTag, &length, &tagSize ) ) )
+		{
+			PSUVR::VRPerf::Count( PSUVR::VRPerf::Counter::BufferLock );
+			PSUVR::VRPerf::Count( PSUVR::VRPerf::Counter::BufferLockKB, ( size ? size : length ) / 1024u );
+		}
+	}
+
+	static HRESULT APIENTRY Hook_VBLock( IDirect3DResource9 *buffer, UINT offset, UINT size, void **data, DWORD flags )
+	{
+		CountLock( buffer, size );
+		return s_origVBLock( buffer, offset, size, data, flags );
+	}
+
+	static HRESULT APIENTRY Hook_IBLock( IDirect3DResource9 *buffer, UINT offset, UINT size, void **data, DWORD flags )
+	{
+		CountLock( buffer, size );
+		return s_origIBLock( buffer, offset, size, data, flags );
+	}
+
+	// Tags a remapped buffer and patches its vtable's Lock once (VB and IB have their own vtable).
+	static void TagRemappedBuffer( IDirect3DResource9 *buffer, UINT length, BufferLock_t &orig, BufferLock_t hook )
+	{
+		if( !buffer )
+		{
+			return;
+		}
+		buffer->SetPrivateData( kRemapTag, &length, sizeof( length ), 0 );
+		PSUVR::VRPerf::Count( PSUVR::VRPerf::Counter::BufferRemap );
+		PSUVR::VRPerf::Count( PSUVR::VRPerf::Counter::BufferRemapKB, length / 1024u );
+		void **vTable = *reinterpret_cast< void *** >( buffer );
+		if( vTable[ 11 ] == reinterpret_cast< void * >( hook ) )
+		{
+			return;
+		}
+		DWORD oldProtect = 0;
+		if( VirtualProtect( &vTable[ 11 ], sizeof( void * ), PAGE_EXECUTE_READWRITE, &oldProtect ) )
+		{
+			if( !orig )
+			{
+				orig = reinterpret_cast< BufferLock_t >( vTable[ 11 ] );
+			}
+			vTable[ 11 ] = reinterpret_cast< void * >( hook );
+			VirtualProtect( &vTable[ 11 ], sizeof( void * ), oldProtect, &oldProtect );
+			PSU_LOG( "D3D9ExCompat: buffer Lock counter on vtable %p\n", vTable );
+		}
+	}
+
 	static void MaybeLogRemap( const char *kind, unsigned count, DWORD usage, D3DPOOL pool )
 	{
 		if( count <= kMaxRemapDetailLogs )
@@ -268,6 +327,10 @@ namespace PSUVR
 				*buffer = nullptr;
 			}
 		}
+		else if( remapped && buffer )
+		{
+			TagRemappedBuffer( *buffer, length, s_origVBLock, Hook_VBLock );
+		}
 		return hr;
 	}
 
@@ -291,6 +354,10 @@ namespace PSUVR
 			{
 				*buffer = nullptr;
 			}
+		}
+		else if( remapped && buffer )
+		{
+			TagRemappedBuffer( *buffer, length, s_origIBLock, Hook_IBLock );
 		}
 		return hr;
 	}
