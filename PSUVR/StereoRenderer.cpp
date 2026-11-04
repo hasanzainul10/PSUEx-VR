@@ -6,6 +6,7 @@
 #include "VRHud.h"
 #include "VRPerf.h"
 #include "VRPlayerDraw.h"
+#include "VREyeCull.h"
 #include "VRSyntheticPad.h"
 #include "VRSystem.h"
 #include "../Misc/Log.h"
@@ -2275,6 +2276,7 @@ namespace PSUVR
 				device->Clear( 0, nullptr, clearFlags, D3DCOLOR_XRGB( 0, 0, 0 ), 1.0f, 0 );
 				device->SetTransform( D3DTS_VIEW, &eyeView );
 				device->SetTransform( D3DTS_PROJECTION, &eyeProj );
+				VREyeCull::BeginEye( eyeView, eyeProj );
 
 				SetPassEye( views[ eye ] );
 				s_passEyeIndex = eye;
@@ -2295,6 +2297,7 @@ namespace PSUVR
 				m_poses[ eye ] = views[ eye ];
 				m_viewSpacePoses[ eye ] = viewSpace[ eye ];
 			}
+			VREyeCull::End();
 			VRPlayerDraw::EndEyePasses();
 
 			device->SetRenderTarget( 0, gameTarget );

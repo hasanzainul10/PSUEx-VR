@@ -195,8 +195,12 @@
     <ClInclude Include="PSUDetour\Hook_TCameraTaskPlay.hpp" />
     <ClInclude Include="PSUVR\VRHands.h" />
     <ClInclude Include="PSUVR\VRHolster.h" />
+    <ClInclude Include="PSUVR\VREyeCull.h" />
     <ClInclude Include="PSUVR\VRControllerSim.h" />
     <ClInclude Include="PSUDetour\Hook_0074B760_BonePose.hpp" />
+    <ClInclude Include="PSUDetour\Hook_004FFFA0_BoneQuery.hpp" />
+    <ClInclude Include="PSUDetour\Hook_0074DA40_CullSphere.hpp" />
+    <ClInclude Include="PSUDetour\Hook_0074D5B0_CullBox.hpp" />
     <ClInclude Include="PSUDetour\Hook_005089C0_NearCull.hpp" />
     <ClInclude Include="PSUDetour\Hook_00562070_PartCull.hpp" />
     <ClInclude Include="PSUDetour\Hook_004F9F50_AimShot.hpp" />
@@ -311,6 +315,7 @@
     <ClCompile Include="PSUVR\VRPlayerDraw.cpp" />
     <ClCompile Include="PSUVR\VRHands.cpp" />
     <ClCompile Include="PSUVR\VRHolster.cpp" />
+    <ClCompile Include="PSUVR\VREyeCull.cpp" />
     <ClCompile Include="PSUVR\VRControllerSim.cpp" />
     <ClCompile Include="PSUOverlay\ImageMng.cpp" />
     <ClCompile Include="PSUOverlay\Interface\CameraDisplay.cpp" />

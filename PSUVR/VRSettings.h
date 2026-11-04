@@ -182,6 +182,9 @@ struct VRSettings
 	std::string m_simScript = "psuex_vr_script.txt";
 	// First person: the character's arms reach for the controllers (two-bone IK).
 	bool m_handsFollow = true;
+	// Measure the player's model -> world once per frame instead of on every player draw (each
+	// measurement re-runs the pose build).
+	bool m_handsWorldOncePerFrame = true;
 	bool m_armStretch = true; // visible arms stretch to reach the controllers when yours are longer
 	// Arms while attacking: "controller" (your swing) or "animation" (the game's). Photon
 	// Arts always play the game's animation.
@@ -322,6 +325,9 @@ struct VRSettings
 	// flat camera's view; in VR their unfinished sides show (galaxy panels, rectangles). Off hides
 	// the sky in the headset only.
 	bool m_eyeSky = true;
+	// The eye passes cull meshes and terrain against the eye's own frustum instead of the flat
+	// camera's (narrower, and pointing elsewhere when the head turns): no pop-in at the edges.
+	bool m_eyeFrustumCull = true;
 	// When stereo is on, also submit the flat game frame as a world-locked quad (HUD stand-in).
 	// Default off — the panel reads as a dark PiP sliding over the stereo floor.
 	bool m_stereoPanel = false;

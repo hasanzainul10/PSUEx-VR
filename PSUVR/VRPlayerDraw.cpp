@@ -11,6 +11,8 @@
 #include <d3d9.h>
 
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 
 namespace PSUVR
 {
@@ -101,6 +103,37 @@ namespace PSUVR
 			{
 				return;
 			}
+#ifdef _DEBUG
+			// How often the player is drawn: per patched node, in / outside the eye passes.
+			{
+				static unsigned s_calls[ kMaxPatches ][ 2 ]{};
+				static unsigned s_firstFrame = 0;
+				static DWORD s_lastCallLog = 0;
+				for( unsigned i = 0; i < s_patchCount; ++i )
+				{
+					if( *reinterpret_cast< void ** >( s_patches[ i ].node + kNodeObject ) == object &&
+						s_patches[ i ].original == original )
+					{
+						++s_calls[ i ][ StereoRenderer::InEyePass() ? 1 : 0 ];
+						break;
+					}
+				}
+				if( GetTickCount() - s_lastCallLog >= 3000 )
+				{
+					s_lastCallLog = GetTickCount();
+					char line[ 512 ];
+					int len = 0;
+					for( unsigned i = 0; i < s_patchCount && len < 440; ++i )
+					{
+						len += sprintf_s( line + len, sizeof( line ) - len, " node%u=%p flat %u eye %u", i, s_patches[ i ].node,
+							s_calls[ i ][ 0 ], s_calls[ i ][ 1 ] );
+					}
+					PSU_LOG( "VRPlayerDraw: player draws over %u frames:%s\n", s_frame - s_firstFrame, line );
+					memset( s_calls, 0, sizeof( s_calls ) );
+					s_firstFrame = s_frame;
+				}
+			}
+#endif
 			NotePlayerModel( object );
 			// Free aim (arms following): the layer draw already reaches this node (BeginEyePasses);
 			// the game still culls the player against its aim camera (see IgnoreNearHide /
@@ -420,6 +453,16 @@ namespace PSUVR
 		bool DrawingLocalPlayer()
 		{
 			return s_drawingLocalPlayer;
+		}
+
+		const void *PlayerModel()
+		{
+			return s_divModel;
+		}
+
+		unsigned Frame()
+		{
+			return s_frame;
 		}
 
 		namespace

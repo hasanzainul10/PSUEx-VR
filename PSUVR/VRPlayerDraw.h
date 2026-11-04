@@ -18,6 +18,11 @@ namespace PSUVR
 
 		// Inside the local player's draw callback.
 		bool DrawingLocalPlayer();
+		// The local player's TDivModel, seen at its last draw; null when not tracked
+		// (Update( false ), vr.fpBody "full", no player).
+		const void *PlayerModel();
+		// Counts Update calls (one per stereo frame).
+		unsigned Frame();
 		// Around the eye passes. PSU_DrawLayer only calls a node whose object has none of the
 		// bits 0x223 in its 16-bit flags at +8; free aim sets one on the local player, so the
 		// character, hands and weapons vanish. With the arms on the controllers the bits are

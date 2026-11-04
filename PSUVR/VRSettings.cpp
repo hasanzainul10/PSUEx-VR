@@ -85,6 +85,7 @@ namespace
 	X( m_emulateControllers, "emulateControllers" ) \
 	X( m_simScript, "simScript" ) \
 	X( m_handsFollow, "handsFollow" ) \
+	X( m_handsWorldOncePerFrame, "handsWorldOncePerFrame" ) \
 	X( m_armStretch, "armStretch" ) \
 	X( m_handsAttack, "handsAttack" ) \
 	X( m_handsPhotonArtAnimation, "handsPhotonArtAnimation" ) \
@@ -155,6 +156,7 @@ namespace
 	X( m_eyeBlur, "eyeBlur" ) \
 	X( m_eyeGlare, "eyeGlare" ) \
 	X( m_eyeSky, "eyeSky" ) \
+	X( m_eyeFrustumCull, "eyeFrustumCull" ) \
 	X( m_stereoPanel, "stereoPanel" ) \
 	X( m_debugEyeShift, "debugEyeShift" ) \
 	X( m_debugDoublePass, "debugDoublePass" ) \

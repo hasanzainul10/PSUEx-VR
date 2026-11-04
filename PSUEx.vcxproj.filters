@@ -228,6 +228,15 @@
     <ClInclude Include="PSUDetour\Hook_0074B760_BonePose.hpp">
       <Filter>Header Files\PSUFunction</Filter>
     </ClInclude>
+    <ClInclude Include="PSUDetour\Hook_004FFFA0_BoneQuery.hpp">
+      <Filter>Header Files\PSUFunction</Filter>
+    </ClInclude>
+    <ClInclude Include="PSUDetour\Hook_0074DA40_CullSphere.hpp">
+      <Filter>Header Files\PSUFunction</Filter>
+    </ClInclude>
+    <ClInclude Include="PSUDetour\Hook_0074D5B0_CullBox.hpp">
+      <Filter>Header Files\PSUFunction</Filter>
+    </ClInclude>
     <ClInclude Include="PSUDetour\Hook_005089C0_NearCull.hpp">
       <Filter>Header Files\PSUFunction</Filter>
     </ClInclude>
@@ -343,6 +352,9 @@
       <Filter>Header Files\PSUVR</Filter>
     </ClInclude>
     <ClInclude Include="PSUVR\VRHolster.h">
+      <Filter>Header Files\PSUVR</Filter>
+    </ClInclude>
+    <ClInclude Include="PSUVR\VREyeCull.h">
       <Filter>Header Files\PSUVR</Filter>
     </ClInclude>
     <ClInclude Include="PSUVR\VRControllerSim.h">
@@ -531,6 +543,9 @@
       <Filter>Source Files\PSUVR</Filter>
     </ClCompile>
     <ClCompile Include="PSUVR\VRHolster.cpp">
+      <Filter>Source Files\PSUVR</Filter>
+    </ClCompile>
+    <ClCompile Include="PSUVR\VREyeCull.cpp">
       <Filter>Source Files\PSUVR</Filter>
     </ClCompile>
     <ClCompile Include="PSUVR\VRControllerSim.cpp">

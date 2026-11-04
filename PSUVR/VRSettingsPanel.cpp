@@ -582,6 +582,9 @@ namespace PSUVR
 			ImGui::Checkbox( "Sky in the headset", &s.m_eyeSky );
 			Help( "Off hides the area's sky in the headset (the flat window keeps it). Some missions' skies are "
 				"partial boxes made for the flat camera, and in VR their unfinished sides show." );
+			ImGui::Checkbox( "Cull for the headset's view", &s.m_eyeFrustumCull );
+			Help( "The game skips what its flat camera can't see. The headset sees wider and turns with your head, so "
+				"things popped in at the edges. On: the headset decides what is drawn in its eyes." );
 			ImGui::Checkbox( "Screen glow (VR)", &s.m_eyeBlur );
 			Help( "The game's full-screen glow. It is laid over the whole picture, so in VR an enemy's glow "
 				"shows through your weapon. Off by default (the flat window keeps it)." );
@@ -631,6 +634,9 @@ namespace PSUVR
 			Help( "The character's arms reach for where you hold the controllers." );
 			if( s.m_handsFollow )
 			{
+				ImGui::Checkbox( "Find the body once per frame (faster)", &s.m_handsWorldOncePerFrame );
+				Help( "The arms need to know where the body is. The game is asked once per frame instead of every time the "
+					"body is drawn (about 9 times). Untick if the arms lag behind or jitter." );
 				ImGui::Checkbox( "Stretch arms to reach my hands", &s.m_armStretch );
 				Help( "The character's arms are shorter than most players'. On: they stretch (up to half again) so the "
 					"hands sit on the controllers. Off: the arm stops at its own length." );

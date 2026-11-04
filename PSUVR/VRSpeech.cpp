@@ -472,7 +472,8 @@ namespace PSUVR
 		};
 
 		// A rough consonant skeleton of a word, so spellings of the same sound meet: voiced and
-		// unvoiced pairs merge (b/p, d/t, g/k/c/q, s/z, f/v), vowels and repeats go.
+		// unvoiced pairs merge (b/p, d/t, g/k/c/q, s/z, f/v), l and r merge, vowels and repeats go,
+		// and a trailing r goes (English "-er" for a final "-a": "lester" = Resta, "barter" = Barta).
 		std::string Skeleton( const std::string &word )
 		{
 			std::string out;
@@ -487,12 +488,17 @@ namespace PSUVR
 					case 'g': case 'c': case 'q': m = 'k'; break;
 					case 'z': case 'x': m = 's'; break;
 					case 'v': m = 'f'; break;
+					case 'l': m = 'r'; break;
 					default: m = c; break;
 				}
 				if( out.empty() || out.back() != m )
 				{
 					out += m;
 				}
+			}
+			if( out.size() >= 3 && out.back() == 'r' )
+			{
+				out.pop_back();
 			}
 			return out;
 		}
@@ -502,6 +508,117 @@ namespace PSUVR
 			const char *name = TechNameFor( s_slots.id[ slot ] );
 			return name ? name : "-";
 		}
+
+#ifdef _DEBUG
+		// Probe (Debug): where the palette items' names live. TWindowCP +0x11C + i * 4 holds each
+		// slot's inventory handle; 0x004CA2A0 (handle in EDX, __fastcall) returns the item object
+		// (+0x1C == 0x100000, +0x34 packed id), as the palette draw 0x0057D7B0 does. Logs the first
+		// UTF-16 text in the object and one pointer deep, to pick the name offset.
+		typedef uintptr_t( __fastcall *ItemFromHandle_t )( uint32_t unused, uint32_t handle );
+
+		uintptr_t ItemFromHandle( uint32_t handle )
+		{
+			__try
+			{
+				return reinterpret_cast< ItemFromHandle_t >( 0x004CA2A0 )( 0, handle );
+			}
+			__except( EXCEPTION_EXECUTE_HANDLER )
+			{
+				return 0;
+			}
+		}
+
+		// Offset of the first UTF-16 run of 4+ letters, digits, spaces or '-' starting with a
+		// letter in [base, base + size), copied to `out`; -1 when none.
+		int FindWideText( uintptr_t base, size_t size, char *out, size_t outSize )
+		{
+			using PSUCombat::detail::Readable;
+			out[ 0 ] = 0;
+			if( !Readable( base ) || !Readable( base + size - 1 ) )
+			{
+				return -1;
+			}
+			size_t run = 0;
+			for( size_t offset = 0; offset + 2 <= size + 2; offset += 2 )
+			{
+				const wchar_t c = offset + 2 <= size ? *reinterpret_cast< const wchar_t * >( base + offset ) : 0;
+				const bool text = c < 0x7F && ( std::isalnum( c ) || c == ' ' || c == '-' );
+				if( text && ( run > 0 || std::isalpha( c ) ) )
+				{
+					if( run + 1 < outSize )
+					{
+						out[ run ] = static_cast< char >( c );
+					}
+					++run;
+					continue;
+				}
+				if( run >= 4 )
+				{
+					out[ ( std::min )( run, outSize - 1 ) ] = 0;
+					return static_cast< int >( offset - run * 2 );
+				}
+				run = 0;
+			}
+			out[ 0 ] = 0;
+			return -1;
+		}
+
+		void ProbeItemNames( const PSUCombat::ItemPalette &palette )
+		{
+			using PSUCombat::detail::Dword;
+			using PSUCombat::detail::Readable;
+			static int s_probes = 0;
+			if( s_probes >= 4 )
+			{
+				return;
+			}
+			++s_probes;
+			bool dumped = false;
+			for( int item = 0; item < palette.count; ++item )
+			{
+				if( !( palette.entry[ item ] & 0xFF ) )
+				{
+					continue;
+				}
+				const uintptr_t object = ItemFromHandle( palette.handle[ item ] );
+				if( !object || !Readable( object ) || !Readable( object + 0x1FF ) )
+				{
+					PSU_LOG( "VRVoice: item probe %d: handle %08X -> no object (%08X)\n", item + 1, palette.handle[ item ],
+						static_cast< unsigned >( object ) );
+					continue;
+				}
+				char text[ 48 ];
+				const int at = FindWideText( object, 0x200, text, sizeof( text ) );
+				// One pointer deep: the first text behind a pointer field in +0x00..+0x7C.
+				char deepText[ 48 ] = "";
+				int deepField = -1;
+				int deepAt = -1;
+				for( int field = 0; field < 0x80 && deepAt < 0; field += 4 )
+				{
+					const uintptr_t pointer = Dword( object + field );
+					if( pointer != object && Readable( pointer ) && Readable( pointer + 0xFF ) )
+					{
+						deepAt = FindWideText( pointer, 0x100, deepText, sizeof( deepText ) );
+						deepField = field;
+					}
+				}
+				PSU_LOG( "VRVoice: item probe %d: handle %08X obj %08X tag %08X id %06X (palette %06X), text \"%s\" at +%X, "
+					"via +%X -> \"%s\" at +%X\n", item + 1, palette.handle[ item ], static_cast< unsigned >( object ),
+					Dword( object + 0x1C ), Dword( object + 0x34 ) & 0xFFFFFF, palette.entry[ item ] & 0xFFFFFF, text, at,
+					deepAt >= 0 ? deepField : -1, deepText, deepAt );
+				if( !dumped )
+				{
+					dumped = true;
+					for( int row = 0; row < 0x80; row += 0x20 )
+					{
+						PSU_LOG( "VRVoice: item probe obj +%02X: %08X %08X %08X %08X %08X %08X %08X %08X\n", row,
+							Dword( object + row ), Dword( object + row + 4 ), Dword( object + row + 8 ), Dword( object + row + 12 ),
+							Dword( object + row + 16 ), Dword( object + row + 20 ), Dword( object + row + 24 ), Dword( object + row + 28 ) );
+					}
+				}
+			}
+		}
+#endif
 
 		// Rebuilds the registry from the game state (throttled to 500 ms) and sends the helper
 		// its KEYTERMS bias when the spoken names changed.
@@ -602,6 +719,12 @@ namespace PSUVR
 					palette.entry[ 0 ] & 0xFFFFFF, palette.entry[ 1 ] & 0xFFFFFF, palette.entry[ 2 ] & 0xFFFFFF,
 					palette.entry[ 3 ] & 0xFFFFFF, palette.entry[ 4 ] & 0xFFFFFF, palette.entry[ 5 ] & 0xFFFFFF,
 					palette.entry[ 6 ] & 0xFFFFFF );
+#ifdef _DEBUG
+				if( paletteValid )
+				{
+					ProbeItemNames( palette );
+				}
+#endif
 			}
 			PSU_LOG( "VRVoice: slots %u/%u/%u/%u (lv %u/%u/%u/%u) = %s / %s / %s / %s; right %08X [%02X %02X %02X %02X %02X %02X %02X %02X] "
 				"left %08X [%02X %02X %02X %02X %02X %02X %02X %02X], categories %X / %X; %u commands\n",
@@ -630,6 +753,8 @@ namespace PSUVR
 			}
 			int best = -1;
 			int bestDistance = 1000;
+			bool tied = false;  // another name scored the same as the best (command route only)
+			const std::string saidSound = Skeleton( said );
 			for( size_t index = 0; index < s_commands.size(); ++index )
 			{
 				const Command &command = s_commands[ index ];
@@ -649,37 +774,45 @@ namespace PSUVR
 				int allowed = command.fuzzy.size() >= 5 ? 1 : 0;
 				if( loose )
 				{
-					// Command route: sounds-alike. Same consonant skeleton ("parter" = Barta), or one
-					// off it; a longer name may also be two letters off.
-					const std::string skeleton = Skeleton( said );
-					const int soundDistance = skeleton.size() >= 3 && command.sound.size() >= 3 ?
-						EditDistance( skeleton, command.sound ) : 1000;
-					if( soundDistance == 0 )
+					// Command route: sounds-alike. Letters: about one in three may be off. Sound: the
+					// consonant skeleton may be one off ("rst" for "rsta"), two off for longer names.
+					// The closer of the two counts; a tie between different names is refused below.
+					allowed = ( std::max )( 1, static_cast< int >( command.fuzzy.size() ) / 3 );
+					const int soundDistance = saidSound.size() >= 3 && command.sound.size() >= 3 ?
+						EditDistance( saidSound, command.sound ) : 1000;
+					const int soundAllowed = command.sound.size() >= 4 ? 2 : 1;
+					if( soundDistance <= soundAllowed )
 					{
-						distance = 0;
-					}
-					else if( soundDistance == 1 && command.sound.size() >= 4 )
-					{
-						distance = ( std::min )( distance, 1 );
-						allowed = ( std::max )( allowed, 1 );
-					}
-					else if( command.fuzzy.size() >= 6 )
-					{
-						allowed = ( std::max )( allowed, 2 );
+						distance = ( std::min )( distance, soundDistance );
+						allowed = ( std::max )( allowed, soundAllowed );
 					}
 				}
-				if( distance <= allowed && distance < bestDistance )
+				if( distance > allowed )
+				{
+					continue;
+				}
+				if( distance < bestDistance )
 				{
 					best = static_cast< int >( index );
 					bestDistance = distance;
+					tied = false;
 				}
+				else if( loose && distance == bestDistance && command.fuzzy != s_commands[ best ].fuzzy )
+				{
+					tied = true;
+				}
+			}
+			if( tied )
+			{
+				PSU_LOG( "VRVoice: \"%s\" fits more than one name equally, ignored\n", text.c_str() );
+				return -1;
 			}
 			if( best < 0 && loose && said.size() <= 12 )
 			{
 				// Hard-to-say short names ("Foie" comes out as "fui", "fully", "for we"): the same
 				// first letter and a skeleton no more than one consonant longer. Only when exactly
 				// one technique fits, so two names sharing a first letter don't guess.
-				const std::string skeleton = Skeleton( said );
+				const std::string &skeleton = saidSound;
 				int fits = 0;
 				for( size_t index = 0; index < s_commands.size(); ++index )
 				{

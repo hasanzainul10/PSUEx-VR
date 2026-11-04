@@ -276,6 +276,7 @@ namespace PSUCombat
 		int cursor = 0;
 		int count = 0;
 		uint32_t entry[ 7 ]{};
+		uint32_t handle[ 7 ]{};    // +0x11C + i * 4: inventory handle (-1 = none); 0x004CA2A0 gives the item object
 	};
 
 	inline bool ReadItemPalette( ItemPalette &out )
@@ -316,6 +317,7 @@ namespace PSUCombat
 		for( uint32_t i = 0; i < count; ++i )
 		{
 			out.entry[ i ] = Dword( window + 0x134 + i * 4 );
+			out.handle[ i ] = Dword( window + 0x11C + i * 4 );
 		}
 		return true;
 	}

@@ -4,6 +4,7 @@
 #include "VRBindings.h"
 #include "VRControllers.h"
 #include "VRSyntheticPad.h"
+#include "VRPlayerDraw.h"
 #include "../PSUStructs/PSUCombat.h"
 #include "../Misc/Log.h"
 #include "../PSUExConfig.h"
@@ -87,6 +88,7 @@ namespace PSUVR
 		D3DXMATRIX s_world;
 		DWORD s_worldTick = 0;
 		bool s_haveWorld = false;
+		unsigned s_worldFrame = ~0u; // VRPlayerDraw::Frame() of s_world
 		bool s_inWorldQuery = false;
 		constexpr DWORD kWorldStaleMs = 500;
 
@@ -464,6 +466,77 @@ namespace PSUVR
 			return std::isfinite( world._41 ) && std::isfinite( world._42 ) && std::isfinite( world._43 );
 		}
 
+#ifdef _DEBUG
+		float MaxDiff( const float *a, const float *b, bool transposeB )
+		{
+			float d = 0.0f;
+			for( int i = 0; i < 4; ++i )
+			{
+				for( int j = 0; j < 4; ++j )
+				{
+					d = ( std::max )( d, std::fabs( a[ i * 4 + j ] - b[ transposeB ? j * 4 + i : i * 4 + j ] ) );
+				}
+			}
+			return d;
+		}
+
+		// Perf RE: the world query re-runs the pose build each time. Logs (3 s) how much the
+		// measured model -> world moves between measurements of one stereo frame, and how it
+		// compares to the model's transform node (model +0x10; dirty flags +0xE8, matrices
+		// +0x44 / +0x84, rebuilt lazily by 0x0055FDB0), which could replace the query.
+		void CheckWorld( const void *model, const D3DXMATRIX &world )
+		{
+			static unsigned s_frameSeen = ~0u, s_measures = 0, s_frames = 0, s_flags = 0, s_noNode = 0;
+			static float s_inFrame = 0.0f, s_diff[ 4 ]{};
+			static D3DXMATRIX s_first;
+			static DWORD s_lastWorldCheck = 0;
+			const float *w = &world._11;
+			++s_measures;
+			const unsigned frame = VRPlayerDraw::Frame();
+			if( frame != s_frameSeen )
+			{
+				s_frameSeen = frame;
+				++s_frames;
+				s_first = world;
+			}
+			else
+			{
+				s_inFrame = ( std::max )( s_inFrame, MaxDiff( w, &s_first._11, false ) );
+			}
+			const uint8_t *node = *reinterpret_cast< const uint8_t * const * >( static_cast< const uint8_t * >( model ) + 0x10 );
+			const float *m44 = nullptr;
+			if( Readable( node, 0xEC ) )
+			{
+				m44 = reinterpret_cast< const float * >( node + 0x44 );
+				const float *m84 = reinterpret_cast< const float * >( node + 0x84 );
+				s_flags |= node[ 0xE8 ];
+				const float d[ 4 ] = { MaxDiff( w, m44, false ), MaxDiff( w, m44, true ), MaxDiff( w, m84, false ),
+					MaxDiff( w, m84, true ) };
+				for( int i = 0; i < 4; ++i )
+				{
+					s_diff[ i ] = ( std::max )( s_diff[ i ], d[ i ] );
+				}
+			}
+			else
+			{
+				++s_noNode;
+			}
+			if( GetTickCount() - s_lastWorldCheck < 3000 )
+			{
+				return;
+			}
+			s_lastWorldCheck = GetTickCount();
+			PSU_LOG( "VRHands: world %u measures / %u frames, max move in frame %.4f | node %p flags|=%02X max diff +44 %.4f "
+				"(T %.4f) +84 %.4f (T %.4f), no node %u | world t (%.1f %.1f %.1f) +44 row3 (%.1f %.1f %.1f) col3 (%.1f %.1f %.1f)\n",
+				s_measures, s_frames, s_inFrame, node, s_flags, s_diff[ 0 ], s_diff[ 1 ], s_diff[ 2 ], s_diff[ 3 ], s_noNode,
+				world._41, world._42, world._43, m44 ? m44[ 12 ] : 0.0f, m44 ? m44[ 13 ] : 0.0f, m44 ? m44[ 14 ] : 0.0f,
+				m44 ? m44[ 3 ] : 0.0f, m44 ? m44[ 7 ] : 0.0f, m44 ? m44[ 11 ] : 0.0f );
+			s_measures = s_frames = s_flags = s_noNode = 0;
+			s_inFrame = 0.0f;
+			memset( s_diff, 0, sizeof( s_diff ) );
+		}
+#endif
+
 		void SolveArm( float *out, const uint8_t *records, const Arm &arm, const D3DXVECTOR3 &target,
 			const D3DXVECTOR3 &pole )
 		{
@@ -779,6 +852,13 @@ namespace PSUVR
 			{
 				return;
 			}
+			// The query re-runs the whole pose build, and the player is drawn ~9 times a frame
+			// (eyes, shadows, layers) with the same result each time (probe 2026-11-04).
+			const unsigned frame = VRPlayerDraw::Frame();
+			if( Config::Get().vr.m_handsWorldOncePerFrame && s_haveWorld && s_worldFrame == frame )
+			{
+				return;
+			}
 			s_inWorldQuery = true;
 			__try
 			{
@@ -789,6 +869,10 @@ namespace PSUVR
 					s_world = world;
 					s_worldTick = GetTickCount();
 					s_haveWorld = true;
+					s_worldFrame = frame;
+#ifdef _DEBUG
+					CheckWorld( model, world );
+#endif
 				}
 			}
 			__except( EXCEPTION_EXECUTE_HANDLER )
@@ -796,6 +880,11 @@ namespace PSUVR
 				s_haveWorld = false;
 			}
 			s_inWorldQuery = false;
+		}
+
+		bool InWorldQuery()
+		{
+			return s_inWorldQuery;
 		}
 
 		bool HeadHidden()

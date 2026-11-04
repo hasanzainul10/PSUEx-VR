@@ -615,6 +615,7 @@ and pushed to origin `psu_vr` unless noted.
    **Pending test:** (1) both grips + stick up: toolkit menu opens, no partner card; same as the panel button. (2) Both grips + stick down
    standing straight: toast with your eye height. (3) Open VR settings (Back+Start / left Square chord): centred, larger text, page buttons,
    presets change values, Advanced is the old tabs; flat game (vr.enabled off) unchanged. Settings files untouched.
+   **User (2026-11-01): settings panel pages and the toolkit chord work** (committed in `6e596e6`).
 
 ## Features done this stretch (all toggles in the VR settings panel)
 
@@ -738,8 +739,83 @@ as before; one switch per press. Tune offsets/radii in `VRHolster.cpp` (`ZoneCen
 
 ## Voice items, palette-aware (2026-10-31)
 `VRSyntheticPad::UseItemSlot(slot)` (slot -1 = current item) now runs: hold Cancel (kPadA by default, via the layout), wait for the palette, `ItemRow` (tap Left until `PSUCombat::ReadItemPalette` shows the item row), `Seek` (tap Up/Down until the cursor is on the slot; learns which button adds +1; takes the short way), wait 0.2 s, release Cancel (uses the item). Commands: "item one".."item seven" = palette position (filled slots only), "use item" = current. vr.voiceItemScript / voiceItemButtons are no longer used. UNTESTED: palette offsets come from Ghidra only; check the Debug log lines "VRVoice: item palette read: row .. cursor .. of .." and "VRVoice: item script ..". If the palette reads "unreadable", send that log line; the current-item command still works by a blind Left tap.
+**User (2026-11-01): voice items work** (committed in `6e596e6`).
 
 ## Right swing hit the sub weapon (2026-10-31, built Debug, not deployed, untested)
 With a wand/staff on the right and a TCSM on the left, a right trigger/swing fired the TCSM. `Gun()` (`VRSyntheticPad.cpp`) held R1 for the left hand whenever `s_turning` or an X/Y pulse was active, whatever hand started it. Now the turn, pulse and comboStep only count when `s_lastAttackHand == hand` (`ownAttack`). Voice casts are unchanged (`s_gunShot`). **Pending test:** wand main + TCSM sub: right trigger / swing casts the wand's technique; left trigger and "voice slot 3/4" still cast the TCSM. If it still misfires, `tools/lastlog.sh 'VRSwing|VRGun|VRVoice'`.
 Follow-up (voice-session review): RequestAttack now sets s_lastAttackHand = hand at request time, so a right swing queued during a left combo (comboStep > 0) no longer inherits the left hand's R1. Holster is off by default and does not touch this state.
+**User (2026-11-01): works** (right swing casts the wand, TCSM only from the left; committed in `6e596e6`).
 **Holster zones enlarged (2026-10-31, built Debug, NOT deployed: PSUC was running).** Zones are now ellipsoids (`VRHolster::ZoneShape`, half extents right/up/forward at 1.7 m, x radius setting / default): head-back centre (0, +0.12, -0.20) half (0.28, 0.30, 0.30) (up and back, forward to the shoulders); waist centre (0, -0.72, -0.28) half (0.34, 0.28, 0.30); mouth centre (0, -0.20, +0.14) in head axes, half (0.20, 0.25, 0.20) (face to chest, out front). The radius sliders now scale the whole zone (defaults unchanged). Debug discs mark the centre and six extreme points. Deploy `Debug\PSUExD.dll` + `PSUExVRConfig.exe` when the game is closed.
+
+## Full-body tracking (Phase 0 done 2026-11-04; Phase 1 next)
+**Where it stands (2026-11-04):** all uncommitted on `psu_vr`. Run 2 tested by the user (17:55 build): gameplay fine,
+culling "looks better" but slowdown in missions with many effects / party / enemies (cause not known yet: no frame-time
+log; A/B with the culling checkbox pending).
+- Phase 0 verdict in `docs/FBT_PLAN.md` ("Phase 0 verdict"): every outside-draw bone reader is cosmetic (locator cache,
+  hand attachments, effect slots, weapon mag, head direction) except technique spawn, which starts from the hand locator
+  (fine in VR). No `bodyGameplayPose`. Ghidra renames + ADDRESS_MAP rows done.
+- World query: node matrices at `+0x44` / `+0x84` read as zero (not usable); every query in one `VRPlayerDraw::Frame()`
+  gave the same matrix, so `AfterPlayerDraw` now measures once per frame (`handsWorldOncePerFrame`, default true; panel
+  under "Arms follow the controllers"). Built + deployed Debug 23:23 (old DLL in `PSUExD.dll.bak_1755`), untested.
+- Eye culling: log shows it working ("drawn but game-culled" 100-8000 per 5 s); no bug seen.
+**Next:** user test of the 23:23 build (arms still on the controllers, perf in a busy mission with culling on vs off),
+commit (ask first), then FBT Phase 1 (`bodyAnimKeep`, `bodyFlatAnimated`, bone-map guard, maybe `bodyRestLocal`).
+Game folder: VR was off in both settings files; turned on for this test (`enabled` true; previous state in
+`psuex_vr.json.bak1` / `config.json.bak1`). `bodyRestPose` true, `firstPerson`, `fpBody` "headless" already set.
+Plan in `docs/FBT_PLAN.md`. Phase 0 = probe only, no behaviour change:
+- `PSUDetour/Hook_004FFFA0_BoneQuery.hpp` (registered in Debug only): counts bone queries on the local player model by
+  return address / bone / context (`draw` = inside the player's draw callback, `world` = VRHands' world query, `other` =
+  anything else), logged every 5 s; dumps the model's bone name table once per model. Needs first person with
+  `fpBody` not "full" (that is when `VRPlayerDraw` knows the player model).
+- New accessors: `VRPlayerDraw::PlayerModel()`, `VRHands::InWorldQuery()`.
+- RE done: `TItemWpnKnock` `+0x68` / `+0x6C` (`0x004FC490` / `0x006098E0`) are plain getters, no bone reads. The name
+  table is `{mode, count, entries*}` (pointer, not inline).
+- Test (deploy `Debug\PSUExD.dll`, `bodyRestPose` on, first person): saber combo + JA timing, handgun / rifle, a
+  technique, a PA, a CAST character. Then `tools/lastlog.sh 'VRPoseQuery'`. Expected: hits / JA unaffected; callers
+  only `draw` (attachment `0x005525A0` area) and `world`; one name dump per character. Any `other` caller on bones
+  14-23 means Phase 1 needs `bodyGameplayPose = animated`.
+- Run 1 (2026-11-01, user: gameplay fine): bone names confirmed (0 Root 1 Navel 2 Pelvis 3-5 L_thigh/calf/foot 6-8 R_
+  9 Spine 10 Spine1 11 Neck_root 12 Neck 13 Head 14-18 L_clavicle/upperarm/forearm/hand/weapon 19-23 R_ 24/25 breasts
+  26 Belly 27 Body), same 28 on all three models seen. `other` callers every frame: `0x00500040` (bone by name;
+  17, 22, 11, 18) and `0x00553080` (render object model slot; 1, 13, 15, 16, 18, 20, 23, 26). Both are generic
+  helpers, so run 2 (deployed) logs their caller too (`ret=<helper>`<`caller`). World query (`world`) runs ~9x per
+  frame (once per player draw callback, each re-runs the pose build): worth caching later.
+- World query perf (same build, Debug logs only, no behaviour change yet): `VRPlayerDraw: player draws over N frames`
+  (calls per patched node, flat / eye) and `VRHands: world ...` (measures per frame, max move within a frame, and
+  the diff to the model's transform node `*(model+0x10)` matrices `+0x44` / `+0x84`, plain and transposed; node =
+  lazy transform, dirty flags `+0xE8`, rebuilt by `0x0055FDB0`). If a node matrix matches (diff ~0), read it instead
+  of the bone query (no pose rebuild at all); else measure once per frame on the first draw. Watch: the first draw
+  of a frame may be the flat pass before `VRPlayerDraw::Update`, so a frame-counter gate could use last frame's world.
+
+## Command-mode matching more lenient (2026-11-01, built Debug + deployed 17:37, untested, uncommitted)
+`VRSpeech.cpp`: `Skeleton()` now also merges l/r and drops a trailing r ("lester" = Resta, "barter" = Barta). In the command
+route (`MatchCommand` loose) the letter tolerance is about a third of the name (min 1), the skeleton may be 1 off (2 off for
+4+ consonants; both skeletons still need 3+ consonants, so "and" can't become Anti), and the closer of the two counts. A tie
+between two different names is refused, logged as `VRVoice: "..." fits more than one name equally, ignored`. Auto / chat
+route matching unchanged. **Pending test:** command mode, say each equipped technique a few ways (including "Lester" for
+Resta); check no casts from ordinary chatter. `tools/lastlog.sh -a -n 0 'VRVoice: ("|no command)'`.
+
+## Voice items by name: probe (2026-11-01, Debug built + deployed 17:45, untested, uncommitted)
+Goal: "monomate" etc. as voice commands. The palette has no names, only packed ids, but each item slot has an inventory handle
+(`TWindowCP +0x11C + i*4`, now `ItemPalette::handle`) that `0x004CA2A0` turns into the item object (ADDRESS_MAP, Item palette state).
+Debug-only probe `ProbeItemNames` (`VRSpeech.cpp`) runs when the palette contents change (first 4 times): per filled slot it logs
+the object, its `+0x1C` tag / `+0x34` id vs the palette id, the first UTF-16 text in the object (+0x000..+0x1FF) and one pointer
+deep (+0x00..+0x7C fields), plus a dword dump of the first object's +0x00..+0x7F.
+**Pending test:** voice items on, in the field, hold Circle once (palette open), then close the game.
+`tools/lastlog.sh -a 'VRVoice: item (probe|palette)'`. Expected: tag 00100000, id = palette id, text "Monomate" etc. at a fixed
+offset (or via a fixed pointer field). Then: add each item's name as a fuzzy Item command + KEYTERMS; fallback if no name found:
+find the id -> name lookup, or a static table keyed by packed id.
+
+## Eye frustum culling (built + deployed Debug 2026-11-01, untested)
+Pop-in at the headset's left / right edges: meshes and terrain are culled in the draw by `0x0074DA40` (sphere) /
+`0x0074D5B0` (box) against planes built from the flat projection (`0x0074B200`); the eye passes only set D3D PROJ.
+`PSUVR/VREyeCull.cpp` + hooks `Hook_0074DA40_CullSphere.hpp` / `Hook_0074D5B0_CullBox.hpp`: in each eye pass the
+tests use the six planes of eye VIEW x PROJ applied to the game's camera-space point (exactly what the GPU draws).
+Falls back to the game's test whenever the game's plane globals differ from the eye-pass start snapshot (shadow
+light camera, any other camera). Setting `eyeFrustumCull` (default true; panel General > Comfort "Cull for the
+headset's view"; not written to the settings files, default applies).
+Test: turn the head left / right fast in town and a field, in first and third person: no pop-in at the edges;
+shadows unchanged; perf overlay for cost. Debug log `tools/lastlog.sh VREyeCull`: "drawn but game-culled" > 0 (the
+fix working), "culled but game-drawn" = things outside the eye but inside the flat view (fine); if the world
+vanishes, untick the setting and report.
+Other culling may remain (object-level visibility in updates, LOD): if some things still pop, find which.
