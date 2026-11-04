@@ -45,7 +45,7 @@ namespace
 	X( m_fpEyeFollowsNeck, "fpEyeFollowsNeck" ) \
 	X( m_bodyRestPose, "bodyRestPose" ) \
 	X( m_bodyFitHeight, "bodyFitHeight" ) \
-	X( m_bodyKeepLegAnim, "bodyKeepLegAnim" ) \
+	X( m_bodyAnimKeep, "bodyAnimKeep" ) \
 	X( m_bodyIk, "bodyIk" ) \
 	X( m_bodyNeckDrop, "bodyNeckDrop" ) \
 	X( m_bodyBack, "bodyBack" ) \
@@ -238,6 +238,12 @@ bool LoadVRSettingsJson( VRSettings &settings, const std::string &jsonText )
 #define PSUEX_VR_READ( member, key ) Read( node, key, settings.member );
 	PSUEX_VR_FIELDS( PSUEX_VR_READ )
 #undef PSUEX_VR_READ
+	// Older files: bodyKeepLegAnim became the legs bit of bodyAnimKeep.
+	if( !node.contains( "bodyAnimKeep" ) && node.contains( "bodyKeepLegAnim" ) && node[ "bodyKeepLegAnim" ].is_boolean() &&
+		node[ "bodyKeepLegAnim" ].get< bool >() )
+	{
+		settings.m_bodyAnimKeep |= kVRKeepLegs;
+	}
 
 	if( node.contains( "bindings" ) && node[ "bindings" ].is_object() )
 	{

@@ -747,19 +747,22 @@ Follow-up (voice-session review): RequestAttack now sets s_lastAttackHand = hand
 **User (2026-11-01): works** (right swing casts the wand, TCSM only from the left; committed in `6e596e6`).
 **Holster zones enlarged (2026-10-31, built Debug, NOT deployed: PSUC was running).** Zones are now ellipsoids (`VRHolster::ZoneShape`, half extents right/up/forward at 1.7 m, x radius setting / default): head-back centre (0, +0.12, -0.20) half (0.28, 0.30, 0.30) (up and back, forward to the shoulders); waist centre (0, -0.72, -0.28) half (0.34, 0.28, 0.30); mouth centre (0, -0.20, +0.14) in head axes, half (0.20, 0.25, 0.20) (face to chest, out front). The radius sliders now scale the whole zone (defaults unchanged). Debug discs mark the centre and six extreme points. Deploy `Debug\PSUExD.dll` + `PSUExVRConfig.exe` when the game is closed.
 
-## Full-body tracking (Phase 0 done 2026-11-04; Phase 1 next)
-**Where it stands (2026-11-04):** all uncommitted on `psu_vr`. Run 2 tested by the user (17:55 build): gameplay fine,
-culling "looks better" but slowdown in missions with many effects / party / enemies (cause not known yet: no frame-time
-log; A/B with the culling checkbox pending).
-- Phase 0 verdict in `docs/FBT_PLAN.md` ("Phase 0 verdict"): every outside-draw bone reader is cosmetic (locator cache,
-  hand attachments, effect slots, weapon mag, head direction) except technique spawn, which starts from the hand locator
-  (fine in VR). No `bodyGameplayPose`. Ghidra renames + ADDRESS_MAP rows done.
-- World query: node matrices at `+0x44` / `+0x84` read as zero (not usable); every query in one `VRPlayerDraw::Frame()`
-  gave the same matrix, so `AfterPlayerDraw` now measures once per frame (`handsWorldOncePerFrame`, default true; panel
-  under "Arms follow the controllers"). Built + deployed Debug 23:23 (old DLL in `PSUExD.dll.bak_1755`), untested.
-- Eye culling: log shows it working ("drawn but game-culled" 100-8000 per 5 s); no bug seen.
-**Next:** user test of the 23:23 build (arms still on the controllers, perf in a busy mission with culling on vs off),
-commit (ask first), then FBT Phase 1 (`bodyAnimKeep`, `bodyFlatAnimated`, bone-map guard, maybe `bodyRestLocal`).
+## Full-body tracking (Phase 1 built + deployed Debug 2026-11-05 00:24; all boxes off user-tested OK, bone map ok; keep boxes untested; uncommitted)
+**Where it stands (2026-11-05):** Phase 0 + eye culling + once-per-frame world query committed (`ad15135`, not pushed;
+user-tested: arms OK, jitter no worse than before, no lag; the busy-mission slowdown didn't come back without a party).
+Phase 0 verdict in `docs/FBT_PLAN.md`: no `bodyGameplayPose`.
+Phase 1 (uncommitted, `VRHands.cpp` `RestPose`, settings, panel):
+- `bodyAnimKeep` (unsigned bitmask, `VRBodyAnimKeep` in `VRSettings.h`: 1 legs 1-8, 2 spine 9-11, 4 head 12-13, 8 arms,
+  16 weapon bones 18 / 23, 32 extras 24-27) replaces `bodyKeepLegAnim` (load migrates true -> legs bit). Panel: rest
+  pose block, "Keep the game's animation on:" checkboxes. Kept bones are re-parented: their animated pose relative to
+  the animated parent, put on the parent's new pose (so no `bodyRestLocal`); body fit now scales kept legs too.
+- Bone-map guard `BoneMapOk` (parent table `kBoneParents`): mismatch -> no rest pose / body IK for that model, logs
+  `VRBody: bone map mismatch ...`; ok logs `VRBody: bone map ok`.
+- `bodyFlatAnimated` dropped: the player is never drawn in the flat pass in stereo (monitor mirrors the left eye).
+**Test:** first person, rest pose on. 1) all boxes off: as before. 2) Legs: walk, legs animate, attached to the hips.
+3) Spine + Head: idle sway / attack torso moves, arms still on the controllers, head hidden as before. 4) Weapons:
+saber combo, blade turns in the hand. 5) Third person with Arms: attack animation on the rest torso. Log:
+`tools/lastlog.sh 'VRBody: bone map'` -> "ok". **Next:** commit (ask), then Phase 2 (`VRBodyIk.cpp`, 3-point IK).
 Game folder: VR was off in both settings files; turned on for this test (`enabled` true; previous state in
 `psuex_vr.json.bak1` / `config.json.bak1`). `bodyRestPose` true, `firstPerson`, `fpBody` "headless" already set.
 Plan in `docs/FBT_PLAN.md`. Phase 0 = probe only, no behaviour change:

@@ -138,6 +138,52 @@ namespace PSUVR
 			return *reinterpret_cast< const short * >( records + bone * kRecordSize + kRecordParent );
 		}
 
+		// Parents of the 28-bone character skeleton (VRBones log; the same on every model seen,
+		// CAST included). The rest pose and body IK index bones directly, so they need this map.
+		constexpr int kBoneParents[ kBoneCount ] = { -1, 0, 1, 2, 3, 4, 2, 6, 7, 1, 9, 10, 11, 12, 11, 14, 15, 16, 17, 11, 19, 20,
+			21, 22, 10, 10, 9, 0 };
+		const uint8_t *s_mapRecords = nullptr;
+		bool s_mapOk = false;
+
+		bool BoneMapOk( const uint8_t *records )
+		{
+			if( records == s_mapRecords )
+			{
+				return s_mapOk;
+			}
+			s_mapRecords = records;
+			s_mapOk = true;
+			for( int b = 0; b < kBoneCount; ++b )
+			{
+				const int parent = Parent( records, b );
+				if( parent != kBoneParents[ b ] )
+				{
+					PSU_LOG( "VRBody: bone map mismatch (bone %d parent %d, expected %d): rest pose and body IK off for this model\n",
+						b, parent, kBoneParents[ b ] );
+					s_mapOk = false;
+					return false;
+				}
+			}
+			PSU_LOG( "VRBody: bone map ok (records %p)\n", records );
+			return true;
+		}
+
+		// The VRBodyAnimKeep group a bone belongs to.
+		unsigned KeepGroup( int bone )
+		{
+			if( bone <= 8 )
+				return kVRKeepLegs;
+			if( bone <= 11 )
+				return kVRKeepSpine;
+			if( bone <= 13 )
+				return kVRKeepHead;
+			if( bone == 18 || bone == 23 )
+				return kVRKeepWeapons;
+			if( bone <= 22 )
+				return kVRKeepArms;
+			return kVRKeepExtras;
+		}
+
 		bool Below( const uint8_t *records, int bone, int root )
 		{
 			for( int guard = 0; bone >= 0 && guard < kBoneCount; ++guard )
@@ -935,7 +981,8 @@ namespace PSUVR
 			{
 				const int count = *reinterpret_cast< const int * >( skeleton + 0x28 );
 				const uint8_t *records = *reinterpret_cast< const uint8_t * const * >( skeleton + 0x30 );
-				if( count != kBoneCount || !Readable( records, kBoneCount * kRecordSize ) || !Readable( out, kBoneCount * 64 ) )
+				if( count != kBoneCount || !Readable( records, kBoneCount * kRecordSize ) || !Readable( out, kBoneCount * 64 ) ||
+					!BoneMapOk( records ) )
 				{
 					return;
 				}
@@ -992,21 +1039,36 @@ namespace PSUVR
 					}
 				}
 				s_bodyFit = fit;
-				const bool keepLegs = Config::Get().vr.m_bodyKeepLegAnim;
+				// Kept bones (bodyAnimKeep) keep their animated pose relative to their parent and
+				// follow the parent's new pose; parents come before children (BoneMapOk).
+				const unsigned keep = Config::Get().vr.m_bodyAnimKeep;
+				D3DXMATRIX anim[ kBoneCount ];
+				memcpy( anim, out, sizeof( anim ) );
+				D3DXMATRIX fitScale;
+				D3DXMatrixScaling( &fitScale, fit, fit, fit );
+				D3DXMATRIX fitRoot;
+				D3DXMatrixMultiply( &fitRoot, &fitScale, &root );
+				bool moved[ kBoneCount ]{};
+				moved[ 0 ] = fit != 1.0f;
 				for( int b = 1; b < kBoneCount; ++b )
 				{
-					// Bones 1-8: pelvis, hip node and both legs.
-					if( s_restValid[ b ] && !( keepLegs && b <= 8 ) )
+					D3DXMATRIX *target = reinterpret_cast< D3DXMATRIX * >( out + b * 16 );
+					const int parent = kBoneParents[ b ];
+					if( s_restValid[ b ] && !( keep & KeepGroup( b ) ) )
 					{
-						D3DXMATRIX scaled = s_rest[ b ];
-						for( int i = 0; i < 4; ++i )
+						D3DXMatrixMultiply( target, &s_rest[ b ], &fitRoot );
+						moved[ b ] = true;
+					}
+					else if( moved[ parent ] )
+					{
+						D3DXMATRIX parentInverse, local;
+						if( D3DXMatrixInverse( &parentInverse, nullptr, &anim[ parent ] ) )
 						{
-							for( int j = 0; j < 3; ++j )
-							{
-								scaled.m[ i ][ j ] *= fit;
-							}
+							D3DXMatrixMultiply( &local, &anim[ b ], &parentInverse );
+							const D3DXMATRIX *parentNow = parent == 0 ? &fitRoot : reinterpret_cast< const D3DXMATRIX * >( out + parent * 16 );
+							D3DXMatrixMultiply( target, &local, parentNow );
+							moved[ b ] = true;
 						}
-						D3DXMatrixMultiply( reinterpret_cast< D3DXMATRIX * >( out + b * 16 ), &scaled, &root );
 					}
 				}
 			}
@@ -1485,7 +1547,7 @@ namespace PSUVR
 					}
 				}
 
-				if( restPose && w > 0.0f && ( vr.m_bodyIk || vr.m_bodyProceduralLegs ) )
+				if( restPose && w > 0.0f && ( vr.m_bodyIk || vr.m_bodyProceduralLegs ) && BoneMapOk( records ) )
 				{
 					float head[ 3 ];
 					const bool haveHead = vr.m_bodyIk && VRCamera::HeadWorld( head );

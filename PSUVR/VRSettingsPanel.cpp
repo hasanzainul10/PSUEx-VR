@@ -475,8 +475,22 @@ namespace PSUVR
 			{
 				ImGui::Checkbox( "Scale body to my height", &s.m_bodyFitHeight );
 				Help( "Scales the model so its eyes are at the Eye height above. Set Eye height to your real eye height." );
-				ImGui::Checkbox( "Keep the game's leg animation", &s.m_bodyKeepLegAnim );
-				Help( "The pelvis and legs keep the walk / idle animation (the strafe legs turn them); the rest of the body is the plain skeleton." );
+				ImGui::TextUnformatted( "Keep the game's animation on:" );
+				ImGui::CheckboxFlags( "Legs", &s.m_bodyAnimKeep, kVRKeepLegs );
+				Help( "The pelvis and legs keep the walk / idle animation (the strafe legs turn them)." );
+				ImGui::SameLine();
+				ImGui::CheckboxFlags( "Spine", &s.m_bodyAnimKeep, kVRKeepSpine );
+				ImGui::SameLine();
+				ImGui::CheckboxFlags( "Head", &s.m_bodyAnimKeep, kVRKeepHead );
+				ImGui::CheckboxFlags( "Arms", &s.m_bodyAnimKeep, kVRKeepArms );
+				Help( "Only shows where the arms don't follow the controllers (third person, or that option off)." );
+				ImGui::SameLine();
+				ImGui::CheckboxFlags( "Weapons", &s.m_bodyAnimKeep, kVRKeepWeapons );
+				Help( "The weapon turns in the hand as in the attack animations." );
+				ImGui::SameLine();
+				ImGui::CheckboxFlags( "Extras", &s.m_bodyAnimKeep, kVRKeepExtras );
+				Help( "Unticked parts are the plain skeleton; ticked parts move as the game animates them, on top of the "
+					"parts they hang from. All unticked = a skeleton for VR and body tracking." );
 				ImGui::Checkbox( "Body follows my head (hips, spine)", &s.m_bodyIk );
 				if( s.m_bodyIk )
 				{

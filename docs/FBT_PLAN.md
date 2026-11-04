@@ -155,7 +155,7 @@ T-pose gives arm span; save + toast.
    names once. Create and read `0x004FC490` / `0x006098E0` in Ghidra. In game with `bodyRestPose` on: saber combo + JA timing,
    handgun / rifle, a technique, a PA effect position, a CAST. Expected: hits unaffected; probe shows only attachment / muzzle
    callers. If a melee path uses the weapon bone, Phase 1 builds `bodyGameplayPose = animated`.
-1. **Skeleton mode cleanup:** `bodyAnimKeep`, optional `bodyRestLocal`, `bodyGameplayPose` (if needed), `bodyFlatAnimated`,
+1. **Skeleton mode cleanup** (built 2026-11-05: `bodyAnimKeep` with re-parenting, bone-map guard; `bodyGameplayPose` not needed (Phase 0), `bodyFlatAnimated` dropped (player not drawn in the flat pass)): `bodyAnimKeep`, optional `bodyRestLocal`, `bodyGameplayPose` (if needed), `bodyFlatAnimated`,
    bone-map guard. Expected: no game animation on the player in any camera / input combo, weapons stay in hands.
 2. **3-point IK (`VRBodyIk.cpp`):** pelvis + crouch, CCD spine, head, shrug, elbow from hand, third person. Risk: camera clipping
    the shoulders (tune `bodyBack`), third-person placement.

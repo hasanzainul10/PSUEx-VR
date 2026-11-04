@@ -31,6 +31,18 @@ enum VRKeyMod : uint8_t
 	kVRModAlt = 4,
 };
 
+// bodyAnimKeep bits: bone groups that keep the game's animation in the rest pose (each on
+// top of its parent's pose).
+enum VRBodyAnimKeep : unsigned
+{
+	kVRKeepLegs = 1,    // pelvis, hips, legs (1-8)
+	kVRKeepSpine = 2,   // waist, chest, shoulder level (9-11)
+	kVRKeepHead = 4,    // neck, head (12-13)
+	kVRKeepArms = 8,    // shoulders to hands (14-17, 19-22)
+	kVRKeepWeapons = 16, // weapon bones in the hands (18, 23)
+	kVRKeepExtras = 32, // chest, belly, body extras (24-27)
+};
+
 struct VRBinding
 {
 	int key = 0;
@@ -109,8 +121,9 @@ struct VRSettings
 	// With the rest pose: scale the whole body so its eyes sit at fpEyeHeight (your real height).
 	bool m_bodyFitHeight = false;
 	// With the rest pose, first person: hips follow the head (crouch), the spine leans to it.
-	// With the rest pose: leave the pelvis and legs on the game's own animation (walk, idle).
-	bool m_bodyKeepLegAnim = false;
+	// With the rest pose: VRBodyAnimKeep groups that keep the game's animation (walk, idle, attacks).
+	// Replaces bodyKeepLegAnim (true = kVRKeepLegs).
+	unsigned m_bodyAnimKeep = 0;
 	bool m_bodyIk = false;
 	// bodyIk: how far below the eye the neck sits, and how far behind the eye the body stands (meters).
 	float m_bodyNeckDrop = 0.22f;
