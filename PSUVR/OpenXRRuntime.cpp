@@ -515,7 +515,7 @@ namespace PSUVR
 		return out.active;
 	}
 
-	void OpenXRRuntime::Haptic( int hand, float amplitude, float seconds )
+	void OpenXRRuntime::Haptic( int hand, float amplitude, float seconds, float frequency )
 	{
 		if( !m_actHaptic || hand < 0 || hand > 1 || !m_sessionRunning )
 		{
@@ -524,12 +524,19 @@ namespace PSUVR
 		XrHapticVibration vibration{ XR_TYPE_HAPTIC_VIBRATION };
 		vibration.amplitude = amplitude < 0.0f ? 0.0f : ( amplitude > 1.0f ? 1.0f : amplitude );
 		vibration.duration = static_cast< XrDuration >( ( seconds > 0.0f ? seconds : 0.0f ) * 1.0e9 );
-		vibration.frequency = XR_FREQUENCY_UNSPECIFIED;
+		vibration.frequency = frequency > 0.0f ? frequency : XR_FREQUENCY_UNSPECIFIED;
 		XrHapticActionInfo info{ XR_TYPE_HAPTIC_ACTION_INFO };
 		info.action = static_cast< XrAction >( m_actHaptic );
 		info.subactionPath = static_cast< XrPath >( m_handPath[ hand ] );
-		xrApplyHapticFeedback( static_cast< XrSession >( m_session ), &info,
+		const XrResult result = xrApplyHapticFeedback( static_cast< XrSession >( m_session ), &info,
 			reinterpret_cast< const XrHapticBaseHeader * >( &vibration ) );
+		static int s_failures = 0;
+		if( XR_FAILED( result ) && s_failures < 8 )
+		{
+			++s_failures;
+			PSU_LOG( "OpenXR: xrApplyHapticFeedback failed (%d) hand %d amplitude %.2f %.0f ms\n", static_cast< int >( result ),
+				hand, vibration.amplitude, seconds * 1000.0f );
+		}
 	}
 
 	int64_t OpenXRRuntime::PickSwapchainFormat( uint64_t sessionHandle )

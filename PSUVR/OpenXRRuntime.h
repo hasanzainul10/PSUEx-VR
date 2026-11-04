@@ -20,7 +20,7 @@ namespace PSUVR
 		bool GetEyePose( int eye, EyePose &out ) override;
 		const char *Name() const override { return "OpenXR"; }
 		bool GetControllerState( int hand, ControllerState &out ) override;
-		void Haptic( int hand, float amplitude, float seconds ) override;
+		void Haptic( int hand, float amplitude, float seconds, float frequency ) override;
 		bool GetUiQuad( UiQuad &out ) override;
 		bool GetHeadHeightAboveFloor( float &meters ) override;
 

@@ -380,7 +380,7 @@ namespace PSUVR
 			return s_released[ hand & 1 ];
 		}
 
-		void Haptic( int hand, float amplitude, float seconds )
+		void Haptic( int hand, float amplitude, float seconds, float frequency )
 		{
 			if( VRControllerSim::Active() )
 			{
@@ -389,7 +389,7 @@ namespace PSUVR
 			}
 			if( s_runtime )
 			{
-				s_runtime->Haptic( hand, amplitude, seconds );
+				s_runtime->Haptic( hand, amplitude, seconds, frequency );
 			}
 		}
 

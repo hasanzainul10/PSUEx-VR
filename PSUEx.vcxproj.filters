@@ -351,6 +351,9 @@
     <ClInclude Include="PSUVR\VRHands.h">
       <Filter>Header Files\PSUVR</Filter>
     </ClInclude>
+    <ClInclude Include="PSUVR\VRHaptics.h">
+      <Filter>Header Files\PSUVR</Filter>
+    </ClInclude>
     <ClInclude Include="PSUVR\VRHolster.h">
       <Filter>Header Files\PSUVR</Filter>
     </ClInclude>
@@ -540,6 +543,9 @@
       <Filter>Source Files\PSUVR</Filter>
     </ClCompile>
     <ClCompile Include="PSUVR\VRHands.cpp">
+      <Filter>Source Files\PSUVR</Filter>
+    </ClCompile>
+    <ClCompile Include="PSUVR\VRHaptics.cpp">
       <Filter>Source Files\PSUVR</Filter>
     </ClCompile>
     <ClCompile Include="PSUVR\VRHolster.cpp">

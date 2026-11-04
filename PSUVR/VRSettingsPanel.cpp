@@ -317,6 +317,7 @@ namespace PSUVR
 		Help( "Stand straight, then press: sets the eye height from your head above the floor. "
 			"In the game: both grips + left stick down." );
 		ImGui::Checkbox( "Controller labels when you look down", &s.m_controllerLabels );
+		ImGui::SliderFloat( "Vibration strength", &s.m_hapticStrength, 0.0f, 1.5f, "%.2f" );
 		ImGui::Checkbox( "Speech to text (hold left Square)", &s.m_speechToText );
 		ImGui::SliderFloat( "Text size", &s.m_panelTextScale, 1.0f, 2.5f, "%.1f" );
 		if( context.inGame && context.runSetup && ImGui::Button( "Run VR setup again" ) )
@@ -695,6 +696,24 @@ namespace PSUVR
 				"Both grips + left stick click still flips it by hand." );
 			ImGui::Checkbox( "Buzz when the next combo hit can be pressed", &s.m_comboHaptic );
 			Help( "A short buzz in the right hand the moment the game accepts the next attack of a melee combo." );
+			ImGui::SliderFloat( "Vibration strength", &s.m_hapticStrength, 0.0f, 1.5f, "%.2f" );
+			Help( "Scales every controller vibration. 0 turns them all off." );
+			if( context.inGame && context.testVibration )
+			{
+				if( ImGui::Button( "Test: strength steps" ) )
+				{
+					context.testVibration( 0 );
+				}
+				ImGui::SameLine();
+				if( ImGui::Button( "Test: length steps" ) )
+				{
+					context.testVibration( 1 );
+				}
+				Help( "Strength steps: 5 buzzes from weak to full. Length steps: 4 buzzes from 10 to 80 ms. "
+					"Count how many you feel." );
+			}
+			ImGui::Checkbox( "Vibrate for the UI pointer", &s.m_hapticUi );
+			Help( "Ticks when clicking with the laser pointer and while dragging the panel." );
 		}
 
 		if( Section( Tab::Combat, "Motion combat" ) )

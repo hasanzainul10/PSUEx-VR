@@ -102,6 +102,8 @@ namespace
 	X( m_handRoll, "handRoll" ) \
 	X( m_motionProfile, "motionProfile" ) \
 	X( m_comboHaptic, "comboHaptic" ) \
+	X( m_hapticStrength, "hapticStrength" ) \
+	X( m_hapticUi, "hapticUi" ) \
 	X( m_autoDpad, "autoDpad" ) \
 	X( m_swingAttack, "swingAttack" ) \
 	X( m_paGesture, "paGesture" ) \

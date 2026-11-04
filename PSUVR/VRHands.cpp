@@ -3,6 +3,7 @@
 #include "VRCamera.h"
 #include "VRBindings.h"
 #include "VRControllers.h"
+#include "VRHaptics.h"
 #include "VRSyntheticPad.h"
 #include "VRPlayerDraw.h"
 #include "../PSUStructs/PSUCombat.h"
@@ -1474,8 +1475,7 @@ namespace PSUVR
 					else if( second >= s_calibBuzz )
 					{
 						s_calibBuzz = second + 1;
-						VRControllers::Haptic( 0, 0.3f, 0.03f );
-						VRControllers::Haptic( 1, 0.3f, 0.03f );
+						VRHaptics::PlayBoth( VRHaptics::Effect::Countdown );
 					}
 				}
 
@@ -1697,7 +1697,7 @@ namespace PSUVR
 						StoreCalib( hand, q );
 						vr.m_handCalibrated = true;
 						++s_calibCapturedHands;
-						VRControllers::Haptic( hand, 0.8f, 0.15f );
+						VRHaptics::Play( hand, VRHaptics::Effect::Done );
 						PSU_LOG( "VRHands: calibrated %s hand (%.3f %.3f %.3f %.3f)\n", hand == 0 ? "left" : "right", q.x, q.y, q.z, q.w );
 						if( hand == 1 || !pads[ 1 ]->gripValid )
 						{

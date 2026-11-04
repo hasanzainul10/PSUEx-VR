@@ -2,6 +2,7 @@
 
 #include "VRBindings.h"
 #include "VRControllers.h"
+#include "VRHaptics.h"
 
 #include "../Misc/Log.h"
 #include "../PSUExConfig.h"
@@ -283,7 +284,7 @@ namespace PSUVR
 			if( s_triggerDown && !wasDown && s_hit )
 			{
 				s_click = true;
-				VRControllers::Haptic( kHand, 0.3f, 0.02f );
+				VRHaptics::Play( kHand, VRHaptics::Effect::Click );
 			}
 			if( !s_triggerDown )
 			{
@@ -332,7 +333,7 @@ namespace PSUVR
 				s_dragAlong = 0.0f;
 				s_dragStartDistance = vr.m_hudDistance;
 				s_dragTickDistance = vr.m_hudDistance;
-				VRControllers::Haptic( kHand, 0.4f, 0.03f );
+				VRHaptics::Play( kHand, VRHaptics::Effect::Grab );
 			}
 			if( s_dragging && ( !rightGrip || leftGrip ) )
 			{
@@ -361,7 +362,7 @@ namespace PSUVR
 				if( std::fabs( distance - s_dragTickDistance ) >= 0.25f )
 				{
 					s_dragTickDistance = distance;
-					VRControllers::Haptic( kHand, 0.2f, 0.01f );
+					VRHaptics::Play( kHand, VRHaptics::Effect::Tick );
 				}
 			}
 		}

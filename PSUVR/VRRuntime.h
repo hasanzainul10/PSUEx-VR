@@ -81,7 +81,8 @@ namespace PSUVR
 
 		// hand: 0 = left, 1 = right. Valid after the frame's input update.
 		virtual bool GetControllerState( int /*hand*/, ControllerState &out ) { out = {}; return false; }
-		virtual void Haptic( int /*hand*/, float /*amplitude*/, float /*seconds*/ ) {}
+		// frequency: Hz, 0 = the runtime's default.
+		virtual void Haptic( int /*hand*/, float /*amplitude*/, float /*seconds*/, float /*frequency*/ ) {}
 		// Where the last submitted frame showed the overlay. False when no such layer was shown.
 		virtual bool GetUiQuad( UiQuad &out ) { out = {}; return false; }
 		// Head (VIEW origin) height above the floor (STAGE space), meters. False without a STAGE

@@ -822,3 +822,29 @@ shadows unchanged; perf overlay for cost. Debug log `tools/lastlog.sh VREyeCull`
 fix working), "culled but game-drawn" = things outside the eye but inside the flat view (fine); if the world
 vanishes, untick the setting and report.
 Other culling may remain (object-level visibility in updates, LOD): if some things still pop, find which.
+
+## Immersion pass (started 2026-11-05)
+Plan: `C:\Users\hasan\.claude-3\plans\lets-plan-for-more-elegant-quokka.md`. Order: A haptics engine -> B1/B2 haptics when your
+attack lands / you get hit (Ghidra) -> B3 gun recoil + technique charge -> C2 head-in-wall fade -> E1 head-tracked 3D audio ->
+E2 wrist HUD -> C1 hand/weapon contact buzz -> the rest (vignette on damage, two-handed grip, bow draw, palm casting, poke UI, ...).
+**Phase A built + deployed (Debug `PSUExD.dll` + `PSUExVRConfig.exe`, 2026-11-05 00:32; previous DLL = `PSUExD.dll.bak_prehaptics`;
+settings files untouched, new keys default):** `PSUVR/VRHaptics.{h,cpp}`: named effects (Tick, Click, Grab, Confirm, AttackSent,
+ComboWindow, Holster, Countdown, Done), each a pattern of up to 4 pulses {at, amplitude, seconds, frequency}; one pattern per hand,
+lower priority dropped while a higher one plays; `VRHaptics::Update()` after `VRSyntheticPad::Update` in VRSystem.
+`IVRRuntime::Haptic` takes a frequency (OpenXR passes it, 0 = unspecified). All old `VRControllers::Haptic` calls moved to
+effects with the same amplitude / length. Settings `hapticStrength` (1.0, 0-1.5) and `hapticUi` (true): Controllers tab under
+the combo buzz checkbox; strength also on the Simple page. Debug log `tools/lastlog.sh VRHaptic` (non-UI effects).
+**Pending test:** everything buzzes as before at strength 1 (combo JA buzz, swing / shoot, holster, chords, UI clicks / panel
+drag); strength 0 = no vibration at all; 1.5 = stronger; UI off = no pointer / drag ticks, gameplay buzzes stay.
+**Next:** Phase B1/B2 Ghidra pass: the local player's HP field (hurt buzz from an HP drop) and the hit-apply path for the
+player's attacks (hit buzz on the swinging hand).
+**Plan update (2026-11-05):** user added 3D audio (E1), bow draw (E3), two-handed grip (E4), walking haptics (B4; the game
+already has no camera shake in VR) and Phase F: PS VR2 Sense HD haptics / adaptive triggers / headset rumble through the
+community PSVR2 Toolkit (BnuuySolutions/PSVR2Toolkit, replaces Sony's driver DLL; CAPI `psvr2_toolkit_capi.dll` is x64, so an
+x64 helper like PSUExSpeech; headset rumble needs the vr2jb jailbreak, the user's call). Stock Sony PC driver = basic vibration only.
+New order: B1/B2 -> B3 -> B4 -> F0/F1 -> C2 -> E1 -> E3 -> E4 -> E2 -> C1 -> rest.
+**Phase A test 1 (2026-11-05):** user felt only the Just Attack buzz. Log: all effects were sent (Confirm, AttackSent, ComboWindow).
+Same amplitudes as before Phase A, so likely Sony's basic-vibration driver drops weak pulses (only ComboWindow x1.6 = 0.8 is above
+the others' 0.25-0.5). Deployed 00:57 (Debug + config exe): panel buttons *Test: strength steps* (0.2..1.0, 100 ms) and
+*Test: length steps* (0.8 at 10/20/40/80 ms), effects `TestStrength` / `TestLength`; OpenXR logs `xrApplyHapticFeedback failed`.
+**Pending:** user counts felt buzzes per test -> raise effect amplitudes / lengths (or add an amplitude floor) above the threshold.

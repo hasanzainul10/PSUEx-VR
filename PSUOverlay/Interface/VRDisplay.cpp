@@ -4,6 +4,7 @@
 #include "../../PSUExConfig.h"
 #include "../../PSUVR/VRBindings.h"
 #include "../../PSUVR/VRCamera.h"
+#include "../../PSUVR/VRHaptics.h"
 #include "../../PSUVR/VRHud.h"
 #include "../../PSUVR/VRSystem.h"
 #include "../../PSUVR/VRUiPointer.h"
@@ -31,6 +32,10 @@ VRDisplay::VRDisplay() : IFWinCtrl( "VRDisplay", false )
 	m_context.headHeight = []( float &meters )
 	{
 		return PSUVR::System::Get().HeadHeightAboveFloor( meters );
+	};
+	m_context.testVibration = []( int test )
+	{
+		PSUVR::VRHaptics::PlayBoth( test == 0 ? PSUVR::VRHaptics::Effect::TestStrength : PSUVR::VRHaptics::Effect::TestLength );
 	};
 	m_context.openToolkit = [this]()
 	{

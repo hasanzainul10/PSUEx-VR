@@ -3,6 +3,7 @@
 #include "VRBindings.h"
 #include "VRCamera.h"
 #include "VRControllers.h"
+#include "VRHaptics.h"
 #include "VRHolster.h"
 #include "VRSystem.h"
 #include "VRMotionLayout.h"
@@ -222,7 +223,7 @@ namespace PSUVR
 
 		void Buzz( int hand )
 		{
-			VRControllers::Haptic( hand, 0.5f, 0.04f );
+			VRHaptics::Play( hand, VRHaptics::Effect::Confirm );
 		}
 
 		// Just Attack window from the weapon type's motion table: a tick in the hand that attacked
@@ -242,7 +243,7 @@ namespace PSUVR
 			const int buzzHand = VRControllers::Active( s_lastAttackHand ) ? s_lastAttackHand : 1;
 			if( open && !s_comboWindow && !s_comboBuzzed && Config::Get().vr.m_comboHaptic && VRControllers::Active( buzzHand ) )
 			{
-				VRControllers::Haptic( buzzHand, combat.comboStep >= 2 ? 0.8f : 0.5f, 0.03f );
+				VRHaptics::Play( buzzHand, VRHaptics::Effect::ComboWindow, combat.comboStep >= 2 ? 1.6f : 1.0f );
 				s_comboBuzzed = true;
 			}
 #ifdef _DEBUG
@@ -479,7 +480,7 @@ namespace PSUVR
 		// PumpRequest once that weapon is active and the combo allows it.
 		void RequestAttack( int button, int hand, uint32_t weapon, const char *what )
 		{
-			VRControllers::Haptic( hand, 0.25f, 0.02f );
+			VRHaptics::Play( hand, VRHaptics::Effect::AttackSent );
 			// Claim the attack now: Gun() must not keep R1 down for the other hand's earlier combo.
 			s_lastAttackHand = hand;
 			s_pendingButton = button;
@@ -965,7 +966,7 @@ namespace PSUVR
 						s_gunShot = true;
 						s_gunShotTime = kGunShotWaitSeconds;
 						s_gunPhotonArt = pa;
-						VRControllers::Haptic( hand, 0.25f, 0.02f );
+						VRHaptics::Play( hand, VRHaptics::Effect::AttackSent );
 					}
 					else
 					{
@@ -1533,7 +1534,7 @@ namespace PSUVR
 				{
 					s_grip[ hand ] = Grip::Consumed;
 					s_pulse[ hand ] = 0.0f;
-					VRControllers::Haptic( hand, 0.9f, 0.12f );
+					VRHaptics::Play( hand, VRHaptics::Effect::Holster );
 				}
 				break;
 			}
@@ -2119,7 +2120,7 @@ namespace PSUVR
 			s_gunShotTime = kVoiceShotWaitSeconds;
 			s_castSettle = kVoiceCastSettleSeconds;
 			s_gunPhotonArt = slot == 3;
-			VRControllers::Haptic( 0, 0.25f, 0.02f );
+			VRHaptics::Play( 0, VRHaptics::Effect::AttackSent );
 			return true;
 		}
 
