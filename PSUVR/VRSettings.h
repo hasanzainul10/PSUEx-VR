@@ -138,6 +138,9 @@ struct VRSettings
 	// Body trackers through OpenXR (XR_HTCX_vive_tracker_interaction; roles set in SteamVR > Manage
 	// Trackers). Read at VR start: changing it needs a game restart. Phase 3: read and shown only.
 	bool m_trackersEnabled = false;
+	// Where tracker poses come from: "auto" (OpenXR; OpenVR when OpenXR lists none after ~2 s),
+	// "openxr" (HTCX only), "openvr" (OpenVR side connection for every role HTCX doesn't have).
+	std::string m_trackerSource = "auto";
 	// A disc at each tracker in the headset (debug).
 	bool m_trackerShowDiscs = false;
 	// Smoothing of the tracker positions, 0 = raw, 1 = heavy (one-euro filter).

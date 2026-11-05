@@ -1,6 +1,7 @@
 ﻿#include "OpenXRRuntime.h"
 
 #include "VRPerf.h"
+#include "OpenVRRuntime.h"
 
 #include "../Misc/Log.h"
 #include "../PSUExConfig.h"
@@ -664,6 +665,182 @@ namespace PSUVR
 				t.floorHeight = floor.pose.position.y;
 			}
 		}
+		UpdateOpenVRTrackers();
+	}
+
+	namespace
+	{
+		void QuatMul( const float a[ 4 ], const float b[ 4 ], float out[ 4 ] )
+		{
+			const float r[ 4 ] = {
+				a[ 3 ] * b[ 0 ] + a[ 0 ] * b[ 3 ] + a[ 1 ] * b[ 2 ] - a[ 2 ] * b[ 1 ],
+				a[ 3 ] * b[ 1 ] - a[ 0 ] * b[ 2 ] + a[ 1 ] * b[ 3 ] + a[ 2 ] * b[ 0 ],
+				a[ 3 ] * b[ 2 ] + a[ 0 ] * b[ 1 ] - a[ 1 ] * b[ 0 ] + a[ 2 ] * b[ 3 ],
+				a[ 3 ] * b[ 3 ] - a[ 0 ] * b[ 0 ] - a[ 1 ] * b[ 1 ] - a[ 2 ] * b[ 2 ] };
+			std::copy( r, r + 4, out );
+		}
+
+		void QuatRotate( const float q[ 4 ], const float v[ 3 ], float out[ 3 ] )
+		{
+			// v + 2w (u x v) + 2 u x (u x v)
+			const float u[ 3 ] = { q[ 0 ], q[ 1 ], q[ 2 ] };
+			const float t[ 3 ] = { 2.0f * ( u[ 1 ] * v[ 2 ] - u[ 2 ] * v[ 1 ] ), 2.0f * ( u[ 2 ] * v[ 0 ] - u[ 0 ] * v[ 2 ] ),
+				2.0f * ( u[ 0 ] * v[ 1 ] - u[ 1 ] * v[ 0 ] ) };
+			const float r[ 3 ] = {
+				v[ 0 ] + q[ 3 ] * t[ 0 ] + u[ 1 ] * t[ 2 ] - u[ 2 ] * t[ 1 ],
+				v[ 1 ] + q[ 3 ] * t[ 1 ] + u[ 2 ] * t[ 0 ] - u[ 0 ] * t[ 2 ],
+				v[ 2 ] + q[ 3 ] * t[ 2 ] + u[ 0 ] * t[ 1 ] - u[ 1 ] * t[ 0 ] };
+			std::copy( r, r + 3, out );
+		}
+
+		// Turn about +Y only (the heading of q's -Z forward).
+		void YawOnly( const float q[ 4 ], float out[ 4 ] )
+		{
+			const float back[ 3 ] = { 0.0f, 0.0f, -1.0f };
+			float f[ 3 ];
+			QuatRotate( q, back, f );
+			const float yaw = std::atan2( -f[ 0 ], -f[ 2 ] );
+			out[ 0 ] = 0.0f;
+			out[ 1 ] = std::sin( yaw * 0.5f );
+			out[ 2 ] = 0.0f;
+			out[ 3 ] = std::cos( yaw * 0.5f );
+		}
+	}
+
+	void OpenXRRuntime::UpdateOpenVRTrackers()
+	{
+		// Clear last frame's OpenVR roles (HTCX roles are refilled by the loop above when it runs).
+		for( TrackerState &t : m_trackers )
+		{
+			if( t.fromOpenVR )
+			{
+				t = {};
+			}
+		}
+		const auto &vr = Config::Get().vr;
+		if( !vr.m_trackersEnabled || vr.m_trackerSource == "openxr" )
+		{
+			return;
+		}
+		for( const TrackerState &t : m_trackers )
+		{
+			m_htcxSeen = m_htcxSeen || t.active;
+		}
+		const bool forced = vr.m_trackerSource == "openvr";
+		if( !forced && m_htcxSeen )
+		{
+			return; // auto: OpenXR has trackers
+		}
+		if( !OpenVRTrackerSource::Connected() )
+		{
+			// auto: give HTCX ~2 s to report its trackers first.
+			if( !forced && ++m_openvrWaitFrames < 180 )
+			{
+				return;
+			}
+			if( !OpenVRTrackerSource::Connect() )
+			{
+				return; // logged once
+			}
+		}
+		OpenVRTrackerSource::Poll( static_cast< float >( m_displayPeriod ) * 1.0e-9f );
+
+		const XrTime time = m_displayTime + m_displayPeriod;
+		const XrSpace base = static_cast< XrSpace >( m_space );
+		constexpr XrSpaceLocationFlags kPoseValid = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+
+		// Head from both sides, to check / build the alignment.
+		float vrHead[ 3 ], vrHeadQ[ 4 ], xrHead[ 3 ] = {}, xrHeadQ[ 4 ] = { 0.0f, 0.0f, 0.0f, 1.0f };
+		const bool haveVrHead = OpenVRTrackerSource::GetHmd( vrHead, vrHeadQ );
+		XrSpaceLocation head{ XR_TYPE_SPACE_LOCATION };
+		const bool haveXrHead = m_viewSpace && XR_SUCCEEDED( xrLocateSpace( static_cast< XrSpace >( m_viewSpace ), base, time, &head ) ) &&
+			( head.locationFlags & kPoseValid ) == kPoseValid;
+		if( haveXrHead )
+		{
+			CopyPose( head.pose, xrHead, xrHeadQ );
+		}
+
+		// STAGE (SteamVR: the STANDING universe) located in LOCAL.
+		float stagePos[ 3 ] = {}, stageRot[ 4 ] = { 0.0f, 0.0f, 0.0f, 1.0f };
+		XrSpaceLocation stage{ XR_TYPE_SPACE_LOCATION };
+		const bool haveStage = m_stageSpace && XR_SUCCEEDED( xrLocateSpace( static_cast< XrSpace >( m_stageSpace ), base, time, &stage ) ) &&
+			( stage.locationFlags & kPoseValid ) == kPoseValid;
+		if( haveStage )
+		{
+			CopyPose( stage.pose, stagePos, stageRot );
+		}
+
+		m_openvrHmdError = -1.0f;
+		if( haveStage && haveVrHead && haveXrHead )
+		{
+			float p[ 3 ];
+			QuatRotate( stageRot, vrHead, p );
+			const float d[ 3 ] = { p[ 0 ] + stagePos[ 0 ] - xrHead[ 0 ], p[ 1 ] + stagePos[ 1 ] - xrHead[ 1 ], p[ 2 ] + stagePos[ 2 ] - xrHead[ 2 ] };
+			m_openvrHmdError = std::sqrt( d[ 0 ] * d[ 0 ] + d[ 1 ] * d[ 1 ] + d[ 2 ] * d[ 2 ] );
+			m_openvrBadFrames = m_openvrHmdError > 0.10f ? m_openvrBadFrames + 1 : 0;
+		}
+		// STAGE unless it is missing or keeps disagreeing with the head (1.5 s), then the HMD.
+		const bool hmdAlign = !haveStage || m_openvrBadFrames > 135;
+		if( hmdAlign != m_openvrHmdAlign )
+		{
+			m_openvrHmdAlign = hmdAlign;
+			m_openvrAlignAge = 1000000;
+			PSU_LOG( "OpenVR: trackers aligned by %s (head check %.1f cm)\n", hmdAlign ? "the HMD" : "STAGE", m_openvrHmdError * 100.0f );
+		}
+		if( !hmdAlign )
+		{
+			std::copy( stagePos, stagePos + 3, m_openvrAlignPos );
+			std::copy( stageRot, stageRot + 4, m_openvrAlignRot );
+		}
+		else if( haveVrHead && haveXrHead && ++m_openvrAlignAge >= 120 )
+		{
+			// Yaw-only turn + offset that puts the OpenVR head on the OpenXR head; refreshed every
+			// ~1.3 s, not per frame, so head jitter doesn't shake the trackers.
+			m_openvrAlignAge = 0;
+			float inv[ 4 ] = { -vrHeadQ[ 0 ], -vrHeadQ[ 1 ], -vrHeadQ[ 2 ], vrHeadQ[ 3 ] };
+			float delta[ 4 ];
+			QuatMul( xrHeadQ, inv, delta );
+			YawOnly( delta, m_openvrAlignRot );
+			float p[ 3 ];
+			QuatRotate( m_openvrAlignRot, vrHead, p );
+			for( int i = 0; i < 3; ++i )
+			{
+				m_openvrAlignPos[ i ] = xrHead[ i ] - p[ i ];
+			}
+		}
+
+		int count = 0;
+		for( int role = 0; role < kTrackerRoleCount; ++role )
+		{
+			TrackerState &t = m_trackers[ role ];
+			if( t.active )
+			{
+				continue; // HTCX has this role
+			}
+			TrackerState s;
+			if( !OpenVRTrackerSource::Get( static_cast< TrackerRole >( role ), s ) )
+			{
+				continue;
+			}
+			++count;
+			if( s.valid )
+			{
+				float p[ 3 ];
+				QuatRotate( m_openvrAlignRot, s.position, p );
+				for( int i = 0; i < 3; ++i )
+				{
+					s.position[ i ] = p[ i ] + m_openvrAlignPos[ i ];
+				}
+				QuatMul( m_openvrAlignRot, s.orientation, s.orientation );
+			}
+			t = s;
+		}
+		if( GetTickCount() - m_openvrLastLog >= 5000 )
+		{
+			m_openvrLastLog = GetTickCount();
+			PSU_LOG( "OpenVR: %d trackers, %d with a role; align %s, head check %.1f cm\n", OpenVRTrackerSource::TrackerCount(), count,
+				m_openvrHmdAlign ? "HMD" : "STAGE", m_openvrHmdError * 100.0f );
+		}
 	}
 
 	bool OpenXRRuntime::GetControllerState( int hand, ControllerState &out )
@@ -1055,6 +1232,7 @@ namespace PSUVR
 		if( m_blitVS ) { m_blitVS->Release(); m_blitVS = nullptr; }
 		m_loggedBlitRtv = false;
 		DestroyActions();
+		OpenVRTrackerSource::Disconnect();
 		if( m_stageSpace )
 		{
 			xrDestroySpace( static_cast< XrSpace >( m_stageSpace ) );

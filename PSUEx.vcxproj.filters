@@ -372,6 +372,9 @@
     <ClInclude Include="PSUVR\VRTrackers.h">
       <Filter>Header Files\PSUVR</Filter>
     </ClInclude>
+    <ClInclude Include="PSUVR\OpenVRRuntime.h">
+      <Filter>Header Files\PSUVR</Filter>
+    </ClInclude>
     <ClInclude Include="PSUVR\VREyeCull.h">
       <Filter>Header Files\PSUVR</Filter>
     </ClInclude>
@@ -573,6 +576,9 @@
       <Filter>Source Files\PSUVR</Filter>
     </ClCompile>
     <ClCompile Include="PSUVR\VRTrackers.cpp">
+      <Filter>Source Files\PSUVR</Filter>
+    </ClCompile>
+    <ClCompile Include="PSUVR\OpenVRRuntime.cpp">
       <Filter>Source Files\PSUVR</Filter>
     </ClCompile>
     <ClCompile Include="PSUVR\VREyeCull.cpp">

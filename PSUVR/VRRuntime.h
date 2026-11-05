@@ -73,6 +73,7 @@ namespace PSUVR
 		float position[ 3 ]{};
 		float orientation[ 4 ]{ 0.0f, 0.0f, 0.0f, 1.0f };
 		float floorHeight = 0.0f;    // meters above the floor
+		bool fromOpenVR = false;     // read through the OpenVR side connection (not OpenXR HTCX)
 	};
 
 	// The quad layer that shows the PSUEx overlay (ImGui) in the headset: LOCAL-space pose

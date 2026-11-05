@@ -507,11 +507,16 @@ namespace PSUVR
 				Help( "The feet stay where they are in the world and step to a new spot when the hips move away. Replaces the strafe legs." );
 			}
 			ImGui::Checkbox( "Body trackers (restart the game)", &s.m_trackersEnabled );
-			Help( "Reads SteamVR trackers (Vive, Tundra, SlimeVR, Standable) through OpenXR. Each tracker needs a role "
-				"(waist, foot, ...) in SteamVR > Settings > Controllers > Manage Trackers. For now they are only shown, "
-				"they don't move the body yet." );
+			Help( "Reads SteamVR trackers (Vive, Tundra, SlimeVR, Standable) through OpenXR, or OpenVR when OpenXR "
+				"doesn't list them. Roles come from SteamVR > Manage Trackers or the tracker's name. For now they are only "
+				"shown, they don't move the body yet." );
 			if( s.m_trackersEnabled )
 			{
+				static const char *const sourceIds[] = { "auto", "openxr", "openvr" };
+				static const char *const sourceNames[] = { "Auto", "OpenXR only", "OpenVR" };
+				Combo( "Tracker source", s.m_trackerSource, sourceIds, sourceNames, 3 );
+				Help( "Auto: OpenXR's trackers, or OpenVR's when OpenXR lists none (Standable). OpenVR also finds trackers "
+					"by name (Hips, Foot Left, ...) when they have no role." );
 				ImGui::Checkbox( "Show tracker discs", &s.m_trackerShowDiscs );
 				ImGui::SliderFloat( "Tracker smoothing", &s.m_trackerSmoothing, 0.0f, 1.0f, "%.2f" );
 				ImGui::SliderFloat( "Hold a lost tracker (s)", &s.m_trackerLostHold, 0.0f, 1.0f, "%.2f" );

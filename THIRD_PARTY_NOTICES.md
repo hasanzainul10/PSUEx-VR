@@ -11,6 +11,12 @@ Copyright 2017-2024 The Khronos Group Inc.
 Licensed under the Apache License, Version 2.0: https://www.apache.org/licenses/LICENSE-2.0
 Source: https://github.com/KhronosGroup/OpenXR-SDK
 
+## OpenVR SDK header (`third_party/openvr/openvr.h`, v2.5.1, compiled into `PSUEx.dll`)
+
+Copyright (c) 2015, Valve Corporation. BSD 3-Clause License (`third_party/openvr/LICENSE`).
+Source: https://github.com/ValveSoftware/openvr. Only the header; `openvr_api.dll` is not shipped (PSUEx uses
+SteamVR's own `vrclient.dll`).
+
 ## Microsoft Detours (compiled into `PSUEx.dll`)
 
 Copyright (c) Microsoft Corporation. MIT License.

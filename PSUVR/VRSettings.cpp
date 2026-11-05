@@ -117,6 +117,7 @@ namespace
 	X( m_holsterItemScript, "holsterItemScript" ) \
 	X( m_holsterShowZones, "holsterShowZones" ) \
 	X( m_trackersEnabled, "trackersEnabled" ) \
+	X( m_trackerSource, "trackerSource" ) \
 	X( m_trackerShowDiscs, "trackerShowDiscs" ) \
 	X( m_trackerSmoothing, "trackerSmoothing" ) \
 	X( m_trackerLostHold, "trackerLostHold" ) \

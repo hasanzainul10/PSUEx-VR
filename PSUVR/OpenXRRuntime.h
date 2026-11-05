@@ -207,6 +207,18 @@ namespace PSUVR
 		uint64_t m_trackerSpace[ kTrackerRoleCount ]{};
 		TrackerState m_trackers[ kTrackerRoleCount ]{};
 		void LogTrackers();
+		// OpenVR tracker source (vr.trackerSource): roles HTCX doesn't give, from OpenVR's STANDING
+		// universe, aligned to LOCAL through STAGE (or the HMD when STAGE disagrees).
+		void UpdateOpenVRTrackers();
+		bool m_htcxSeen = false;             // an HTCX tracker was active this session (auto: no OpenVR)
+		int m_openvrWaitFrames = 0;
+		bool m_openvrHmdAlign = false;       // aligning by the HMD instead of STAGE
+		int m_openvrBadFrames = 0;           // STAGE alignment off by > 10 cm, frames in a row
+		int m_openvrAlignAge = 0;            // frames since the HMD alignment was taken
+		float m_openvrAlignPos[ 3 ]{};       // STANDING -> LOCAL: rotate, then add
+		float m_openvrAlignRot[ 4 ]{ 0.0f, 0.0f, 0.0f, 1.0f };
+		float m_openvrHmdError = -1.0f;      // last |aligned OpenVR HMD - OpenXR head|, meters
+		DWORD m_openvrLastLog = 0;
 
 		// The layer that carried the overlay in the last EndFrame (user HUD in stereo, the
 		// back-buffer panel otherwise), in LOCAL space.

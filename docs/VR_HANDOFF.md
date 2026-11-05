@@ -747,7 +747,35 @@ Follow-up (voice-session review): RequestAttack now sets s_lastAttackHand = hand
 **User (2026-11-01): works** (right swing casts the wand, TCSM only from the left; committed in `6e596e6`).
 **Holster zones enlarged (2026-10-31, built Debug, NOT deployed: PSUC was running).** Zones are now ellipsoids (`VRHolster::ZoneShape`, half extents right/up/forward at 1.7 m, x radius setting / default): head-back centre (0, +0.12, -0.20) half (0.28, 0.30, 0.30) (up and back, forward to the shoulders); waist centre (0, -0.72, -0.28) half (0.34, 0.28, 0.30); mouth centre (0, -0.20, +0.14) in head axes, half (0.20, 0.25, 0.20) (face to chest, out front). The radius sliders now scale the whole zone (defaults unchanged). Debug discs mark the centre and six extreme points. Deploy `Debug\PSUExD.dll` + `PSUExVRConfig.exe` when the game is closed.
 
-## Full-body tracking (Phase 1 `a63ec2b`, 2a `eaff1fd`, 2b + fixes `d0f5ba2`, all user-tested OK; Phase 3 built 2026-11-05, uncommitted)
+## Full-body tracking (Phase 1 `a63ec2b`, 2a `eaff1fd`, 2b + fixes `d0f5ba2`, all user-tested OK; Phase 3 HTCX `32b9986`; OpenVR source built 2026-11-05, uncommitted)
+**OpenVR tracker source (built Debug + Release 2026-11-05 23:25, Debug + config exe deployed, previous DLL `PSUExD.dll.bak_preopenvr`;
+uncommitted, untested):** haptics B1/B2 committed `dd737bb`, Phase 3 HTCX `32b9986` (both local, not pushed).
+- `PSUVR/OpenVRRuntime.{h,cpp}` = `OpenVRTrackerSource` (not an `IVRRuntime`): no `openvr_api.dll`; uses SteamVR's `vrclient.dll`
+  (the 32-bit OpenXR runtime *is* `bin\vrclient.dll`, so already loaded; else loaded from `openvrpaths.vrpath`), `VRClientCoreFactory
+  ("IVRClientCore_003")`. Shared core: first `GetGenericInterface(IVRSystem_022)` **without** Init; if unavailable `Init(Background)`,
+  then `Init(Other)`. Never `Cleanup` a shared core. Header only: `third_party/openvr/openvr.h` v2.5.1 (+ LICENSE, THIRD_PARTY_NOTICES).
+- Device scan every 2 s: GenericTracker devices, role = SteamVR `trackers` setting (`/devices/<system>/<serial>`) > controller type >
+  serial (keywords hip/waist/pelvis, chest/spine, foot/knee/elbow + left/right). Poses: `GetDeviceToAbsoluteTrackingPose(Standing,
+  next vsync + vsync-to-photons + one display period)`; floorHeight = standing y.
+- `OpenXRRuntime::UpdateOpenVRTrackers` (end of `UpdateInput`): fills roles HTCX doesn't have (`TrackerState::fromOpenVR`).
+  STANDING -> LOCAL by the STAGE pose in LOCAL; checks the OpenVR HMD against OpenXR's VIEW each frame; > 10 cm for 1.5 s (or no
+  STAGE) -> yaw-only HMD alignment refreshed every 120 frames. Setting `trackerSource` auto (OpenVR after ~2 s if no HTCX tracker
+  was ever active) / openxr / openvr; panel combo "Tracker source". Status line / `found` log say OpenVR.
+- Game files unchanged (`trackerSource` absent = auto; `trackersEnabled` / `trackerShowDiscs` still true).
+**Test OVR:** Standable running, start the game, stand. `tools/lastlog.sh -d 'OpenVR|VRTrackers'`. Expected: `vrclient.dll already
+loaded`, `IVRSystem_022 without Init: ok` (or `Init(Background) -> ok`), `side connection up`, one `tracker #N serial 'Hips' ... -> waist
+(...)` line per device (8), `trackers aligned by STAGE`, `head check` < 3 cm, `VRTrackers: waist found (OpenVR)`, waist floor ~1.0,
+feet ~0.05. Headset: discs at hips / chest / knees / feet / elbows follow you (Standable's raw poses can sit a bit off: that's the
+calibration's job). Panel status ends "(OpenVR)". Bad outcomes: `in-process connection failed` -> build the helper exe (like
+`PSUExSpeech`, pipe poses); game hitch / OpenXR session lost after `side connection up` -> same; `head check` large and `aligned by
+the HMD` -> STAGE != STANDING, fine but note it; discs mirrored / rotated -> conversion bug.
+**Test OVR result (2026-11-05 23:4x):** trackers visible, but through **OpenXR HTCX** (all 8 roles, `/devices/htc/vive_tracker...`;
+Standable now emulates Vive trackers?), so the OpenVR source never connected (auto). Raw poses lie flat ~1 m up in front of the user
+(whole-frame error, see `docs/FBT_PLAN.md` "Phase 4 + 5 plan"). Minor: the HTCX `tracker connected` event logs the same path
+(footright) 8 times. OpenVR source still untested (set `trackerSource` openvr to try). Next: 5a calibration with a global fit.
+**Old note, Phase 4 + 5** (superseded by the plan in FBT_PLAN): calibration (stand straight, rest skeleton under the HMD, `offset = inverse(trackerWorld) *
+boneWorld` per role, saved as `trackerCal<Role>`) + trackers drive `VRBodyIk` (waist -> pelvis, chest -> spine end, feet -> leg
+`SolveArm` targets, knees / elbows -> poles; per-role fallback to the estimate with a 0.3 s blend).
 **Phase 3, tracker input only (built Debug + Release 2026-11-05, Debug deployed 22:54 with `PSUExVRConfig.exe`, previous DLL `PSUExD.dll.bak_prefbt3`; uncommitted, untested):** no IK change.
 - `VRRuntime.h`: `TrackerRole` (waist, chest, feet, knees, elbows), `TrackerState` (active / valid / tracked, LOCAL pose,
   `floorHeight` from STAGE), `IVRRuntime::GetTrackerState` (OpenVR: default false).
@@ -774,7 +802,7 @@ lists `/devices/standable/Chest` = Chest; Standable's input profiles (`D:\SteamL
 Estimationesources\input	racker\standable_tracker_<role>_profile.json`) use controller types `standable_tracker_<role>`
 (base `standable_tracker_profile.json` = `vive_tracker` with `tracker_types`), so SteamVR's OpenXR HTCX layer likely skips them.
 VRChat works because it uses OpenVR, which lists all devices; it also auto-calibrates them (Standable's poses are rough, "way off" raw).
-**Next (new session): OpenVR tracker source.** In `PSUVR/OpenVRRuntime.cpp` (runtime rule), a pose-only side connection:
+**Next (done above, see "OpenVR tracker source"): OpenVR tracker source.** In `PSUVR/OpenVRRuntime.cpp` (runtime rule), a pose-only side connection:
 `VR_Init( &err, vr::VRApplication_Background )` (or `_Other`) next to the OpenXR session; each frame
 `GetDeviceToAbsoluteTrackingPose( TrackingUniverseStanding, predicted )`, devices with `TrackedDeviceClass_GenericTracker`, role from
 `Prop_ControllerType_String` / `vr::VRSettings()` `trackers` section / serial name (Hips -> waist, Foot Left -> left foot, ...).

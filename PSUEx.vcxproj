@@ -201,6 +201,7 @@
     <ClInclude Include="PSUDetour\Hook_0047AD30_ActorHit.hpp" />
     <ClInclude Include="PSUVR\VRHolster.h" />
     <ClInclude Include="PSUVR\VRTrackers.h" />
+    <ClInclude Include="PSUVR\OpenVRRuntime.h" />
     <ClInclude Include="PSUVR\VREyeCull.h" />
     <ClInclude Include="PSUVR\VRControllerSim.h" />
     <ClInclude Include="PSUDetour\Hook_0074B760_BonePose.hpp" />
@@ -325,6 +326,7 @@
     <ClCompile Include="PSUVR\VRGameHaptics.cpp" />
     <ClCompile Include="PSUVR\VRHolster.cpp" />
     <ClCompile Include="PSUVR\VRTrackers.cpp" />
+    <ClCompile Include="PSUVR\OpenVRRuntime.cpp" />
     <ClCompile Include="PSUVR\VREyeCull.cpp" />
     <ClCompile Include="PSUVR\VRControllerSim.cpp" />
     <ClCompile Include="PSUOverlay\ImageMng.cpp" />

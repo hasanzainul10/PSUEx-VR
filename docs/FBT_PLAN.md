@@ -164,6 +164,43 @@ T-pose gives arm span; save + toast.
 4. **Trackers drive IK:** waist, feet, poles, chest; per-role fallback ~0.3 s, no pop. Risk: foot height on slopes (clamp to
    `groundY`, root stays the game's), stick movement with tracked feet.
 5. **Calibration + proportions**, saved, "Reset calibration".
+### Phase 4 + 5 plan (2026-11-05, after the first Standable run)
+
+Run result: Standable's 8 trackers arrive through **OpenXR HTCX** now (`/devices/htc/vive_tracker<role>`, all 8 roles, `found
+(OpenXR)`), so the OpenVR source stayed idle (auto). Raw poses: every tracker ~1.0 m above the floor, laid out along -Z (chest ~0,
+waist -0.4, knees -0.7, feet -1.1 m): a body **lying in the air in front of you**. That is a whole-frame error in Standable's space
+(rotated ~90 deg about X plus an offset), not per-tracker offsets, so calibration must fit a global transform first.
+
+**5a. Calibration capture** (`PSUVR/VRTrackerCal.{h,cpp}`, new):
+- Trigger: panel button "Calibrate trackers" (`trackerCalibRequest`, not saved) + motion chord later; 5 s countdown with
+  `Countdown` haptics, `Done` on capture. Stand straight, arms hanging, look ahead.
+- Expected joints at capture, in STAGE space (floor origin; survives recenter, unlike LOCAL): rest skeleton (`VRBodyIk::RestPose`
+  bind pose, body fit) stood under the HMD (head yaw, neck = HMD - `bodyNeckDrop`, feet on the floor). Bones: 1 pelvis, 10 chest,
+  4 / 7 knees, 5 / 8 ankles, 16 / 21 elbows.
+- Trackers in STAGE: new `IVRRuntime::GetStagePose` (STAGE in LOCAL) so `VRTrackers` can convert both ways.
+- **Global fit** (Umeyama: rotation + translation + uniform scale clamped 0.7..1.4) of tracker positions -> expected joints, weights
+  waist / chest / feet 1, knees 0.7, elbows 0.3; needs >= 3 non-collinear roles, else yaw + translation only. Applied only if it
+  cuts the RMS residual by > 5 cm vs identity (real Vive / Tundra trackers keep identity). Log `VRTrackerCal: global fit rot X deg
+  scale S rms A -> B cm`.
+- **Per-tracker offset**: `offset = inverse(G * tracker) * joint` (position + rotation; joint rotation = rest bone axes), so
+  `joint = G * tracker * offset`.
+- Saved: `trackerCalGlobal` "px py pz qx qy qz qw s" (STAGE), `trackerCal<Role>` "x y z qx qy qz qw", `trackerCalibrated`;
+  "Reset calibration". Uncalibrated + trackers on: nothing drives the body (discs only).
+- Discs: raw disc (dim) + calibrated joint disc (bright) per role. **Test 5a:** after calibrating, the bright discs sit on your
+  hips / knees / feet / elbows and follow them; walking / turning keeps them on.
+
+**4. Trackers drive `VRBodyIk`** (after 5a tests OK), per role, `trackerDriveBody` (true) + group toggles waist / chest / feet /
+knees / elbows:
+- Waist -> pelvis 1 position + orientation (replaces the head-derived hips and the `StrafeUpdate` yaw while tracked).
+- Chest -> spine CCD end orientation (10 / 11), head still to the HMD.
+- Feet -> leg two-bone targets + foot orientation (replaces planted feet), clamped to the ground.
+- Knees -> leg poles; elbows -> arm poles (overrides `bodyElbowFromHand`).
+- Per-role weight ramps 0 <-> 1 over 0.3 s on gain / loss (fallback = today's estimate, no pop). Positions through
+  `VRCamera::BodyTrackingToWorld` (first + third person). The game root stays the game's (stick moves the body, trackers stay
+  relative). Log `VRBody: sources pelvis=tracker|estimate ...` every 3 s.
+- **Test 4:** stand / squat / kick / step sideways / sit: character's hips, knees, feet follow; cover a tracker: that limb eases
+  back to the estimate; stick walking still works.
+
 6. **Polish:** filter tuning, foot lock, `XR_MNDX_xdev_space`; ADDRESS_MAP, VR_HANDOFF, VR_ROADMAP.
 
 Files: `PSUVR/VRHands.cpp`, new `PSUVR/VRBodyIk.*`, `PSUVR/VRSkeletonMath.h`, `PSUDetour/Hook_0074B760_BonePose.hpp`,

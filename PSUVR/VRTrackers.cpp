@@ -127,7 +127,7 @@ namespace PSUVR
 				}
 				if( !any )
 				{
-					len += sprintf_s( line + len, sizeof( line ) - len, " none active (roles set in SteamVR > Manage Trackers?)" );
+					len += sprintf_s( line + len, sizeof( line ) - len, " none active (OpenXR: roles in SteamVR > Manage Trackers? OpenVR: see 'OpenVR:' lines)" );
 				}
 				PSU_LOG( "%s\n", line );
 			}
@@ -182,7 +182,7 @@ namespace PSUVR
 					if( !t.seen )
 					{
 						t.seen = true;
-						PSU_LOG( "VRTrackers: %s found\n", kRoleNames[ role ] );
+						PSU_LOG( "VRTrackers: %s found (%s)\n", kRoleNames[ role ], t.raw.fromOpenVR ? "OpenVR" : "OpenXR" );
 					}
 				}
 				else
@@ -243,6 +243,7 @@ namespace PSUVR
 				return {};
 			}
 			std::string line;
+			bool openvr = false;
 			for( int role = 0; role < kTrackerRoleCount; ++role )
 			{
 				const Track &t = s_tracks[ role ];
@@ -253,6 +254,11 @@ namespace PSUVR
 				line += line.empty() ? "" : ", ";
 				line += kRoleNames[ role ];
 				line += t.pose.valid && !t.pose.held ? ( t.raw.tracked ? " ok" : " inferred" ) : " lost";
+				openvr = openvr || t.raw.fromOpenVR;
+			}
+			if( openvr )
+			{
+				line += " (OpenVR)";
 			}
 			return line.empty() ? "No trackers with a role (set roles in SteamVR > Manage Trackers)" : line;
 		}
