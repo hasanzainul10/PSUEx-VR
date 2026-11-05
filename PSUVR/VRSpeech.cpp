@@ -338,13 +338,14 @@ namespace PSUVR
 		// Technique names by slot id (PSUCombat::TechSlots). PROVISIONAL: the groups follow the
 		// technique disks ((id - 1) / 10 + 1 = element) but the order inside a group is a guess
 		// from the effect table 0x009C63C0; the Debug log prints each slot's id to fix this.
+		// Confirmed in game: 2 Rafoie, 6 Shifta (a TCSM's Shifta reads id 6), 11 Barta, 41 Resta, 42 Giresta.
 		struct TechName
 		{
 			uint8_t id;
 			const char *name;
 		};
 		const TechName kTechNames[] = {
-			{ 1, "Foie" }, { 2, "Rafoie" }, { 3, "Damfoie" }, { 4, "Gifoie" }, { 5, "Shifta" }, { 6, "Jellen" },
+			{ 1, "Foie" }, { 2, "Rafoie" }, { 3, "Damfoie" }, { 4, "Gifoie" }, { 5, "Jellen" }, { 6, "Shifta" },
 			{ 11, "Barta" }, { 12, "Rabarta" }, { 13, "Dambarta" }, { 14, "Gibarta" }, { 15, "Deband" }, { 16, "Zalure" },
 			{ 21, "Zonde" }, { 22, "Razonde" }, { 23, "Gizonde" }, { 24, "Noszonde" }, { 25, "Zodial" }, { 26, "Retier" },
 			{ 31, "Diga" }, { 32, "Radiga" }, { 33, "Damdiga" }, { 34, "Gidiga" }, { 35, "Nosdiga" }, { 36, "Reverser" },

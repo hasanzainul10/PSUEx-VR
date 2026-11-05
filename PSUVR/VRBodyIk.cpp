@@ -94,7 +94,7 @@ namespace PSUVR
 		void HeadToHmd( float *out, const uint8_t *records, const D3DXMATRIX &toModel, bool log )
 		{
 			float forwardWorld[ 3 ], upWorld[ 3 ];
-			if( !s_restValid[ kHeadBone ] || !VRCamera::HeadAxes( forwardWorld, upWorld ) )
+			if( !s_restValid[ kHeadBone ] || !VRCamera::BodyHeadAxes( forwardWorld, upWorld ) )
 			{
 				return;
 			}
@@ -166,6 +166,20 @@ namespace PSUVR
 		float BodyFit()
 		{
 			return s_bodyFit;
+		}
+
+		bool RestNeck( const float *out, const uint8_t *records, D3DXVECTOR3 &neck )
+		{
+			if( records != s_restRecords || !s_restValid[ kNeckBone ] )
+			{
+				return false;
+			}
+			D3DXMATRIX fitScale, fitRoot, m;
+			D3DXMatrixScaling( &fitScale, s_bodyFit, s_bodyFit, s_bodyFit );
+			D3DXMatrixMultiply( &fitRoot, &fitScale, reinterpret_cast< const D3DXMATRIX * >( out ) );
+			D3DXMatrixMultiply( &m, &s_rest[ kNeckBone ], &fitRoot );
+			neck = D3DXVECTOR3( m._41, m._42, m._43 );
+			return true;
 		}
 
 		void RestPose( float *out, const uint8_t *skeleton )
@@ -495,7 +509,7 @@ namespace PSUVR
 		float BodyYawGoal( float lookYaw, const ControllerState *const pads[ 2 ] )
 		{
 			float head[ 3 ];
-			if( !VRCamera::HeadWorld( head ) )
+			if( !VRCamera::BodyHeadWorld( head ) )
 			{
 				return lookYaw;
 			}
@@ -503,7 +517,7 @@ namespace PSUVR
 			for( int hand = 0; hand < 2; ++hand )
 			{
 				float w[ 3 ];
-				if( !pads[ hand ]->gripValid || !VRCamera::TrackingToWorld( pads[ hand ]->gripPosition, w ) || w[ 1 ] > head[ 1 ] )
+				if( !pads[ hand ]->gripValid || !VRCamera::BodyTrackingToWorld( pads[ hand ]->gripPosition, w ) || w[ 1 ] > head[ 1 ] )
 				{
 					return lookYaw;
 				}

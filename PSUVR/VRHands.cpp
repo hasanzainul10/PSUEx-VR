@@ -42,6 +42,7 @@ namespace PSUVR
 		// After a cast, the animation returns the weapon: keep holding it this long.
 		constexpr DWORD kCastSettleMs = 400;
 		const std::string kHeadlessBody = "headless";
+		const std::string kFullBody = "full";
 
 		// How much the arms follow the controllers (0 = the game's animation), eased.
 		float s_weight = 0.0f;
@@ -126,7 +127,7 @@ namespace PSUVR
 				const D3DXVECTOR3 t = RotateByQuat( c.gripOrientation, local[ i ] );
 				const float in[ 3 ] = { t.x, t.y, t.z };
 				float w[ 3 ];
-				if( !VRCamera::TrackingDirToWorld( in, w ) )
+				if( !VRCamera::BodyTrackingDirToWorld( in, w ) )
 				{
 					return false;
 				}
@@ -424,6 +425,7 @@ namespace PSUVR
 		float s_lastPos[ 3 ]{};
 		DWORD s_lastPosTick = 0;
 		float s_speed = 0.0f;             // game units per second
+		float s_travelYaw = 0.0f;         // direction of travel (valid while moving)
 		constexpr float kBodyDeadZone = 35.0f * ( kPi / 180.0f );
 		constexpr float kBodyFollowRate = 6.0f;
 		constexpr float kGaitHysteresis = 10.0f * ( kPi / 180.0f );
@@ -446,6 +448,10 @@ namespace PSUVR
 				const float dx = combat.position[ 0 ] - s_lastPos[ 0 ];
 				const float dz = combat.position[ 2 ] - s_lastPos[ 2 ];
 				s_speed = std::sqrt( dx * dx + dz * dz ) / ( ( now - s_lastPosTick ) / 1000.0f );
+				if( dx * dx + dz * dz > 1.0e-6f )
+				{
+					s_travelYaw = std::atan2( dx, dz );
+				}
 				std::memcpy( s_lastPos, combat.position, sizeof( s_lastPos ) );
 				s_lastPosTick = now;
 			}
@@ -537,13 +543,16 @@ namespace PSUVR
 #endif
 		}
 
-		void StrafeUpdate( const PSUCombat::State &combat, float lookYaw, float dt )
+		// facing = the model root's yaw in the world (what the rest pose sits on). The travel direction
+		// comes from the movement: with L1 held (lock-on) the game sidesteps without turning, so
+		// neither the root nor +0x124 points where the character goes.
+		void StrafeUpdate( const PSUCombat::State &combat, float lookYaw, float facing, float dt )
 		{
 			const auto &vr = Config::Get().vr;
-			const float facing = static_cast< float >( combat.facing ) * ( 2.0f * kPi / 65536.0f );
 
 			SampleSpeed( combat );
 			const bool moving = s_speed > kMovingSpeed;
+			const float travel = s_travelYaw;
 
 			// Body yaw: stays while the head turns inside the dead-zone, then follows; follows at once
 			// while walking so the body faces where you look.
@@ -562,7 +571,7 @@ namespace PSUVR
 			float target = 0.0f; // wanted leg yaw minus the game's facing
 			if( moving )
 			{
-				const float d = WrapPi( facing - s_bodyYaw ); // travel direction against the body
+				const float d = WrapPi( travel - s_bodyYaw ); // travel direction against the body
 				const float ad = std::fabs( d );
 				// Sector changes need to pass the edge by the hysteresis.
 				Gait gait = s_gait;
@@ -584,7 +593,7 @@ namespace PSUVR
 				}
 				s_gait = gait;
 				// Hip twist: the legs keep part of the way toward the body's facing.
-				const float ref = gait == kGaitBack ? facing + kPi : facing;
+				const float ref = gait == kGaitBack ? travel + kPi : travel;
 				target = WrapPi( ref + vr.m_strafeBodyBlend * WrapPi( s_bodyYaw - ref ) - facing );
 			}
 			else
@@ -663,7 +672,8 @@ namespace PSUVR
 
 		void AfterPlayerDraw( void *model )
 		{
-			if( !Config::Get().vr.m_handsFollow || !VRCamera::FirstPersonActive() || s_inWorldQuery )
+			if( !Config::Get().vr.m_handsFollow || !( VRCamera::FirstPersonActive() || VRCamera::ThirdPersonBodyWanted() ) ||
+				s_inWorldQuery )
 			{
 				return;
 			}
@@ -755,11 +765,14 @@ namespace PSUVR
 				Note( kSkipSetting );
 				return;
 			}
-			if( !VRCamera::FirstPersonActive() )
+			// Third person (vr.bodyIkThirdPerson): the same pose on the character, nothing folded away.
+			const bool thirdPerson = !VRCamera::FirstPersonActive() && VRCamera::ThirdPersonBodyWanted();
+			if( !VRCamera::FirstPersonActive() && !thirdPerson )
 			{
 				Note( kSkipFirstPerson );
 				return;
 			}
+			const std::string &bodyMode = thirdPerson ? kFullBody : Config::Get().vr.m_fpBody;
 			const ControllerState *pads[ 2 ] = { &VRControllers::State( 0 ), &VRControllers::State( 1 ) };
 			__try
 			{
@@ -786,7 +799,7 @@ namespace PSUVR
 				{
 					// Tracking lost for a moment: keep the body mode. No controller at all: "hands"
 					// falls back to headless (nothing would put the hands anywhere).
-					const std::string &body = Config::Get().vr.m_fpBody;
+					const std::string &body = bodyMode;
 					const bool anyActive = pads[ 0 ]->active || pads[ 1 ]->active;
 					FoldBody( out, records, anyActive || body != "hands" ? body : kHeadlessBody );
 					Note( kSkipControllers );
@@ -794,7 +807,7 @@ namespace PSUVR
 				}
 				if( !s_haveWorld || GetTickCount() - s_worldTick > kWorldStaleMs )
 				{
-					FoldBody( out, records, Config::Get().vr.m_fpBody );
+					FoldBody( out, records, bodyMode );
 					Note( kSkipWorld );
 					return;
 				}
@@ -802,14 +815,52 @@ namespace PSUVR
 				D3DXMATRIX toModel;
 				if( !D3DXMatrixInverse( &toModel, nullptr, &world ) )
 				{
-					FoldBody( out, records, Config::Get().vr.m_fpBody );
+					FoldBody( out, records, bodyMode );
 					Note( kSkipInverse );
 					return;
 				}
-				float forward[ 3 ], right[ 3 ];
-				if( !VRCamera::BodyAxes( forward, right ) )
+				// Third person: where your standing head sits on the character (the rest neck, raised and
+				// moved forward as bodyIk expects the eye to be), its facing and its size over yours.
+				float facingYaw = 0.0f;
+				if( thirdPerson )
 				{
-					FoldBody( out, records, Config::Get().vr.m_fpBody );
+					D3DXVECTOR3 neckModel;
+					if( !VRBodyIk::RestNeck( out, records, neckModel ) )
+					{
+						neckModel = Position( out, kNeckBone );
+					}
+					D3DXMATRIX rootWorld;
+					D3DXMatrixMultiply( &rootWorld, reinterpret_cast< const D3DXMATRIX * >( out ), &world );
+					D3DXVECTOR3 facing;
+					D3DXVec3TransformNormal( &facing, &kModelForward, &rootWorld );
+					facingYaw = std::atan2( facing.x, facing.z );
+					const D3DXVECTOR3 facingLevel( std::sin( facingYaw ), 0.0f, std::cos( facingYaw ) );
+					const D3DXVECTOR3 neck = ToWorld( world, neckModel );
+					const D3DXVECTOR3 ground( rootWorld._41, rootWorld._42, rootWorld._43 );
+					const auto &cfg = Config::Get().vr;
+					const D3DXVECTOR3 eye = neck + D3DXVECTOR3( 0.0f, cfg.m_bodyNeckDrop * VRCamera::kGameUnitsPerMeter, 0.0f ) +
+						facingLevel * ( cfg.m_bodyBack * VRCamera::kGameUnitsPerMeter );
+					// The character's eye height over yours (fpEyeHeight); 10 with "Scale body to my height".
+					const float eyeHeight = ( std::max )( cfg.m_fpEyeHeight, 0.5f );
+					const float units = std::clamp( ( neck.y + 0.6f * VRBodyIk::BodyFit() - ground.y ) / eyeHeight, 3.0f, 30.0f );
+					const float eyeWorld[ 3 ] = { eye.x, eye.y, eye.z };
+					VRCamera::SetThirdPersonBody( eyeWorld, facingYaw, units );
+#ifdef _DEBUG
+					static DWORD s_tpLog = 0;
+					if( GetTickCount() - s_tpLog >= 3000 )
+					{
+						s_tpLog = GetTickCount();
+						float head[ 3 ]{};
+						const bool haveHead = VRCamera::BodyHeadWorld( head );
+						PSU_LOG( "VRBody: third person eye %.1f %.1f %.1f facing %.0f deg, %.1f units/m, head %s %.1f %.1f %.1f\n",
+							eye.x, eye.y, eye.z, facingYaw * 57.29578f, units, haveHead ? "ok" : "none", head[ 0 ], head[ 1 ], head[ 2 ] );
+					}
+#endif
+				}
+				float forward[ 3 ], right[ 3 ];
+				if( !VRCamera::BodyFrameAxes( forward, right ) )
+				{
+					FoldBody( out, records, bodyMode );
 					Note( kSkipBody );
 					return;
 				}
@@ -906,21 +957,45 @@ namespace PSUVR
 				// trails the head (dead-zone), the chest twists toward the head within a limit and
 				// the legs step against the travel direction; without it the chest follows the head.
 				float lookYaw = 0.0f;
-				if( w > 0.0f && VRCamera::LookYaw( lookYaw ) )
+				if( w > 0.0f && VRCamera::BodyLookYaw( lookYaw ) )
 				{
-					const bool strafe = vr.m_strafeBody && haveCombat;
+					// Third person: the game turns the character; the chest twists toward your head within
+					// the torso limit.
+					const bool strafe = vr.m_strafeBody && haveCombat && !thirdPerson;
 					// Body IK: the body faces between the head and the hands held in front.
 					const bool spineIk = restPose && vr.m_bodyIk && VRBodyIk::BoneMapOk( records );
 					const float bodyLook = spineIk ? VRBodyIk::BodyYawGoal( lookYaw, pads ) : lookYaw;
 					float torsoYaw = bodyLook, legExtra = 0.0f;
 					if( strafe )
 					{
-						StrafeUpdate( combat, bodyLook, dt );
-						const float facing = static_cast< float >( combat.facing ) * ( 2.0f * kPi / 65536.0f );
+						// Turn from where the root really faces (the game may turn the root away
+						// from +0x124, e.g. while L1 / lock-on is held), not from the facing field.
+						D3DXMATRIX rootWorld;
+						D3DXMatrixMultiply( &rootWorld, reinterpret_cast< const D3DXMATRIX * >( out ), &world );
+						D3DXVECTOR3 rootForward;
+						D3DXVec3TransformNormal( &rootForward, &kModelForward, &rootWorld );
+						const float gameFacing = static_cast< float >( combat.facing ) * ( 2.0f * kPi / 65536.0f );
+						const float facing = rootForward.x * rootForward.x + rootForward.z * rootForward.z > 1.0e-6f
+							? std::atan2( rootForward.x, rootForward.z ) : gameFacing;
+						StrafeUpdate( combat, bodyLook, facing, dt );
 						const float whole = WrapPi( s_bodyYaw - facing ) * w;
+#ifdef _DEBUG
+						static int s_lastState = -1;
+						if( log || VRCamera::CameraState() != s_lastState )
+						{
+							s_lastState = VRCamera::CameraState();
+							PSU_LOG( "VRStrafe: cam state %d root yaw %.0f, +0x124 %.0f, travel %.0f, speed %.1f, body %.0f deg\n",
+								s_lastState, facing * 57.29578f, gameFacing * 57.29578f, s_travelYaw * 57.29578f, s_speed,
+								s_bodyYaw * 57.29578f );
+						}
+#endif
 						TurnBody( out, records, whole );
 						legExtra = WrapPi( s_legTurn * w - whole );
 						torsoYaw = s_bodyYaw + std::clamp( WrapPi( bodyLook - s_bodyYaw ), -kTorsoLimit, kTorsoLimit );
+					}
+					else if( thirdPerson )
+					{
+						torsoYaw = facingYaw + std::clamp( WrapPi( bodyLook - facingYaw ), -kTorsoLimit, kTorsoLimit );
 					}
 					const D3DXVECTOR3 lookWorld( std::sin( torsoYaw ), 0.0f, std::cos( torsoYaw ) );
 					D3DXVECTOR3 lookModel;
@@ -959,11 +1034,11 @@ namespace PSUVR
 				if( restPose && w > 0.0f && ( vr.m_bodyIk || vr.m_bodyProceduralLegs ) && VRBodyIk::BoneMapOk( records ) )
 				{
 					float head[ 3 ];
-					const bool haveHead = vr.m_bodyIk && VRCamera::HeadWorld( head );
+					const bool haveHead = vr.m_bodyIk && VRCamera::BodyHeadWorld( head );
 					VRBodyIk::Solve( out, records, world, toModel, haveHead ? head : nullptr, haveHead, vr.m_bodyProceduralLegs, dt, log );
 				}
 
-				if( haveCombat && vr.m_fpEyeFollowsNeck && !( restPose && vr.m_bodyIk ) )
+				if( haveCombat && vr.m_fpEyeFollowsNeck && !( restPose && vr.m_bodyIk ) && !thirdPerson )
 				{
 					UpdateEyeLean( out, world, combat, forward, dt, log );
 				}
@@ -972,7 +1047,7 @@ namespace PSUVR
 				{
 					// The game's animation; only hide what first person hides. (The clip plane,
 					// which also cut raised hands, isn't needed once the head is folded.)
-					FoldBody( out, records, vr.m_fpBody );
+					FoldBody( out, records, bodyMode );
 					Note( kSolved );
 					return;
 				}
@@ -989,7 +1064,7 @@ namespace PSUVR
 					const D3DXVECTOR3 wristTracking = grip + RotateByQuat( c.gripOrientation, { 0.0f, 0.0f, kWristBackMeters } );
 					const float tracking[ 3 ] = { wristTracking.x, wristTracking.y, wristTracking.z };
 					float targetWorld[ 3 ];
-					if( !VRCamera::TrackingToWorld( tracking, targetWorld ) )
+					if( !VRCamera::BodyTrackingToWorld( tracking, targetWorld ) )
 					{
 						tracked = false;
 						break;
@@ -1033,7 +1108,7 @@ namespace PSUVR
 						// visible arm (armStretch) it stretches, half the gap at the elbow and half at the
 						// wrist, up to half its length.
 						D3DXVECTOR3 gap = reach - Position( out, arm.hand );
-						if( vr.m_fpBody != "hands" )
+						if( bodyMode != "hands" )
 						{
 							if( !vr.m_armStretch )
 							{
@@ -1055,7 +1130,7 @@ namespace PSUVR
 						{
 							const D3DXVECTOR3 half = gap * 0.5f;
 							D3DXMATRIX shift;
-							if( vr.m_fpBody != "hands" )
+							if( bodyMode != "hands" )
 							{
 								D3DXMatrixTranslation( &shift, half.x, half.y, half.z );
 								ApplyToSubtree( out, records, arm.fore, shift );
@@ -1095,7 +1170,7 @@ namespace PSUVR
 							const D3DXVECTOR3 aim = RotateByQuat( pads[ h ]->aimOrientation, { 0.0f, 0.0f, -1.0f } );
 							const float in[ 3 ] = { aim.x, aim.y, aim.z };
 							float aimWorld[ 3 ];
-							if( VRCamera::TrackingDirToWorld( in, aimWorld ) )
+							if( VRCamera::BodyTrackingDirToWorld( in, aimWorld ) )
 							{
 								aimSum += D3DXVECTOR3( aimWorld[ 0 ], 0.0f, aimWorld[ 2 ] );
 							}
@@ -1244,7 +1319,7 @@ namespace PSUVR
 					D3DXMatrixMultiply( &modelDelta, &modelDelta, &toModel );
 					ApplyToSubtree( out, records, arm.hand, modelDelta );
 				}
-				FoldBody( out, records, vr.m_fpBody );
+				FoldBody( out, records, bodyMode );
 				Note( tracked ? kSolved : kSkipTracking );
 			}
 			__except( EXCEPTION_EXECUTE_HANDLER )

@@ -12,14 +12,14 @@ namespace PSUVR
 	// player's node gets a thunk that brackets the original callback.
 	namespace VRPlayerDraw
 	{
-		// Once per stereo frame before the eye passes. enable = first person is active;
-		// false restores every patched callback.
-		void Update( bool enable );
+		// Once per stereo frame before the eye passes. firstPerson = first person is active;
+		// thirdPersonBody = third-person body IK wants the model; neither restores every patched callback.
+		void Update( bool firstPerson, bool thirdPersonBody );
 
 		// Inside the local player's draw callback.
 		bool DrawingLocalPlayer();
 		// The local player's TDivModel, seen at its last draw; null when not tracked
-		// (Update( false ), vr.fpBody "full", no player).
+		// (neither mode, first-person vr.fpBody "full", no player).
 		const void *PlayerModel();
 		// Counts Update calls (one per stereo frame).
 		unsigned Frame();

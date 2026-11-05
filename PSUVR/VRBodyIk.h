@@ -21,8 +21,11 @@ namespace PSUVR
 		void RestPose( float *out, const uint8_t *skeleton );
 		// The body fit scale RestPose used last (1 = off).
 		float BodyFit();
+		// The neck of the rest pose RestPose last built for these records, on the current root (model
+		// space, body fit included). False without a rest pose for them.
+		bool RestNeck( const float *out, const uint8_t *records, D3DXVECTOR3 &neck );
 
-		// Body IK on the rest pose, first person. upper (headWorld set): hips follow the head (pushed back
+		// Body IK on the rest pose (first person, or third person through VRCamera's Body* mapping). upper (headWorld set): hips follow the head (pushed back
 		// by a crouch), the CCD spine leans the neck to it, the head turns to the HMD. legs: planted feet
 		// that step. world = model -> game world, toModel its inverse.
 		void Solve( float *out, const uint8_t *records, const D3DXMATRIX &world, const D3DXMATRIX &toModel,

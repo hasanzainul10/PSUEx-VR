@@ -2233,8 +2233,10 @@ namespace PSUVR
 			const float unitsPerMeter = VRCamera::kGameUnitsPerMeter * ( vr.m_worldScale > 0.01f ? vr.m_worldScale : 1.0f );
 			VRCamera::CaptureRenderCamera();
 			const bool firstPerson = VRCamera::FirstPersonActive();
-			// Bracket the local player's draw callback so its head can be cut in the eyes.
-			VRPlayerDraw::Update( firstPerson );
+			VRCamera::NoteHmd( views );
+			// Bracket the local player's draw callback so its head can be cut in the eyes (and the
+			// body posed in third person with vr.bodyIkThirdPerson).
+			VRPlayerDraw::Update( firstPerson, VRCamera::ThirdPersonBodyWanted() );
 			if( firstPerson )
 			{
 				VRCamera::UpdateFirstPersonAnchor( views );

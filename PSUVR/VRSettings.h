@@ -132,6 +132,9 @@ struct VRSettings
 	bool m_bodyProceduralLegs = false;
 	// bodyIk: the head (neck 30%) turns with the HMD.
 	bool m_bodyHeadFollowsHmd = true;
+	// Third person: the arms follow the controllers and (with bodyIk) the body follows the headset, mapped
+	// from your head onto the character (rest pose, its facing).
+	bool m_bodyIkThirdPerson = false;
 	// Arms on the controllers: the shoulders lift toward far / high hands (0 = off, 0.5 = up to 20 deg).
 	float m_bodyShoulderShrug = 0.5f;
 	// Arms on the controllers: how much the elbow follows the controller's angle (0 = hangs by the

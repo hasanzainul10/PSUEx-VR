@@ -546,6 +546,10 @@ namespace PSUVR
 			ImGui::SliderFloat( "Zoom speed (m/s)", &s.m_tpZoomSpeed, 0.5f, 10.0f, "%.1f" );
 			ImGui::SliderFloat( "Closest (m)", &s.m_tpMinDistance, 0.5f, 5.0f, "%.1f" );
 			ImGui::SliderFloat( "Farthest (m)", &s.m_tpMaxDistance, 3.0f, 20.0f, "%.1f" );
+			ImGui::Checkbox( "Body follows me (arms, head, crouch)", &s.m_bodyIkThirdPerson );
+			Help( "The character's arms follow the controllers. With \"Body in rest pose\" and \"Body follows my head\" "
+				"(First person section) its head, hips and spine also follow your headset, relative to where you stood "
+				"at the last recenter." );
 		}
 
 		if( Section( Tab::General, "Turning" ) )

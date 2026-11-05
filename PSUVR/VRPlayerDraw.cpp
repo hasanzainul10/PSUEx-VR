@@ -139,7 +139,7 @@ namespace PSUVR
 			// the game still culls the player against its aim camera (see IgnoreNearHide /
 			// IgnorePartCull).
 			const auto &vr = Config::Get().vr;
-			const bool forceShow = VRCamera::CameraState() == 4 && vr.m_handsFollow;
+			const bool forceShow = VRCamera::CameraState() == 4 && vr.m_handsFollow && VRCamera::FirstPersonActive();
 			s_drawingLocalPlayer = true;
 			s_forcingVisible = forceShow;
 			original( object );
@@ -298,10 +298,11 @@ namespace PSUVR
 
 	namespace VRPlayerDraw
 	{
-		void Update( bool enable )
+		void Update( bool firstPerson, bool thirdPersonBody )
 		{
 			++s_frame;
-			if( !enable || Config::Get().vr.m_fpBody == "full" )
+			// First person "full" needs no head cut; third-person body IK needs the model whatever fpBody says.
+			if( !thirdPersonBody && ( !firstPerson || Config::Get().vr.m_fpBody == "full" ) )
 			{
 				RestoreAll();
 				return;
@@ -475,7 +476,7 @@ namespace PSUVR
 		void BeginEyePasses()
 		{
 			s_forcedFlags = nullptr;
-			if( VRCamera::CameraState() != 4 || !Config::Get().vr.m_handsFollow || s_patchCount == 0 )
+			if( VRCamera::CameraState() != 4 || !Config::Get().vr.m_handsFollow || s_patchCount == 0 || !VRCamera::FirstPersonActive() )
 			{
 				return;
 			}
