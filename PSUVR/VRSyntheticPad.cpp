@@ -358,6 +358,11 @@ namespace PSUVR
 			{
 				direct( 1 );  // melee, rod, staff
 			}
+			else if( rightCat == 2 && PSUCombat::TwinGuns( s_combat.weaponClass ) )
+			{
+				shoot( 0, false );  // twin handguns: either trigger fires them (the active weapon: no R1)
+				shoot( 1, false );
+			}
 			else if( rightCat == 2 )
 			{
 				shoot( PSUCombat::GunHand( s_combat.weaponClass ), false );  // two-handed gun, the active weapon: no R1
@@ -594,7 +599,10 @@ namespace PSUVR
 		void Gun( float dt, const HandRoles &roles, PadState &pad )
 		{
 			// The left hand's gun (with R1) or a two-handed gun (the right trigger).
-			const int hand = roles.shoot[ 0 ] ? 0 : ( roles.shoot[ 1 ] ? 1 : -1 );
+			// Twin handguns (both hands shoot): the hand whose trigger is down, else the last one that fired.
+			const bool twinGuns = roles.shoot[ 0 ] && roles.shoot[ 1 ];
+			const int hand = twinGuns ? ( s_triggerDown[ 1 ] ? 1 : ( s_triggerDown[ 0 ] ? 0 : ( s_lastAttackHand == 0 ? 0 : 1 ) ) )
+				: roles.shoot[ 0 ] ? 0 : ( roles.shoot[ 1 ] ? 1 : -1 );
 			if( hand < 0 )
 			{
 				s_gunShot = false;
@@ -2105,8 +2113,9 @@ namespace PSUVR
 				RequestAttack( slot == 0 ? kPadX : kPadY, 1, 0, "voice" );
 				return true;
 			}
-			// Rod slots 3 / 4 and the TCSM: R1 held, then X / Y, through the left-hand cast.
-			if( !roles.shoot[ 0 ] )
+			// Rod slots 3 / 4 and the TCSM: R1 held, then X / Y, through the left-hand cast (not twin
+			// handguns, where the left hand shoots the right-hand weapon).
+			if( !roles.shoot[ 0 ] || roles.shoot[ 1 ] )
 			{
 				return false;
 			}

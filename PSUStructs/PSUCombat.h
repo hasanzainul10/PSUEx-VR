@@ -66,6 +66,12 @@ namespace PSUCombat
 		return weaponClass == 0x1E ? 0 : 1;
 	}
 
+	// Twin handguns: one gun in each hand, fired by either trigger.
+	inline bool TwinGuns( uint32_t weaponClass )
+	{
+		return weaponClass == 0x21;
+	}
+
 	inline const char *WeaponKindName( WeaponKind kind )
 	{
 		switch( kind )

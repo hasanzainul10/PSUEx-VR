@@ -747,7 +747,39 @@ Follow-up (voice-session review): RequestAttack now sets s_lastAttackHand = hand
 **User (2026-11-01): works** (right swing casts the wand, TCSM only from the left; committed in `6e596e6`).
 **Holster zones enlarged (2026-10-31, built Debug, NOT deployed: PSUC was running).** Zones are now ellipsoids (`VRHolster::ZoneShape`, half extents right/up/forward at 1.7 m, x radius setting / default): head-back centre (0, +0.12, -0.20) half (0.28, 0.30, 0.30) (up and back, forward to the shoulders); waist centre (0, -0.72, -0.28) half (0.34, 0.28, 0.30); mouth centre (0, -0.20, +0.14) in head axes, half (0.20, 0.25, 0.20) (face to chest, out front). The radius sliders now scale the whole zone (defaults unchanged). Debug discs mark the centre and six extreme points. Deploy `Debug\PSUExD.dll` + `PSUExVRConfig.exe` when the game is closed.
 
-## Full-body tracking (Phase 1 committed `a63ec2b`; Phase 2a built + deployed Debug 2026-11-05 01:10, user-tested OK ("it works"), uncommitted)
+## Full-body tracking (Phase 1 `a63ec2b`, Phase 2a `eaff1fd` user-tested OK; Phase 2b built Debug 2026-11-05, uncommitted, untested)
+**Phase 2b (deployed Debug DLL + config exe 2026-11-05 ~22:00, previous DLL `PSUExD.dll.bak_prefbt2b`), third person (`bodyIkThirdPerson`, default off; panel: Camera > Third person > "Body follows me (arms, head, crouch)"):**
+- Before 2b the player model was never hooked in third person (`VRPlayerDraw::Update(firstPerson)`), so no rest pose / arms
+  there at all (the Phase 1 "third person" test can't have shown it). Now `Update(firstPerson, VRCamera::ThirdPersonBodyWanted())`;
+  free-aim force-show / node-flag tweaks stay first-person only.
+- `VRCamera`: `NoteHmd(views)` every frame (moved out of `UpdateFirstPersonAnchor`); `ThirdPersonBodyWanted()` (setting, our
+  orbit camera `s_tpActive`, reference, not first person, not the dressing room); `SetThirdPersonBody(eye, facingYaw, unitsPerMeter)`;
+  `Body*` variants (`BodyTrackingToWorld`, `BodyTrackingDirToWorld`, `BodyHeadWorld`, `BodyHeadAxes`, `BodyFrameAxes`, `BodyLookYaw`):
+  first person = the old functions, third person = head = eye anchor + (HMD - recenter position) in the recenter-yaw frame turned
+  to the character's facing, sideways clamped to 0.35 m; tracked points = head + (tracker - HMD). The old functions still return
+  false in third person (aim, holsters etc. untouched). VRHands / VRBodyIk use only the `Body*` ones.
+- `VRHands::Apply` in third person: eye anchor = rest neck (`VRBodyIk::RestNeck`, else the animated neck) + `bodyNeckDrop` up +
+  `bodyBack` forward (so standing at the recenter spot = zero hip shift); units/m = character eye height / `fpEyeHeight` (10 with
+  body fit); facing from root x world. No folding (`bodyMode` "full"), no strafe body (the game turns the character; chest twist
+  clamped to 50 deg from the facing), no eye lean. Debug log `VRBody: third person eye ... units/m, head ok ...` every 3 s.
+**User test 2b (2026-11-05):** "it's following" (third person body follows). Not committed yet: commit 2b (ask), skip
+`PSUVR/VRHaptics.cpp` (separate uncommitted haptic value bump).
+**Bugs reported 2026-11-05, fixed (built Debug, deployed 22:24 with `PSUExVRConfig.exe`, untested, uncommitted):**
+1. TCSM Shifta not a voice command: the TCSM reads id 6 (level rose 0 -> 2 over sessions), which `kTechNames` (`VRSpeech.cpp`,
+   provisional order) called "Jellen". Swapped 5 / 6 (6 = Shifta, 5 = Jellen still a guess). "Shifter" / "Shift+R" share the
+   skeleton. **Test:** whip + TCSM, say "Shifta": log `VRVoice: slots ... = - / - / Shifta / Resta` and `"Shifta" -> slot 3`.
+2. Left grip (= L1, lock-on, camera state 2) in first person looked like the strafe animation. The log showed the VR pose still
+   solved in state 2 (no drop-out). Cause: `StrafeUpdate` / `TurnBody` assumed the root faces `+0x124` and that the game faces
+   its travel direction; in lock-on it sidesteps. Now the body turn uses the root's real world yaw and the gait uses the
+   movement direction (`s_travelYaw`). **Test:** first person, hold left grip and walk sideways / back: body stays facing your
+   head, feet step sideways. If it still looks wrong: `tools/lastlog.sh -d 'VRStrafe: cam state'` (root yaw vs +0x124 vs travel
+   in state 2 vs 1) and describe exactly what moves (legs only, whole body turned, bobbing).
+**Test 2b:** third person (`cameraMode` thirdPerson), motion controllers, rest pose + bodyIk on, tick "Body IK in third person",
+recenter standing. 1) Arms follow the controllers, hands where yours are relative to your head. 2) Crouch: character crouches
+(hips back, knees forward). 3) Lean / look around: head turns, chest twists up to 50 deg, no snap. 4) Walk with the stick:
+character turns as the game turns it, arms stay on the controllers, feet step (planted feet on). 5) Box off: third person as
+before (animated, no VR pose). 6) First person unchanged. Log: `tools/lastlog.sh -d 'VRBody: third'` (`head ok`, units/m ~10).
+Known limits: walking around the room clamps the lean at 0.35 m (recenter); arm length differences not stretched (armStretch applies).
 **Phase 2a (2026-11-05, uncommitted; previous DLL `PSUExD.dll.bak_prefbt2` = Phase 1 + haptics):** code split: shared pose math
 in `PSUVR/VRSkeletonMath.h` (`Skeleton::`), `RestPose` / `BoneMapOk` / body IK / feet in `PSUVR/VRBodyIk.{h,cpp}`
 (`VRBodyIk::Solve` = old `BodyIk`); `VRHands.cpp` 1,840 -> ~1,250 lines. New:
@@ -870,3 +902,14 @@ the others' 0.25-0.5). Deployed 00:57 (Debug + config exe): panel buttons *Test:
 missed ones were weak AND short while moving. New values (built Debug, NOT deployed: PSUC running): Tick 0.3/20 ms, Click 0.45/30,
 Grab 0.55/50, Confirm 0.65/60, AttackSent 0.5/50 (ComboWindow, Holster, Countdown, Done unchanged). Deploy Debug `PSUExD.dll` +
 `PSUExVRConfig.exe` when the game closes. **Pending:** user retests swings / shots / chords / UI clicks.
+**Deployed (2026-11-05 evening):** Debug `PSUExD.dll` (9:33 PM build, up to date with the tree: new haptic values + FBT Phase 2a
+from `eaff1fd`) + `PSUExVRConfig.exe`. The haptic value bump in `PSUVR/VRHaptics.cpp` is still uncommitted.
+**Retest (2026-11-05 21:50):** only AttackSent and the JA buzz felt; Confirm (chord) and Click weren't, though the log shows them
+sent. Theory: pulses sent while a button is being pressed / held don't come through on the Sense controllers (the test buttons
+worked because ImGui fires on release). Deployed 21:56 (Debug + config exe): Click now plays on trigger **release**; Confirm is
+two pulses (0 and +0.2 s, 0.7/60 ms). **Pending:** user reports click felt y/n, chord: none / one / two buzzes.
+**Twin handguns (class 0x21, category 2):** both triggers fire now (`PSUCombat::TwinGuns`, `Roles()` gives both hands `shoot`,
+`Gun()` takes the held trigger, no R1; voice slots 3/4 skip twin guns). **Pending:** left trigger fires like the right.
+**Result (2026-11-05 22:0x):** chord two pulses: both felt; twin handguns left trigger: works; laser click (on release): still not
+felt -> not a press-timing issue, single 0.45/30 ms is too weak in use. Built: Tick 0.5/40 ms,
+Click 0.7/60, Grab 0.75/70; deployed 22:25 (Debug + config exe). **Pending:** user retests laser click / panel drag ticks.

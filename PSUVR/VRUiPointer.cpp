@@ -284,10 +284,15 @@ namespace PSUVR
 			if( s_triggerDown && !wasDown && s_hit )
 			{
 				s_click = true;
-				VRHaptics::Play( kHand, VRHaptics::Effect::Click );
 			}
 			if( !s_triggerDown )
 			{
+				// The buzz comes on release, when ImGui acts on the click: pulses sent while the trigger
+				// is going down weren't felt on the Sense controllers.
+				if( s_click && s_hit )
+				{
+					VRHaptics::Play( kHand, VRHaptics::Effect::Click );
+				}
 				s_click = false;
 			}
 

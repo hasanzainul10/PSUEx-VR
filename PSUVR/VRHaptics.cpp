@@ -31,13 +31,16 @@ namespace PSUVR
 				Pulse pulses[ kMaxPulses ];
 			};
 
-			// Single pulses keep the values the call sites used before VRHaptics.
+			// Short weak pulses (0.25 for 20 ms) weren't felt while moving the controllers, so the
+			// everyday ones are stronger / longer than the values the call sites used before VRHaptics.
 			const Definition kEffects[] = {
-				{ "Tick", 0, true, 1, { { 0.0f, 0.2f, 0.01f, 0.0f } } },
-				{ "Click", 0, true, 1, { { 0.0f, 0.3f, 0.02f, 0.0f } } },
-				{ "Grab", 0, true, 1, { { 0.0f, 0.4f, 0.03f, 0.0f } } },
-				{ "Confirm", 1, false, 1, { { 0.0f, 0.5f, 0.04f, 0.0f } } },
-				{ "AttackSent", 1, false, 1, { { 0.0f, 0.25f, 0.02f, 0.0f } } },
+				// Click at 0.45 / 30 ms wasn't felt in use, the chord's 0.7 / 60 ms was.
+				{ "Tick", 0, true, 1, { { 0.0f, 0.5f, 0.04f, 0.0f } } },
+				{ "Click", 0, true, 1, { { 0.0f, 0.7f, 0.06f, 0.0f } } },
+				{ "Grab", 0, true, 1, { { 0.0f, 0.75f, 0.07f, 0.0f } } },
+				// Two pulses: the first (on the grip press) wasn't felt; the second comes 0.2 s later.
+				{ "Confirm", 1, false, 2, { { 0.0f, 0.7f, 0.06f, 0.0f }, { 0.2f, 0.7f, 0.06f, 0.0f } } },
+				{ "AttackSent", 1, false, 1, { { 0.0f, 0.5f, 0.05f, 0.0f } } },
 				{ "ComboWindow", 2, false, 1, { { 0.0f, 0.5f, 0.03f, 0.0f } } },
 				{ "Holster", 3, false, 1, { { 0.0f, 0.9f, 0.12f, 0.0f } } },
 				{ "Countdown", 1, false, 1, { { 0.0f, 0.3f, 0.03f, 0.0f } } },
