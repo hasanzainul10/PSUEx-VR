@@ -747,7 +747,25 @@ Follow-up (voice-session review): RequestAttack now sets s_lastAttackHand = hand
 **User (2026-11-01): works** (right swing casts the wand, TCSM only from the left; committed in `6e596e6`).
 **Holster zones enlarged (2026-10-31, built Debug, NOT deployed: PSUC was running).** Zones are now ellipsoids (`VRHolster::ZoneShape`, half extents right/up/forward at 1.7 m, x radius setting / default): head-back centre (0, +0.12, -0.20) half (0.28, 0.30, 0.30) (up and back, forward to the shoulders); waist centre (0, -0.72, -0.28) half (0.34, 0.28, 0.30); mouth centre (0, -0.20, +0.14) in head axes, half (0.20, 0.25, 0.20) (face to chest, out front). The radius sliders now scale the whole zone (defaults unchanged). Debug discs mark the centre and six extreme points. Deploy `Debug\PSUExD.dll` + `PSUExVRConfig.exe` when the game is closed.
 
-## Full-body tracking (Phase 1 built + deployed Debug 2026-11-05 00:24; all boxes off user-tested OK, bone map ok; keep boxes untested; uncommitted)
+## Full-body tracking (Phase 1 committed `a63ec2b`; Phase 2a built + deployed Debug 2026-11-05 01:10, user-tested OK ("it works"), uncommitted)
+**Phase 2a (2026-11-05, uncommitted; previous DLL `PSUExD.dll.bak_prefbt2` = Phase 1 + haptics):** code split: shared pose math
+in `PSUVR/VRSkeletonMath.h` (`Skeleton::`), `RestPose` / `BoneMapOk` / body IK / feet in `PSUVR/VRBodyIk.{h,cpp}`
+(`VRBodyIk::Solve` = old `BodyIk`); `VRHands.cpp` 1,840 -> ~1,250 lines. New:
+- Crouch pushes the hips back (0.4 x drop) so the knees bend forward; spine is CCD over 9 / 10 / 11 (weights 0.3 / 0.4 / 0.3,
+  3 passes, 60 deg total, was 2 x 20 deg on 9 / 10).
+- `bodyHeadFollowsHmd` (true): neck 30% + head turn to the HMD (`VRCamera::HeadAxes`, new), limited to 80 deg.
+- Body yaw goal pulled 50% toward the hands' midpoint when both are below the head and 5-25 cm in front
+  (`VRBodyIk::BodyYawGoal`, feeds `StrafeUpdate` + torso); torso twist split over 9 / 10 / 11 (`TwistSpine`). Only with
+  rest pose + `bodyIk`.
+- Arms (always when they follow the controllers): `bodyShoulderShrug` (0.5 = up to 20 deg clavicle turn past 85% reach or
+  above the shoulder), `bodyElbowFromHand` (0.5: pole blended with wrist + grip +Z x forearm). Panel: Arms section sliders;
+  head checkbox under "Body follows my head".
+**Test 2a:** game settings unchanged (rest pose, bodyIk, planted feet, headless, first person; new keys at defaults).
+1) Stand: no change in camera / shoulders vs Phase 1. 2) Crouch: hips go back, knees forward, chest leans, eye not in the
+chest. 3) Bend forward / look at the floor: spine curves over three bones, no snap. 4) Hands together in front, turn the
+head 30 deg: torso stays between. 5) Reach far / overhead: shoulder lifts (slider 0 = old). 6) Rotate wrist (palm up / down):
+elbow moves (slider 0 = old). 7) Head: shadow / `fpBody` "full" shows the head tilting. Log: `tools/lastlog.sh -d 'VRBody'`
+(spine deg, crouch, head to HMD). **Next:** commit 2a on OK, then 2b third person (`bodyIkThirdPerson`).
 **Where it stands (2026-11-05):** Phase 0 + eye culling + once-per-frame world query committed (`ad15135`, not pushed;
 user-tested: arms OK, jitter no worse than before, no lag; the busy-mission slowdown didn't come back without a party).
 Phase 0 verdict in `docs/FBT_PLAN.md`: no `bodyGameplayPose`.
@@ -848,3 +866,7 @@ Same amplitudes as before Phase A, so likely Sony's basic-vibration driver drops
 the others' 0.25-0.5). Deployed 00:57 (Debug + config exe): panel buttons *Test: strength steps* (0.2..1.0, 100 ms) and
 *Test: length steps* (0.8 at 10/20/40/80 ms), effects `TestStrength` / `TestLength`; OpenXR logs `xrApplyHapticFeedback failed`.
 **Pending:** user counts felt buzzes per test -> raise effect amplitudes / lengths (or add an amplitude floor) above the threshold.
+**Test result (2026-11-05):** strength steps 5/5 felt, length steps 4/4 felt -> the controllers render weak and short pulses; the
+missed ones were weak AND short while moving. New values (built Debug, NOT deployed: PSUC running): Tick 0.3/20 ms, Click 0.45/30,
+Grab 0.55/50, Confirm 0.65/60, AttackSent 0.5/50 (ComboWindow, Holster, Countdown, Done unchanged). Deploy Debug `PSUExD.dll` +
+`PSUExVRConfig.exe` when the game closes. **Pending:** user retests swings / shots / chords / UI clicks.

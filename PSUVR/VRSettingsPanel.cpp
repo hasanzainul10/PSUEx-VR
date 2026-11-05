@@ -498,6 +498,9 @@ namespace PSUVR
 					ImGui::SliderFloat( "Neck below eyes (m)", &s.m_bodyNeckDrop, 0.05f, 0.35f, "%.2f" );
 					Help( "Higher keeps the camera out of the shoulders; lower straightens the legs (the hips follow the neck)." );
 					ImGui::SliderFloat( "Body behind eyes (m)", &s.m_bodyBack, 0.0f, 0.4f, "%.2f" );
+					ImGui::Checkbox( "Head turns with the headset", &s.m_bodyHeadFollowsHmd );
+					Help( "The neck and head turn and tilt with your head (shadow, mirrors, the \"full\" body). "
+						"Crouching pushes the hips back; the spine bends over the waist, chest and shoulders." );
 				}
 				Help( "First person. The hips drop when you crouch and the spine leans toward your head." );
 				ImGui::Checkbox( "Planted feet that step", &s.m_bodyProceduralLegs );
@@ -655,6 +658,10 @@ namespace PSUVR
 				ImGui::Checkbox( "Stretch arms to reach my hands", &s.m_armStretch );
 				Help( "The character's arms are shorter than most players'. On: they stretch (up to half again) so the "
 					"hands sit on the controllers. Off: the arm stops at its own length." );
+					ImGui::SliderFloat( "Shoulder lift", &s.m_bodyShoulderShrug, 0.0f, 1.0f, "%.2f" );
+					Help( "The shoulders rise and reach forward when your hand is far out or above the shoulder. 0 = off." );
+					ImGui::SliderFloat( "Elbow follows the controller", &s.m_bodyElbowFromHand, 0.0f, 1.0f, "%.2f" );
+					Help( "0: the elbows hang down and out. Higher: they follow how you turn the controller (wrist up, elbow out)." );
 				bool attackAnimation = s.m_handsAttack == "animation";
 				if( ImGui::Checkbox( "Play the game's attack animation", &attackAnimation ) )
 				{

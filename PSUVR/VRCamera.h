@@ -70,6 +70,8 @@ namespace PSUVR
 		bool TrackingDirToWorld( const float tracking[ 3 ], float world[ 3 ] );
 		// First-person head (eye anchor) in game world. False outside first person.
 		bool HeadWorld( float head[ 3 ] );
+		// First-person HMD forward and up in game world (unit). False outside first person.
+		bool HeadAxes( float forward[ 3 ], float up[ 3 ] );
 		// First-person body forward and right in game world (unit, level). False outside it.
 		bool BodyAxes( float forward[ 3 ], float right[ 3 ] );
 		void ClearFirstPerson();

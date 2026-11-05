@@ -130,6 +130,13 @@ struct VRSettings
 	float m_bodyBack = 0.20f;
 	// With the rest pose: feet stay planted in the world and step when the hips move away (replaces the strafe legs).
 	bool m_bodyProceduralLegs = false;
+	// bodyIk: the head (neck 30%) turns with the HMD.
+	bool m_bodyHeadFollowsHmd = true;
+	// Arms on the controllers: the shoulders lift toward far / high hands (0 = off, 0.5 = up to 20 deg).
+	float m_bodyShoulderShrug = 0.5f;
+	// Arms on the controllers: how much the elbow follows the controller's angle (0 = hangs by the
+	// body only, 1 = the controller's forearm line only).
+	float m_bodyElbowFromHand = 0.5f;
 	// Right-stick snap turn step in degrees (snapTurn = true).
 	float m_snapTurnDegrees = 30.0f;
 	// Right-stick smooth turn speed in degrees per second (snapTurn = false).

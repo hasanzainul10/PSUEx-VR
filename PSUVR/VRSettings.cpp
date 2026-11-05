@@ -49,7 +49,7 @@ namespace
 	X( m_bodyIk, "bodyIk" ) \
 	X( m_bodyNeckDrop, "bodyNeckDrop" ) \
 	X( m_bodyBack, "bodyBack" ) \
-	X( m_bodyProceduralLegs, "bodyProceduralLegs" ) \
+	X( m_bodyProceduralLegs, "bodyProceduralLegs" ) 	X( m_bodyHeadFollowsHmd, "bodyHeadFollowsHmd" ) 	X( m_bodyShoulderShrug, "bodyShoulderShrug" ) 	X( m_bodyElbowFromHand, "bodyElbowFromHand" ) \
 	X( m_snapTurnDegrees, "snapTurnDegrees" ) \
 	X( m_fpTurnSpeed, "fpTurnSpeed" ) \
 	X( m_fpMoveDirection, "fpMoveDirection" ) \

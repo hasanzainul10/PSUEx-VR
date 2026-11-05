@@ -2,6 +2,7 @@
 
 #include "VRCamera.h"
 #include "VRBindings.h"
+#include "VRBodyIk.h"
 #include "VRControllers.h"
 #include "VRHaptics.h"
 #include "VRSyntheticPad.h"
@@ -22,23 +23,10 @@
 
 namespace PSUVR
 {
+	using namespace Skeleton;
+
 	namespace
 	{
-		// PSU human skeleton (28 bones; bone records 0x90 bytes, parent at +6). Controller
-		// hand 0 drives the character's left arm.
-		constexpr int kBoneCount = 28;
-		constexpr size_t kRecordSize = 0x90;
-		constexpr size_t kRecordParent = 0x06;
-		struct Arm
-		{
-			int shoulder, upper, fore, hand;
-		};
-		constexpr Arm kArms[ 2 ] = { { 14, 15, 16, 17 }, { 19, 20, 21, 22 } };
-		// Waist (above the hips): its subtree is the upper body. Neck: its subtree is the head.
-		constexpr int kWaistBone = 9;
-		constexpr int kNeckBone = 12;
-		// The model faces +Z (left side is +X, up +Y).
-		const D3DXVECTOR3 kModelForward( 0.0f, 0.0f, 1.0f );
 		DWORD s_headHiddenTick = 0;
 
 		// Free aim gun pointing: the weapon bone is the bone after the hand (18 / 23). Free aim
@@ -126,148 +114,6 @@ namespace PSUVR
 		{
 			return p && PSUMemory::IsValidPointer( p ) &&
 				PSUMemory::IsValidPointer( static_cast< const uint8_t * >( p ) + bytes - 1 );
-		}
-
-		D3DXVECTOR3 Position( const float *out, int bone )
-		{
-			const float *m = out + bone * 16;
-			return { m[ 12 ], m[ 13 ], m[ 14 ] };
-		}
-
-		int Parent( const uint8_t *records, int bone )
-		{
-			return *reinterpret_cast< const short * >( records + bone * kRecordSize + kRecordParent );
-		}
-
-		// Parents of the 28-bone character skeleton (VRBones log; the same on every model seen,
-		// CAST included). The rest pose and body IK index bones directly, so they need this map.
-		constexpr int kBoneParents[ kBoneCount ] = { -1, 0, 1, 2, 3, 4, 2, 6, 7, 1, 9, 10, 11, 12, 11, 14, 15, 16, 17, 11, 19, 20,
-			21, 22, 10, 10, 9, 0 };
-		const uint8_t *s_mapRecords = nullptr;
-		bool s_mapOk = false;
-
-		bool BoneMapOk( const uint8_t *records )
-		{
-			if( records == s_mapRecords )
-			{
-				return s_mapOk;
-			}
-			s_mapRecords = records;
-			s_mapOk = true;
-			for( int b = 0; b < kBoneCount; ++b )
-			{
-				const int parent = Parent( records, b );
-				if( parent != kBoneParents[ b ] )
-				{
-					PSU_LOG( "VRBody: bone map mismatch (bone %d parent %d, expected %d): rest pose and body IK off for this model\n",
-						b, parent, kBoneParents[ b ] );
-					s_mapOk = false;
-					return false;
-				}
-			}
-			PSU_LOG( "VRBody: bone map ok (records %p)\n", records );
-			return true;
-		}
-
-		// The VRBodyAnimKeep group a bone belongs to.
-		unsigned KeepGroup( int bone )
-		{
-			if( bone <= 8 )
-				return kVRKeepLegs;
-			if( bone <= 11 )
-				return kVRKeepSpine;
-			if( bone <= 13 )
-				return kVRKeepHead;
-			if( bone == 18 || bone == 23 )
-				return kVRKeepWeapons;
-			if( bone <= 22 )
-				return kVRKeepArms;
-			return kVRKeepExtras;
-		}
-
-		bool Below( const uint8_t *records, int bone, int root )
-		{
-			for( int guard = 0; bone >= 0 && guard < kBoneCount; ++guard )
-			{
-				if( bone == root )
-				{
-					return true;
-				}
-				bone = Parent( records, bone );
-			}
-			return false;
-		}
-
-		D3DXVECTOR3 RotateByQuat( const float q[ 4 ], const D3DXVECTOR3 &v )
-		{
-			// v + 2w(u x v) + 2(u x (u x v)), u = q.xyz
-			const D3DXVECTOR3 u( q[ 0 ], q[ 1 ], q[ 2 ] );
-			D3DXVECTOR3 t;
-			D3DXVec3Cross( &t, &u, &v );
-			t *= 2.0f;
-			D3DXVECTOR3 c;
-			D3DXVec3Cross( &c, &u, &t );
-			return v + t * q[ 3 ] + c;
-		}
-
-		// Row-vector matrix rotating unit a onto unit b about pivot (v' = (v - p) R + p).
-		D3DXMATRIX RotationAbout( const D3DXVECTOR3 &a, const D3DXVECTOR3 &b, const D3DXVECTOR3 &pivot )
-		{
-			D3DXVECTOR3 k;
-			D3DXVec3Cross( &k, &a, &b );
-			const float c = D3DXVec3Dot( &a, &b );
-			// Column form R = I + K + K^2 / (1 + c), K = skew(a x b); valid away from c = -1.
-			float r[ 3 ][ 3 ] = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };
-			if( c > -0.999f )
-			{
-				const float K[ 3 ][ 3 ] = { { 0, -k.z, k.y }, { k.z, 0, -k.x }, { -k.y, k.x, 0 } };
-				const float f = 1.0f / ( 1.0f + c );
-				for( int i = 0; i < 3; ++i )
-				{
-					for( int j = 0; j < 3; ++j )
-					{
-						float k2 = 0.0f;
-						for( int n = 0; n < 3; ++n )
-						{
-							k2 += K[ i ][ n ] * K[ n ][ j ];
-						}
-						r[ i ][ j ] += K[ i ][ j ] + k2 * f;
-					}
-				}
-			}
-			// Row-vector form is the transpose.
-			D3DXMATRIX m;
-			D3DXMatrixIdentity( &m );
-			for( int i = 0; i < 3; ++i )
-			{
-				for( int j = 0; j < 3; ++j )
-				{
-					m( i, j ) = r[ j ][ i ];
-				}
-			}
-			D3DXVECTOR3 moved;
-			D3DXVec3TransformNormal( &moved, &pivot, &m );
-			m( 3, 0 ) = pivot.x - moved.x;
-			m( 3, 1 ) = pivot.y - moved.y;
-			m( 3, 2 ) = pivot.z - moved.z;
-			return m;
-		}
-
-		// 3x3 with unit rows (axes), no translation.
-		D3DXMATRIX Axes( const D3DXMATRIX &m )
-		{
-			D3DXMATRIX r;
-			D3DXMatrixIdentity( &r );
-			for( int i = 0; i < 3; ++i )
-			{
-				D3DXVECTOR3 row( m( i, 0 ), m( i, 1 ), m( i, 2 ) );
-				const float len = D3DXVec3Length( &row );
-				row = len > 1.0e-6f ? row / len : row;
-				r( i, 0 ) = row.x;
-				r( i, 1 ) = row.y;
-				r( i, 2 ) = row.z;
-			}
-			return r;
 		}
 
 		// Controller grip axes in game world (rows X, Y, Z).
@@ -367,8 +213,6 @@ namespace PSUVR
 			}
 		}
 
-		D3DXVECTOR3 Normalized( const D3DXVECTOR3 &v, const D3DXVECTOR3 &fallback );
-
 		// Calibration pose: arms forward, fists, palms facing each other. The hand's axes in that
 		// pose (game world rows) from its bind pose: knuckles (wrist -> hand tip bone) point
 		// forward, the palm faces the other hand. False if the bind data is unusable.
@@ -465,24 +309,6 @@ namespace PSUVR
 			s_autoK[ hand ] = k;
 			s_autoRecords[ hand ] = records;
 			return true;
-		}
-
-		void ApplyToSubtree( float *out, const uint8_t *records, int root, const D3DXMATRIX &delta )
-		{
-			for( int b = 0; b < kBoneCount; ++b )
-			{
-				if( Below( records, b, root ) )
-				{
-					D3DXMATRIX *m = reinterpret_cast< D3DXMATRIX * >( out + b * 16 );
-					D3DXMatrixMultiply( m, m, &delta );
-				}
-			}
-		}
-
-		D3DXVECTOR3 Normalized( const D3DXVECTOR3 &v, const D3DXVECTOR3 &fallback )
-		{
-			const float len = D3DXVec3Length( &v );
-			return len > 1.0e-5f ? v / len : fallback;
 		}
 
 		// Model -> game world, from the game's own bone query: world(root) = out(root) * W.
@@ -583,45 +409,6 @@ namespace PSUVR
 			memset( s_diff, 0, sizeof( s_diff ) );
 		}
 #endif
-
-		void SolveArm( float *out, const uint8_t *records, const Arm &arm, const D3DXVECTOR3 &target,
-			const D3DXVECTOR3 &pole )
-		{
-			const D3DXVECTOR3 s = Position( out, arm.upper );
-			const D3DXVECTOR3 e = Position( out, arm.fore );
-			const D3DXVECTOR3 h = Position( out, arm.hand );
-			const D3DXVECTOR3 se = e - s;
-			const D3DXVECTOR3 eh = h - e;
-			const float a = D3DXVec3Length( &se );
-			const float b = D3DXVec3Length( &eh );
-			if( a < 1.0e-3f || b < 1.0e-3f )
-			{
-				return;
-			}
-			D3DXVECTOR3 toTarget = target - s;
-			float dist = D3DXVec3Length( &toTarget );
-			const D3DXVECTOR3 dir = Normalized( toTarget, Normalized( h - s, { 0.0f, -1.0f, 0.0f } ) );
-			const float minReach = std::fabs( a - b ) + 1.0e-3f;
-			const float maxReach = ( a + b ) * 0.999f;
-			dist = dist < minReach ? minReach : ( dist > maxReach ? maxReach : dist );
-
-			// Elbow in the plane of the reach and the pole.
-			D3DXVECTOR3 bend = pole - dir * D3DXVec3Dot( &pole, &dir );
-			bend = Normalized( bend, Normalized( se - dir * D3DXVec3Dot( &se, &dir ), { 0.0f, -1.0f, 0.0f } ) );
-			const float cosA = ( a * a + dist * dist - b * b ) / ( 2.0f * a * dist );
-			const float clamped = cosA < -1.0f ? -1.0f : ( cosA > 1.0f ? 1.0f : cosA );
-			const float sinA = std::sqrt( 1.0f - clamped * clamped );
-			const D3DXVECTOR3 elbow = s + dir * ( a * clamped ) + bend * ( a * sinA );
-			const D3DXVECTOR3 wrist = s + dir * dist;
-
-			// Upper arm: shoulder -> elbow; then the forearm: elbow -> wrist.
-			ApplyToSubtree( out, records, arm.upper,
-				RotationAbout( Normalized( se, dir ), Normalized( elbow - s, dir ), s ) );
-			const D3DXVECTOR3 e1 = Position( out, arm.fore );
-			const D3DXVECTOR3 h1 = Position( out, arm.hand );
-			ApplyToSubtree( out, records, arm.fore,
-				RotationAbout( Normalized( h1 - e1, dir ), Normalized( wrist - e1, dir ), e1 ) );
-		}
 	}
 
 	namespace
@@ -637,31 +424,12 @@ namespace PSUVR
 		float s_lastPos[ 3 ]{};
 		DWORD s_lastPosTick = 0;
 		float s_speed = 0.0f;             // game units per second
-		constexpr float kPi = 3.14159265f;
 		constexpr float kBodyDeadZone = 35.0f * ( kPi / 180.0f );
 		constexpr float kBodyFollowRate = 6.0f;
 		constexpr float kGaitHysteresis = 10.0f * ( kPi / 180.0f );
 		constexpr float kMovingSpeed = 8.0f;
 		constexpr float kLegEaseSeconds = 0.12f;
 		constexpr float kTorsoLimit = 50.0f * ( kPi / 180.0f );
-
-		float WrapPi( float a )
-		{
-			while( a > kPi ) a -= 2.0f * kPi;
-			while( a < -kPi ) a += 2.0f * kPi;
-			return a;
-		}
-
-		D3DXMATRIX YawAbout( float angle, const D3DXVECTOR3 &pivot )
-		{
-			D3DXMATRIX t0, r, t1, m;
-			D3DXMatrixTranslation( &t0, -pivot.x, -pivot.y, -pivot.z );
-			D3DXMatrixRotationY( &r, angle );
-			D3DXMatrixTranslation( &t1, pivot.x, pivot.y, pivot.z );
-			D3DXMatrixMultiply( &m, &t0, &r );
-			D3DXMatrixMultiply( &m, &m, &t1 );
-			return m;
-		}
 
 		// Speed from the position, sampled at least 40 ms apart (Apply runs more than once a frame).
 		void SampleSpeed( const PSUCombat::State &combat )
@@ -969,375 +737,6 @@ namespace PSUVR
 			return status;
 		}
 
-		// The skeleton's bind pose relative to the root bone (inverse of each record's inverse bind,
-		// flag 0x8 = no inverse bind), cached per record array.
-		const uint8_t *s_restRecords = nullptr;
-		D3DXMATRIX s_rest[ kBoneCount ];
-		bool s_restValid[ kBoneCount ]{};
-		float s_bodyFit = 1.0f;
-
-		void RestPose( float *out, const uint8_t *skeleton )
-		{
-			__try
-			{
-				const int count = *reinterpret_cast< const int * >( skeleton + 0x28 );
-				const uint8_t *records = *reinterpret_cast< const uint8_t * const * >( skeleton + 0x30 );
-				if( count != kBoneCount || !Readable( records, kBoneCount * kRecordSize ) || !Readable( out, kBoneCount * 64 ) ||
-					!BoneMapOk( records ) )
-				{
-					return;
-				}
-				if( s_restRecords != records )
-				{
-					D3DXMATRIX bind[ kBoneCount ];
-					bool ok[ kBoneCount ]{};
-					for( int b = 0; b < kBoneCount; ++b )
-					{
-						const uint8_t *r = records + b * kRecordSize;
-						const D3DXMATRIX inverseBind = *reinterpret_cast< const D3DXMATRIX * >( r + 0x30 );
-						// No inverse bind (flag 0x8) means the identity, as in the reference skeleton.
-						ok[ b ] = true;
-						if( ( *reinterpret_cast< const uint32_t * >( r ) & 0x8u ) || !D3DXMatrixInverse( &bind[ b ], nullptr, &inverseBind ) ||
-							!std::isfinite( bind[ b ]._41 ) || !std::isfinite( bind[ b ]._42 ) || !std::isfinite( bind[ b ]._43 ) )
-						{
-							D3DXMatrixIdentity( &bind[ b ] );
-						}
-					}
-					D3DXMATRIX rootInverse;
-					const bool haveRoot = ok[ 0 ] && D3DXMatrixInverse( &rootInverse, nullptr, &bind[ 0 ] );
-					for( int b = 0; b < kBoneCount; ++b )
-					{
-						s_restValid[ b ] = haveRoot && ok[ b ];
-						if( s_restValid[ b ] )
-						{
-							D3DXMatrixMultiply( &s_rest[ b ], &bind[ b ], &rootInverse );
-						}
-					}
-					s_restRecords = records;
-#ifdef _DEBUG
-					for( int b = 0; b < kBoneCount; ++b )
-					{
-						PSU_LOG( "VRBones: %2d parent %2d rest %7.2f %7.2f %7.2f%s\n", b, Parent( records, b ), s_rest[ b ]._41, s_rest[ b ]._42,
-							s_rest[ b ]._43, s_restValid[ b ] ? "" : " (no bind)" );
-					}
-#endif
-					PSU_LOG( "VRHands: rest pose cached (%d bones, root %s)\n", kBoneCount, haveRoot ? "ok" : "no bind" );
-				}
-				// The root keeps the game's placement; every other bone sits at its bind pose on it.
-				const D3DXMATRIX root = *reinterpret_cast< const D3DXMATRIX * >( out );
-				// Optionally scale the whole body about the root so the eyes (neck + ~6 cm) sit at fpEyeHeight.
-				float fit = 1.0f;
-				if( Config::Get().vr.m_bodyFitHeight && s_restValid[ kNeckBone ] )
-				{
-					const float eyes = s_rest[ kNeckBone ]._42 + 0.6f;
-					fit = eyes > 1.0f ? Config::Get().vr.m_fpEyeHeight * VRCamera::kGameUnitsPerMeter / eyes : 1.0f;
-					fit = std::clamp( fit, 0.5f, 2.0f );
-					static float s_loggedFit = 0.0f;
-					if( s_loggedFit != fit )
-					{
-						s_loggedFit = fit;
-						PSU_LOG( "VRHands: body fit %.3f (rest eyes %.2f)\n", fit, eyes );
-					}
-				}
-				s_bodyFit = fit;
-				// Kept bones (bodyAnimKeep) keep their animated pose relative to their parent and
-				// follow the parent's new pose; parents come before children (BoneMapOk).
-				const unsigned keep = Config::Get().vr.m_bodyAnimKeep;
-				D3DXMATRIX anim[ kBoneCount ];
-				memcpy( anim, out, sizeof( anim ) );
-				D3DXMATRIX fitScale;
-				D3DXMatrixScaling( &fitScale, fit, fit, fit );
-				D3DXMATRIX fitRoot;
-				D3DXMatrixMultiply( &fitRoot, &fitScale, &root );
-				bool moved[ kBoneCount ]{};
-				moved[ 0 ] = fit != 1.0f;
-				for( int b = 1; b < kBoneCount; ++b )
-				{
-					D3DXMATRIX *target = reinterpret_cast< D3DXMATRIX * >( out + b * 16 );
-					const int parent = kBoneParents[ b ];
-					if( s_restValid[ b ] && !( keep & KeepGroup( b ) ) )
-					{
-						D3DXMatrixMultiply( target, &s_rest[ b ], &fitRoot );
-						moved[ b ] = true;
-					}
-					else if( moved[ parent ] )
-					{
-						D3DXMATRIX parentInverse, local;
-						if( D3DXMatrixInverse( &parentInverse, nullptr, &anim[ parent ] ) )
-						{
-							D3DXMatrixMultiply( &local, &anim[ b ], &parentInverse );
-							const D3DXMATRIX *parentNow = parent == 0 ? &fitRoot : reinterpret_cast< const D3DXMATRIX * >( out + parent * 16 );
-							D3DXMatrixMultiply( target, &local, parentNow );
-							moved[ b ] = true;
-						}
-					}
-				}
-			}
-			__except( EXCEPTION_EXECUTE_HANDLER )
-			{
-				PSU_LOG( "VRHands: rest pose exception\n" );
-			}
-		}
-
-		// Body IK on the rest pose (needs the rest pose): the hips follow the head's height and
-		// part of its offset, the spine leans the rest of the way to the head, and each foot stays
-		// planted in the world, stepping to a new spot when the hips move away from it.
-		constexpr int kPelvisBone = 1;
-		constexpr Arm kLegs[ 2 ] = { { 2, 3, 4, 5 }, { 2, 6, 7, 8 } };
-		constexpr int kChestBone = 10;
-		constexpr float kStepSeconds = 0.28f;
-		constexpr float kStepLift = 0.9f;
-		constexpr float kStepDistance = 2.5f;
-		constexpr float kLeanLimit = 40.0f * ( kPi / 180.0f );
-		struct Foot
-		{
-			D3DXVECTOR3 planted, from, to, current;
-			float t = 0.0f;
-			float duration = 0.28f;
-			bool stepping = false;
-			bool settled = false; // already re-centred since the last time the body moved
-		};
-		Foot s_feet[ 2 ];
-		bool s_feetInit = false;
-		DWORD s_feetTick = 0;
-		D3DXVECTOR3 s_pelvisLast( 0.0f, 0.0f, 0.0f ), s_pelvisVel( 0.0f, 0.0f, 0.0f );
-		float s_idleSeconds = 0.0f;
-
-		D3DXVECTOR3 ToWorld( const D3DXMATRIX &world, const D3DXVECTOR3 &v )
-		{
-			D3DXVECTOR3 r;
-			D3DXVec3TransformCoord( &r, &v, &world );
-			return r;
-		}
-
-		D3DXMATRIX RotationPart( const D3DXMATRIX &m )
-		{
-			D3DXMATRIX r;
-			D3DXMatrixIdentity( &r );
-			for( int i = 0; i < 3; ++i )
-			{
-				D3DXVECTOR3 row( m( i, 0 ), m( i, 1 ), m( i, 2 ) );
-				row = Normalized( row, D3DXVECTOR3( i == 0 ? 1.0f : 0.0f, i == 1 ? 1.0f : 0.0f, i == 2 ? 1.0f : 0.0f ) );
-				r( i, 0 ) = row.x;
-				r( i, 1 ) = row.y;
-				r( i, 2 ) = row.z;
-			}
-			return r;
-		}
-
-		// Rotate unit a toward unit b by at most limit, about pivot.
-		D3DXMATRIX LimitedTurn( const D3DXVECTOR3 &a, const D3DXVECTOR3 &b, float limit, const D3DXVECTOR3 &pivot )
-		{
-			const float c = std::clamp( D3DXVec3Dot( &a, &b ), -1.0f, 1.0f );
-			const float angle = std::acos( c );
-			D3DXVECTOR3 to = b;
-			if( angle > limit && angle > 1.0e-4f )
-			{
-				const float t = limit / angle;
-				to = Normalized( a * ( 1.0f - t ) + b * t, b );
-			}
-			return RotationAbout( a, to, pivot );
-		}
-
-		void BodyIk( float *out, const uint8_t *records, const D3DXMATRIX &world, const D3DXMATRIX &toModel,
-			const float *headWorld, bool upper, bool legs, float dt, bool log )
-		{
-			const float fit = s_bodyFit;
-			const auto model = [ & ]( const D3DXVECTOR3 &v ) {
-				D3DXVECTOR3 r;
-				D3DXVec3TransformNormal( &r, &v, &toModel );
-				return r;
-			};
-			// Body forward (level) in the world, from the pelvis.
-			// Same as the torso turn: the thigh line (left is +X) squared to the facing.
-			const D3DXVECTOR3 acrossModel = Position( out, kLegs[ 0 ].upper ) - Position( out, kLegs[ 1 ].upper );
-			const D3DXVECTOR3 forwardModel = Normalized( D3DXVECTOR3( -acrossModel.z, 0.0f, acrossModel.x ), kModelForward );
-			D3DXVECTOR3 forward, leftWorld;
-			D3DXVec3TransformNormal( &forward, &forwardModel, &world );
-			D3DXVec3TransformNormal( &leftWorld, &acrossModel, &world );
-			forward.y = 0.0f;
-			leftWorld.y = 0.0f;
-			forward = Normalized( forward, D3DXVECTOR3( 0.0f, 0.0f, 1.0f ) );
-			const D3DXVECTOR3 left = Normalized( leftWorld, D3DXVECTOR3( forward.z, 0.0f, -forward.x ) );
-
-			if( upper && headWorld )
-			{
-				const D3DXVECTOR3 target = D3DXVECTOR3( headWorld[ 0 ], headWorld[ 1 ], headWorld[ 2 ] ) -
-					D3DXVECTOR3( 0.0f, Config::Get().vr.m_bodyNeckDrop * VRCamera::kGameUnitsPerMeter, 0.0f ) -
-					forward * ( Config::Get().vr.m_bodyBack * VRCamera::kGameUnitsPerMeter );
-				const D3DXVECTOR3 neck = ToWorld( world, Position( out, kNeckBone ) );
-				const D3DXVECTOR3 d = target - neck;
-				// Hips: the neck goes straight under the head; the spine only takes up what is left.
-				D3DXVECTOR3 shift( d.x, std::clamp( d.y, -8.0f, 1.5f ), d.z );
-				D3DXMATRIX move;
-				const D3DXVECTOR3 shiftModel = model( shift );
-				D3DXMatrixTranslation( &move, shiftModel.x, shiftModel.y, shiftModel.z );
-				ApplyToSubtree( out, records, kPelvisBone, move );
-				// Spine: the waist, then the chest, turn the neck toward the head (shared, each limited).
-				for( int step = 0; step < 2; ++step )
-				{
-					const int bone = step == 0 ? kWaistBone : kChestBone;
-					const D3DXVECTOR3 pivotModel = Position( out, bone );
-					const D3DXVECTOR3 pivot = ToWorld( world, pivotModel );
-					const D3DXVECTOR3 now = ToWorld( world, Position( out, kNeckBone ) ) - pivot;
-					const D3DXVECTOR3 want = target - pivot;
-					if( D3DXVec3Length( &now ) < 1.0e-3f || D3DXVec3Length( &want ) < 1.0e-3f )
-					{
-						continue;
-					}
-					const D3DXVECTOR3 a = Normalized( model( Normalized( now, forward ) ), kModelForward );
-					const D3DXVECTOR3 b = Normalized( model( Normalized( want, forward ) ), kModelForward );
-					ApplyToSubtree( out, records, bone, LimitedTurn( a, b, kLeanLimit * ( step == 0 ? 0.5f : 0.5f ), pivotModel ) );
-				}
-				if( log )
-				{
-#ifdef _DEBUG
-					const D3DXVECTOR3 after = target - ToWorld( world, Position( out, kNeckBone ) );
-					PSU_LOG( "VRBody: hips shift %.2f %.2f %.2f, neck error %.2f -> %.2f (after %.2f %.2f %.2f), forward %.2f %.2f\n", shift.x, shift.y,
-						shift.z, D3DXVec3Length( &d ), D3DXVec3Length( &after ), after.x, after.y, after.z, forward.x, forward.z );
-#endif
-				}
-			}
-
-			if( !legs )
-			{
-				return;
-			}
-			const D3DXVECTOR3 pelvis = ToWorld( world, Position( out, kPelvisBone ) );
-			const float groundY = ToWorld( world, Position( out, 0 ) ).y;
-			const float ankleHeight = s_rest[ kLegs[ 0 ].hand ]._42 * fit;
-			const float side = std::fabs( s_rest[ kLegs[ 0 ].hand ]._41 ) * fit;
-			const float ahead = s_rest[ kLegs[ 0 ].hand ]._43 * fit;
-			const float legLength = ( s_rest[ kLegs[ 0 ].upper ]._42 - s_rest[ kLegs[ 0 ].hand ]._42 ) * fit;
-			const DWORD now = GetTickCount();
-			const float elapsed = s_feetTick ? static_cast< float >( now - s_feetTick ) / 1000.0f : 0.0f;
-			const D3DXVECTOR3 pelvisGround( pelvis.x, groundY, pelvis.z );
-			D3DXVECTOR3 home[ 2 ];
-			for( int i = 0; i < 2; ++i )
-			{
-				home[ i ] = pelvisGround + left * ( i == 0 ? side : -side ) + forward * ahead;
-			}
-			if( !s_feetInit || s_feetTick == 0 || now - s_feetTick > 500 || ( s_pelvisLast.x - pelvisGround.x ) * ( s_pelvisLast.x - pelvisGround.x ) + ( s_pelvisLast.z - pelvisGround.z ) * ( s_pelvisLast.z - pelvisGround.z ) > 225.0f )
-			{
-				for( int i = 0; i < 2; ++i )
-				{
-					s_feet[ i ].planted = s_feet[ i ].current = home[ i ];
-					s_feet[ i ].stepping = false;
-				}
-				s_pelvisVel = D3DXVECTOR3( 0.0f, 0.0f, 0.0f );
-				s_pelvisLast = pelvisGround;
-				s_feetTick = now;
-				s_feetInit = true;
-			}
-			// Update once per game frame: Apply also runs for the second eye and the world query.
-			if( elapsed >= 0.012f )
-			{
-				const D3DXVECTOR3 vel = ( pelvisGround - s_pelvisLast ) / elapsed;
-				s_pelvisVel += ( vel - s_pelvisVel ) * ( std::min )( 1.0f, elapsed * 8.0f );
-				s_pelvisLast = pelvisGround;
-				s_feetTick = now;
-				s_idleSeconds = D3DXVec3Length( &s_pelvisVel ) < 3.0f ? s_idleSeconds + elapsed : 0.0f;
-				if( s_idleSeconds == 0.0f )
-				{
-					s_feet[ 0 ].settled = s_feet[ 1 ].settled = false;
-				}
-				for( int i = 0; i < 2; ++i )
-				{
-					Foot &f = s_feet[ i ];
-					// Running: the feet alternate, so the next one may start once the other is half way.
-					const Foot &other = s_feet[ 1 - i ];
-					const bool fast = D3DXVec3Length( &s_pelvisVel ) > 20.0f;
-					const bool otherStepping = other.stepping && !( fast && other.t > 0.5f );
-					if( f.stepping )
-					{
-						f.t += elapsed / f.duration;
-						if( f.t >= 1.0f )
-						{
-							f.planted = f.to;
-							f.stepping = false;
-						}
-						continue;
-					}
-					D3DXVECTOR3 miss = home[ i ] - f.planted;
-					miss.y = 0.0f;
-					// Stretched leg: measured from the hip joint, and only worth a step if it lands somewhere else.
-					const D3DXVECTOR3 reach = ToWorld( world, Position( out, kLegs[ i ].upper ) ) - D3DXVECTOR3( f.planted.x, groundY + ankleHeight, f.planted.z );
-					const bool tooFar = D3DXVec3Length( &reach ) > legLength * 1.02f && D3DXVec3Length( &miss ) > 0.6f * fit && !otherStepping;
-					// Standing still: settle back to shoulder width instead of staying wherever the last step ended.
-					const bool settle = s_idleSeconds > 0.5f && !f.settled && D3DXVec3Length( &miss ) > 1.5f * fit;
-					if( ( ( D3DXVec3Length( &miss ) > kStepDistance * fit || settle ) && !otherStepping ) || tooFar )
-					{
-						D3DXVECTOR3 lead = s_pelvisVel;
-						lead.y = 0.0f;
-						const float speed = D3DXVec3Length( &lead );
-						// Quicker steps when moving fast; land where the hips will be when the foot arrives,
-						// plus half a step so the stride is centred on them.
-						f.duration = std::clamp( 0.32f - speed * 0.0025f, 0.16f, 0.30f );
-						lead = speed > 1.0f ? lead * ( ( std::min )( speed * f.duration + 0.5f * kStepDistance * fit, 14.0f * fit ) / speed )
-							: D3DXVECTOR3( 0.0f, 0.0f, 0.0f );
-						f.settled = s_idleSeconds > 0.5f;
-						f.from = f.planted;
-						f.to = home[ i ] + lead;
-						f.t = 0.0f;
-						f.stepping = true;
-					}
-				}
-			}
-			for( int i = 0; i < 2; ++i )
-			{
-				Foot &f = s_feet[ i ];
-				D3DXVECTOR3 p = f.planted;
-				float lift = 0.0f;
-				if( f.stepping )
-				{
-					const float t = std::clamp( f.t, 0.0f, 1.0f );
-					const float e = t * t * ( 3.0f - 2.0f * t );
-					p = f.from + ( f.to - f.from ) * e;
-					lift = std::sin( t * kPi ) * kStepLift * fit;
-				}
-				// Never cross the legs: each foot stays on its own side of the body.
-				const D3DXVECTOR3 fromPelvis = p - pelvisGround;
-				const float lateral = D3DXVec3Dot( &fromPelvis, &left ) * ( i == 0 ? 1.0f : -1.0f );
-				if( lateral < side * 0.5f )
-				{
-					p += left * ( ( side * 0.5f - lateral ) * ( i == 0 ? 1.0f : -1.0f ) );
-				}
-				f.current = p;
-				const D3DXVECTOR3 ankle( p.x, groundY + ankleHeight + lift, p.z );
-				const D3DXVECTOR3 targetModel = [ & ]() {
-					D3DXVECTOR3 r;
-					D3DXVec3TransformCoord( &r, &ankle, &toModel );
-					return r;
-				}();
-				SolveArm( out, records, kLegs[ i ], targetModel, model( forward + left * ( i == 0 ? 0.2f : -0.2f ) ) );
-				// Level the foot: the rest orientation of the foot on the pelvis' current orientation.
-				const D3DXMATRIX *restFoot = &s_rest[ kLegs[ i ].hand ];
-				D3DXMATRIX restPelvisInverse;
-				if( D3DXMatrixInverse( &restPelvisInverse, nullptr, &s_rest[ kPelvisBone ] ) )
-				{
-					D3DXMATRIX desired, current, currentInverse, turn;
-					D3DXMatrixMultiply( &desired, restFoot, &restPelvisInverse );
-					D3DXMatrixMultiply( &desired, &desired, reinterpret_cast< const D3DXMATRIX * >( out + kPelvisBone * 16 ) );
-					desired = RotationPart( desired );
-					current = RotationPart( *reinterpret_cast< const D3DXMATRIX * >( out + kLegs[ i ].hand * 16 ) );
-					D3DXMatrixTranspose( &currentInverse, &current );
-					D3DXMatrixMultiply( &turn, &currentInverse, &desired );
-					const D3DXVECTOR3 pivot = Position( out, kLegs[ i ].hand );
-					turn._41 = pivot.x - ( pivot.x * turn._11 + pivot.y * turn._21 + pivot.z * turn._31 );
-					turn._42 = pivot.y - ( pivot.x * turn._12 + pivot.y * turn._22 + pivot.z * turn._32 );
-					turn._43 = pivot.z - ( pivot.x * turn._13 + pivot.y * turn._23 + pivot.z * turn._33 );
-					ApplyToSubtree( out, records, kLegs[ i ].hand, turn );
-				}
-			}
-			if( log )
-			{
-#ifdef _DEBUG
-				PSU_LOG( "VRBody: feet planted %.1f,%.1f / %.1f,%.1f  stepping %d %d  pelvis speed %.1f\n", s_feet[ 0 ].current.x, s_feet[ 0 ].current.z,
-					s_feet[ 1 ].current.x, s_feet[ 1 ].current.z, s_feet[ 0 ].stepping, s_feet[ 1 ].stepping, D3DXVec3Length( &s_pelvisVel ) );
-#endif
-			}
-		}
-
 		void Apply( void *model, float *out, const uint8_t *skeleton )
 		{
 			// VR paused: the game's own animations, as in the vanilla game.
@@ -1348,7 +747,7 @@ namespace PSUVR
 			const bool restPose = Config::Get().vr.m_bodyRestPose;
 			if( restPose )
 			{
-				RestPose( out, skeleton );
+				VRBodyIk::RestPose( out, skeleton );
 			}
 			// Also runs inside the world query's pose rebuild, so the second eye keeps the arms.
 			if( !Config::Get().vr.m_handsFollow )
@@ -1510,15 +909,18 @@ namespace PSUVR
 				if( w > 0.0f && VRCamera::LookYaw( lookYaw ) )
 				{
 					const bool strafe = vr.m_strafeBody && haveCombat;
-					float torsoYaw = lookYaw, legExtra = 0.0f;
+					// Body IK: the body faces between the head and the hands held in front.
+					const bool spineIk = restPose && vr.m_bodyIk && VRBodyIk::BoneMapOk( records );
+					const float bodyLook = spineIk ? VRBodyIk::BodyYawGoal( lookYaw, pads ) : lookYaw;
+					float torsoYaw = bodyLook, legExtra = 0.0f;
 					if( strafe )
 					{
-						StrafeUpdate( combat, lookYaw, dt );
+						StrafeUpdate( combat, bodyLook, dt );
 						const float facing = static_cast< float >( combat.facing ) * ( 2.0f * kPi / 65536.0f );
 						const float whole = WrapPi( s_bodyYaw - facing ) * w;
 						TurnBody( out, records, whole );
 						legExtra = WrapPi( s_legTurn * w - whole );
-						torsoYaw = s_bodyYaw + std::clamp( WrapPi( lookYaw - s_bodyYaw ), -kTorsoLimit, kTorsoLimit );
+						torsoYaw = s_bodyYaw + std::clamp( WrapPi( bodyLook - s_bodyYaw ), -kTorsoLimit, kTorsoLimit );
 					}
 					const D3DXVECTOR3 lookWorld( std::sin( torsoYaw ), 0.0f, std::cos( torsoYaw ) );
 					D3DXVECTOR3 lookModel;
@@ -1531,9 +933,16 @@ namespace PSUVR
 					const float lookYawModel = std::atan2( lookModel.x, lookModel.z );
 					float delta = lookYawModel - chestYaw;
 					delta = delta > 3.14159265f ? delta - 6.2831853f : ( delta < -3.14159265f ? delta + 6.2831853f : delta );
-					const float angle = chestYaw + delta * w;
-					const D3DXVECTOR3 turned( std::sin( angle ), 0.0f, std::cos( angle ) );
-					ApplyToSubtree( out, records, kWaistBone, RotationAbout( chest, turned, Position( out, kWaistBone ) ) );
+					if( spineIk )
+					{
+						VRBodyIk::TwistSpine( out, records, delta * w );
+					}
+					else
+					{
+						const float angle = chestYaw + delta * w;
+						const D3DXVECTOR3 turned( std::sin( angle ), 0.0f, std::cos( angle ) );
+						ApplyToSubtree( out, records, kWaistBone, RotationAbout( chest, turned, Position( out, kWaistBone ) ) );
+					}
 					if( strafe && !( restPose && vr.m_bodyProceduralLegs ) )
 					{
 						TurnLegs( out, records, legExtra, log );
@@ -1547,11 +956,11 @@ namespace PSUVR
 					}
 				}
 
-				if( restPose && w > 0.0f && ( vr.m_bodyIk || vr.m_bodyProceduralLegs ) && BoneMapOk( records ) )
+				if( restPose && w > 0.0f && ( vr.m_bodyIk || vr.m_bodyProceduralLegs ) && VRBodyIk::BoneMapOk( records ) )
 				{
 					float head[ 3 ];
 					const bool haveHead = vr.m_bodyIk && VRCamera::HeadWorld( head );
-					BodyIk( out, records, world, toModel, haveHead ? head : nullptr, haveHead, vr.m_bodyProceduralLegs, dt, log );
+					VRBodyIk::Solve( out, records, world, toModel, haveHead ? head : nullptr, haveHead, vr.m_bodyProceduralLegs, dt, log );
 				}
 
 				if( haveCombat && vr.m_fpEyeFollowsNeck && !( restPose && vr.m_bodyIk ) )
@@ -1607,6 +1016,15 @@ namespace PSUVR
 						PSU_LOG( "VRHands: %s target model (%.2f %.2f %.2f) shoulder (%.2f %.2f %.2f) reach %.2f\n",
 							hand == 0 ? "L" : "R", target.x, target.y, target.z, s.x, s.y, s.z, D3DXVec3Length( &d ) );
 #endif
+					}
+					VRBodyIk::Shrug( out, records, arm, reach );
+					D3DXMATRIX gripAxes;
+					if( ControllerAxes( c, gripAxes ) )
+					{
+						const D3DXVECTOR3 backWorld( gripAxes._31, gripAxes._32, gripAxes._33 );
+						D3DXVECTOR3 back;
+						D3DXVec3TransformNormal( &back, &backWorld, &toModel );
+						pole = VRBodyIk::ElbowPole( out, arm, reach, pole, back );
 					}
 					SolveArm( out, records, arm, reach, pole );
 					{

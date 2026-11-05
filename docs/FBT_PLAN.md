@@ -157,7 +157,7 @@ T-pose gives arm span; save + toast.
    callers. If a melee path uses the weapon bone, Phase 1 builds `bodyGameplayPose = animated`.
 1. **Skeleton mode cleanup** (built 2026-11-05: `bodyAnimKeep` with re-parenting, bone-map guard; `bodyGameplayPose` not needed (Phase 0), `bodyFlatAnimated` dropped (player not drawn in the flat pass)): `bodyAnimKeep`, optional `bodyRestLocal`, `bodyGameplayPose` (if needed), `bodyFlatAnimated`,
    bone-map guard. Expected: no game animation on the player in any camera / input combo, weapons stay in hands.
-2. **3-point IK (`VRBodyIk.cpp`):** pelvis + crouch, CCD spine, head, shrug, elbow from hand, third person. Risk: camera clipping
+2. **3-point IK (`VRBodyIk.cpp`)** (2a built 2026-11-05: split, crouch, CCD spine, head, hands yaw, shrug, elbow; 2b = third person; knee pole from foot yaw skipped, feet are levelled to the pelvis yaw already): pelvis + crouch, CCD spine, head, shrug, elbow from hand, third person. Risk: camera clipping
    the shoulders (tune `bodyBack`), third-person placement.
 3. **Tracker input only:** HTCX, `GetTrackerState`, `VRTrackers`, debug discs (reuse the holster discs), logs; no IK change.
    Risk: trackers without roles, rejected bindings, Standable role setup.

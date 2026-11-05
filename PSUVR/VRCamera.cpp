@@ -546,6 +546,7 @@ namespace PSUVR
 		}
 
 		float s_hmdTracking[ 3 ]{};
+		float s_hmdOrientation[ 4 ]{ 0.0f, 0.0f, 0.0f, 1.0f };
 
 		bool TrackingToWorld( const float tracking[ 3 ], float world[ 3 ] )
 		{
@@ -572,6 +573,16 @@ namespace PSUVR
 		{
 			// The real head (not the leashed anchor), so crouching and stepping show.
 			return TrackingToWorld( s_hmdTracking, head );
+		}
+
+		bool HeadAxes( float forward[ 3 ], float up[ 3 ] )
+		{
+			const Quat q = ToQuat( s_hmdOrientation );
+			const Vec3 f = Rotate( q, { 0.0f, 0.0f, -1.0f } );
+			const Vec3 u = Rotate( q, { 0.0f, 1.0f, 0.0f } );
+			const float fIn[ 3 ] = { f.x, f.y, f.z };
+			const float uIn[ 3 ] = { u.x, u.y, u.z };
+			return TrackingDirToWorld( fIn, forward ) && TrackingDirToWorld( uIn, up );
 		}
 
 		bool WorldToTracking( const float world[ 3 ], float tracking[ 3 ] )
@@ -999,6 +1010,7 @@ namespace PSUVR
 			s_hmdTracking[ 0 ] = head.x;
 			s_hmdTracking[ 1 ] = head.y;
 			s_hmdTracking[ 2 ] = head.z;
+			memcpy( s_hmdOrientation, views[ 0 ].orientation, sizeof( s_hmdOrientation ) );
 			const bool roomWalk = RoomWalkOn();
 			if( roomWalk )
 			{
