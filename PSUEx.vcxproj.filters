@@ -246,6 +246,9 @@
     <ClInclude Include="PSUDetour\Hook_004F9F50_AimShot.hpp">
       <Filter>Header Files\PSUFunction</Filter>
     </ClInclude>
+    <ClInclude Include="PSUDetour\Hook_0047AD30_ActorHit.hpp">
+      <Filter>Header Files\PSUFunction</Filter>
+    </ClInclude>
     <ClInclude Include="PSUDetour\Hook_004D50B0_TechAim.hpp">
       <Filter>Header Files\PSUFunction</Filter>
     </ClInclude>
@@ -358,6 +361,9 @@
       <Filter>Header Files\PSUVR</Filter>
     </ClInclude>
     <ClInclude Include="PSUVR\VRHaptics.h">
+      <Filter>Header Files\PSUVR</Filter>
+    </ClInclude>
+    <ClInclude Include="PSUVR\VRGameHaptics.h">
       <Filter>Header Files\PSUVR</Filter>
     </ClInclude>
     <ClInclude Include="PSUVR\VRHolster.h">
@@ -555,6 +561,9 @@
       <Filter>Source Files\PSUVR</Filter>
     </ClCompile>
     <ClCompile Include="PSUVR\VRHaptics.cpp">
+      <Filter>Source Files\PSUVR</Filter>
+    </ClCompile>
+    <ClCompile Include="PSUVR\VRGameHaptics.cpp">
       <Filter>Source Files\PSUVR</Filter>
     </ClCompile>
     <ClCompile Include="PSUVR\VRHolster.cpp">

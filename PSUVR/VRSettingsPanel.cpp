@@ -707,6 +707,10 @@ namespace PSUVR
 				"Both grips + left stick click still flips it by hand." );
 			ImGui::Checkbox( "Buzz when the next combo hit can be pressed", &s.m_comboHaptic );
 			Help( "A short buzz in the right hand the moment the game accepts the next attack of a melee combo." );
+			ImGui::Checkbox( "Buzz when my attack hits", &s.m_hapticHits );
+			Help( "The hand that attacked buzzes when the hit lands on an enemy; a Just Attack or Photon Art hit buzzes harder." );
+			ImGui::Checkbox( "Buzz when I get hit", &s.m_hapticHurt );
+			Help( "Both hands buzz when you lose HP; the more HP a hit takes, the stronger." );
 			ImGui::SliderFloat( "Vibration strength", &s.m_hapticStrength, 0.0f, 1.5f, "%.2f" );
 			Help( "Scales every controller vibration. 0 turns them all off." );
 			if( context.inGame && context.testVibration )

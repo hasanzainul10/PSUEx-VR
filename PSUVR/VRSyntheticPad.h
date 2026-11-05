@@ -44,6 +44,9 @@ namespace PSUVR
 		// gestures do (X / Y on the right weapon, R1 + X / Y for slots 3 / 4). False when motion
 		// combat can't press it now (menu, palette, no technique weapon).
 		bool CastTechSlot( int slot );
+		// The last attack press sent (swing, shot, cast): its hand, whether it went in during the
+		// motion's Just Attack window, and whether it was a Photon Art (Y). For the hit haptic.
+		void LastAttack( int &hand, bool &justAttack, bool &photonArt );
 
 		// Voice command: uses the item at palette position 0..6 (-1 = the item the palette opens on).
 		// Holds Cancel, picks the item row with Left, presses Up / Down until the palette cursor

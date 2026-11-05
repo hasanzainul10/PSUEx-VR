@@ -88,6 +88,8 @@ namespace PSUVR
 		bool s_combatValid = false;
 		PSUCombat::State s_combat;
 		int s_lastAttackHand = 1;     // the combo buzz goes to the hand that attacked
+		bool s_lastAttackJust = false;      // that press went in during the Just Attack window
+		bool s_lastAttackPhotonArt = false; // that press was Y
 
 		bool s_aimModeOn = false;         // free aim mode (left stick click)
 		bool s_gunInView = false;         // the gun hand is raised into view
@@ -447,6 +449,9 @@ namespace PSUVR
 		void StartAttack( int button, int hand )
 		{
 			s_lastAttackHand = hand;
+			s_lastAttackPhotonArt = button == kPadY;
+			s_lastAttackJust = s_combatValid && s_combat.comboStep > 0 && PSUCombat::HasJustAttackWindow( s_combat ) &&
+				PSUCombat::JustAttackWindowOpen( s_combat );
 			s_pulseButton = button;
 			s_pulseTime = kAttackPulseSeconds;
 			// PSU aims an attack along the stick held when it starts, so the stick stays toward
@@ -2093,6 +2098,13 @@ namespace PSUVR
 				slot < 0 ? "current item" : "item by position", readable ? "read" : "unreadable",
 				palette.itemRow ? 1 : 0, palette.cursor, palette.count );
 			return true;
+		}
+
+		void LastAttack( int &hand, bool &justAttack, bool &photonArt )
+		{
+			hand = s_lastAttackHand;
+			justAttack = s_lastAttackJust;
+			photonArt = s_lastAttackPhotonArt;
 		}
 
 		bool CastTechSlot( int slot )

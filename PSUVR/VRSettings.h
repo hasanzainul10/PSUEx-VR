@@ -234,6 +234,10 @@ struct VRSettings
 	float m_hapticStrength = 1.0f;
 	// Vibrations for the UI pointer and panel dragging.
 	bool m_hapticUi = true;
+	// Buzz the hand that attacked when our attack lands (stronger for a Just Attack / Photon Art).
+	bool m_hapticHits = true;
+	// Buzz both hands when we lose HP (stronger for a bigger share of max HP).
+	bool m_hapticHurt = true;
 	// Motion mode: the left stick works the D-pad while a menu has the input.
 	bool m_autoDpad = true;
 	// Motion mode combat: swing a melee hand to attack (X), pull a gun hand's trigger to

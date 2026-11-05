@@ -147,6 +147,7 @@ DetoursHookAll()
 		sub_5089C0::Hook();			// Near-camera hide (VR hands in free aim)
 		sub_562070::Hook();			// Model part cull (VR hands in free aim)
 		sub_74DA40::Hook();			// Frustum sphere test (VR: eye frustum in the eye passes)
+		sub_47AD30::Hook();			// Actor hit (VR: buzz when our attack lands; read only)
 		sub_74D5B0::Hook();			// Frustum box test (VR: eye frustum in the eye passes)
 #ifdef _DEBUG
 		sub_4F9F50::Hook();			// Aim shot angles (free aim reticle calibration log)

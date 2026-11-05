@@ -104,6 +104,8 @@ namespace
 	X( m_comboHaptic, "comboHaptic" ) \
 	X( m_hapticStrength, "hapticStrength" ) \
 	X( m_hapticUi, "hapticUi" ) \
+	X( m_hapticHits, "hapticHits" ) \
+	X( m_hapticHurt, "hapticHurt" ) \
 	X( m_autoDpad, "autoDpad" ) \
 	X( m_swingAttack, "swingAttack" ) \
 	X( m_paGesture, "paGesture" ) \

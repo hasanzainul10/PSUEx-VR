@@ -197,6 +197,8 @@
     <ClInclude Include="PSUVR\VRBodyIk.h" />
     <ClInclude Include="PSUVR\VRSkeletonMath.h" />
     <ClInclude Include="PSUVR\VRHaptics.h" />
+    <ClInclude Include="PSUVR\VRGameHaptics.h" />
+    <ClInclude Include="PSUDetour\Hook_0047AD30_ActorHit.hpp" />
     <ClInclude Include="PSUVR\VRHolster.h" />
     <ClInclude Include="PSUVR\VREyeCull.h" />
     <ClInclude Include="PSUVR\VRControllerSim.h" />
@@ -319,6 +321,7 @@
     <ClCompile Include="PSUVR\VRHands.cpp" />
     <ClCompile Include="PSUVR\VRBodyIk.cpp" />
     <ClCompile Include="PSUVR\VRHaptics.cpp" />
+    <ClCompile Include="PSUVR\VRGameHaptics.cpp" />
     <ClCompile Include="PSUVR\VRHolster.cpp" />
     <ClCompile Include="PSUVR\VREyeCull.cpp" />
     <ClCompile Include="PSUVR\VRControllerSim.cpp" />

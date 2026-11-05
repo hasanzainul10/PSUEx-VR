@@ -9,6 +9,7 @@
 #include "VRCamera.h"
 #include "VRControllers.h"
 #include "VRHaptics.h"
+#include "VRGameHaptics.h"
 #include "VRProbe.h"
 #include "VRSyntheticPad.h"
 #include "VRUiPointer.h"
@@ -367,6 +368,7 @@ namespace PSUVR
 			VRPerf::End( VRPerf::Stage::UiPointer, partStart );
 			partStart = VRPerf::Begin();
 			VRSyntheticPad::Update();
+			VRGameHaptics::Update();
 			VRHaptics::Update();
 			VRPerf::End( VRPerf::Stage::Pad, partStart );
 			partStart = VRPerf::Begin();

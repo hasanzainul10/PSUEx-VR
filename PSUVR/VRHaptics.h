@@ -21,6 +21,10 @@ namespace PSUVR
 			Holster,      // holster zone fired
 			Countdown,    // calibration countdown, once per second
 			Done,         // calibration captured
+			// Game events (VRGameHaptics)
+			Hit,          // our attack landed (vr.hapticHits)
+			HeavyHit,     // our Just Attack / Photon Art landed
+			Hurt,         // we lost HP (vr.hapticHurt; scale grows with the share of max HP lost)
 			// Panel tests: what the controllers can render
 			TestStrength, // 0.2, 0.4, 0.6, 0.8, 1.0 for 0.1 s each, 0.6 s apart
 			TestLength,   // 0.8 for 10, 20, 40, 80 ms, 0.6 s apart

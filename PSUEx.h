@@ -48,6 +48,7 @@
 #include "PSUDetour/Hook_005089C0_NearCull.hpp"
 #include "PSUDetour/Hook_00562070_PartCull.hpp"
 #include "PSUDetour/Hook_004F9F50_AimShot.hpp"
+#include "PSUDetour/Hook_0047AD30_ActorHit.hpp"
 #include "PSUDetour/Hook_004D50B0_TechAim.hpp"
 #include "PSUDetour/Hook_004CB3A0_BulletAim.hpp"
 #include "PSUDetour/Hook_007738E0_KeyboardKeys.hpp"
