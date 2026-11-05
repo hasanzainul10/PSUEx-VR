@@ -19,6 +19,7 @@ namespace PSUVR
 	std::function< void() > openToolkit; // opens the Rogue's Toolkit menu (in-game)
 		std::function< bool( float & ) > headHeight; // head height above the floor in metres (in-game)
 		std::function< void( int ) > testVibration;  // 0 = strength ladder, 1 = length ladder (in-game)
+		std::function< std::string() > trackerStatus; // body trackers by role, "waist ok, ..." (in-game)
 		std::string message;                // last save/reload result, shown in the footer
 	};
 

@@ -48,7 +48,28 @@ namespace PSUVR
 
 	bool OpenXRRuntime::CreateInstance()
 	{
-		const char *exts[] = { XR_KHR_D3D11_ENABLE_EXTENSION_NAME };
+		// Body trackers: only with vr.trackersEnabled and when the runtime has the extension.
+		bool haveTrackerExt = false;
+		uint32_t extCount = 0;
+		if( XR_SUCCEEDED( xrEnumerateInstanceExtensionProperties( nullptr, 0, &extCount, nullptr ) ) && extCount > 0 )
+		{
+			std::vector< XrExtensionProperties > props( extCount, { XR_TYPE_EXTENSION_PROPERTIES } );
+			if( XR_SUCCEEDED( xrEnumerateInstanceExtensionProperties( nullptr, extCount, &extCount, props.data() ) ) )
+			{
+				for( uint32_t i = 0; i < extCount; ++i )
+				{
+					if( std::strcmp( props[ i ].extensionName, XR_HTCX_VIVE_TRACKER_INTERACTION_EXTENSION_NAME ) == 0 )
+					{
+						haveTrackerExt = true;
+					}
+				}
+			}
+		}
+		m_trackerExt = haveTrackerExt && Config::Get().vr.m_trackersEnabled;
+		PSU_LOG( "OpenXR: %s %s, %s\n", XR_HTCX_VIVE_TRACKER_INTERACTION_EXTENSION_NAME, haveTrackerExt ? "available" : "missing",
+			m_trackerExt ? "enabled" : "off (vr.trackersEnabled)" );
+
+		const char *exts[] = { XR_KHR_D3D11_ENABLE_EXTENSION_NAME, XR_HTCX_VIVE_TRACKER_INTERACTION_EXTENSION_NAME };
 
 		XrInstanceCreateInfo ci{ XR_TYPE_INSTANCE_CREATE_INFO };
 		std::strncpy( ci.applicationInfo.applicationName, "PSUEx", XR_MAX_APPLICATION_NAME_SIZE );
@@ -57,7 +78,7 @@ namespace PSUVR
 		ci.applicationInfo.engineVersion = 1;
 		// Headers are 1.1.x; older loaders (and many runtimes) only accept 1.0.
 		ci.applicationInfo.apiVersion = XR_API_VERSION_1_0;
-		ci.enabledExtensionCount = 1;
+		ci.enabledExtensionCount = m_trackerExt ? 2 : 1;
 		ci.enabledExtensionNames = exts;
 
 		XrInstance instance = XR_NULL_HANDLE;
@@ -186,14 +207,14 @@ namespace PSUVR
 
 	static XrAction
 	MakeAction( XrActionSet set, XrActionType type, const char *name, const char *localized,
-		const XrPath hands[ 2 ] )
+		const XrPath *subactions, uint32_t subactionCount = 2 )
 	{
 		XrActionCreateInfo info{ XR_TYPE_ACTION_CREATE_INFO };
 		info.actionType = type;
 		strcpy_s( info.actionName, name );
 		strcpy_s( info.localizedActionName, localized );
-		info.countSubactionPaths = 2;
-		info.subactionPaths = hands;
+		info.countSubactionPaths = subactionCount;
+		info.subactionPaths = subactions;
 		XrAction action = XR_NULL_HANDLE;
 		const XrResult r = xrCreateAction( set, &info, &action );
 		if( XR_FAILED( r ) )
@@ -310,6 +331,53 @@ namespace PSUVR
 			{ menu, "/user/hand/left/input/menu/click" }, { menu, "/user/hand/right/input/menu/click" },
 			{ haptic, "/user/hand/left/output/haptic" }, { haptic, "/user/hand/right/output/haptic" } } );
 
+		// Body trackers: one pose action, a subaction path per role, one space per role. Any failure
+		// here only loses the trackers.
+		if( m_trackerExt )
+		{
+			static const char *const kRoleNames[ kTrackerRoleCount ] = { "waist", "chest", "left_foot", "right_foot",
+				"left_knee", "right_knee", "left_elbow", "right_elbow" };
+			XrPath roles[ kTrackerRoleCount ];
+			for( int role = 0; role < kTrackerRoleCount; ++role )
+			{
+				char path[ 96 ];
+				sprintf_s( path, "/user/vive_tracker_htcx/role/%s", kRoleNames[ role ] );
+				roles[ role ] = ToPath( instance, path );
+				m_trackerRolePath[ role ] = static_cast< uint64_t >( roles[ role ] );
+			}
+			const XrAction trackerPose = MakeAction( set, XR_ACTION_TYPE_POSE_INPUT, "tracker_pose", "Body tracker pose", roles,
+				kTrackerRoleCount );
+			if( trackerPose )
+			{
+				m_actTrackerPose = static_cast< uint64_t >( trackerPose );
+				std::vector< XrActionSuggestedBinding > bindings;
+				for( int role = 0; role < kTrackerRoleCount; ++role )
+				{
+					char path[ 128 ];
+					sprintf_s( path, "/user/vive_tracker_htcx/role/%s/input/grip/pose", kRoleNames[ role ] );
+					bindings.push_back( { trackerPose, ToPath( instance, path ) } );
+				}
+				XrInteractionProfileSuggestedBinding suggested{ XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING };
+				suggested.interactionProfile = ToPath( instance, "/interaction_profiles/htc/vive_tracker_htcx" );
+				suggested.suggestedBindings = bindings.data();
+				suggested.countSuggestedBindings = static_cast< uint32_t >( bindings.size() );
+				const XrResult hr = xrSuggestInteractionProfileBindings( instance, &suggested );
+				PSU_LOG( "OpenXR: tracker bindings %s (0x%08X)\n", XR_FAILED( hr ) ? "rejected" : "ok", ( unsigned )hr );
+				for( int role = 0; role < kTrackerRoleCount && XR_SUCCEEDED( hr ); ++role )
+				{
+					XrActionSpaceCreateInfo spaceInfo{ XR_TYPE_ACTION_SPACE_CREATE_INFO };
+					spaceInfo.action = trackerPose;
+					spaceInfo.subactionPath = roles[ role ];
+					spaceInfo.poseInActionSpace.orientation.w = 1.0f;
+					XrSpace space = XR_NULL_HANDLE;
+					if( XR_SUCCEEDED( xrCreateActionSpace( session, &spaceInfo, &space ) ) )
+					{
+						m_trackerSpace[ role ] = static_cast< uint64_t >( space );
+					}
+				}
+			}
+		}
+
 		for( int hand = 0; hand < 2; ++hand )
 		{
 			XrActionSpaceCreateInfo spaceInfo{ XR_TYPE_ACTION_SPACE_CREATE_INFO };
@@ -339,7 +407,55 @@ namespace PSUVR
 			return false;
 		}
 		PSU_LOG( "OpenXR: controller actions ready\n" );
+		LogTrackers();
 		return true;
+	}
+
+	// Trackers the runtime knows (persistent path + role), via xrEnumerateViveTrackerPathsHTCX.
+	void OpenXRRuntime::LogTrackers()
+	{
+		if( !m_trackerExt || !m_instance )
+		{
+			return;
+		}
+		const XrInstance instance = static_cast< XrInstance >( m_instance );
+		PFN_xrEnumerateViveTrackerPathsHTCX enumerate = nullptr;
+		xrGetInstanceProcAddr( instance, "xrEnumerateViveTrackerPathsHTCX", reinterpret_cast< PFN_xrVoidFunction * >( &enumerate ) );
+		uint32_t count = 0;
+		if( !enumerate || XR_FAILED( enumerate( instance, 0, &count, nullptr ) ) )
+		{
+			PSU_LOG( "OpenXR: trackers: can't enumerate\n" );
+			return;
+		}
+		std::vector< XrViveTrackerPathsHTCX > paths( count, { XR_TYPE_VIVE_TRACKER_PATHS_HTCX } );
+		if( count > 0 && XR_FAILED( enumerate( instance, count, &count, paths.data() ) ) )
+		{
+			return;
+		}
+		PSU_LOG( "OpenXR: trackers: %u connected\n", count );
+		for( const XrViveTrackerPathsHTCX &p : paths )
+		{
+			char persistent[ XR_MAX_PATH_LENGTH ] = "?", role[ XR_MAX_PATH_LENGTH ] = "(no role: set one in SteamVR > Manage Trackers)";
+			uint32_t length = 0;
+			xrPathToString( instance, p.persistentPath, sizeof( persistent ), &length, persistent );
+			if( p.rolePath != XR_NULL_PATH )
+			{
+				xrPathToString( instance, p.rolePath, sizeof( role ), &length, role );
+			}
+			PSU_LOG( "OpenXR: tracker %s role %s\n", persistent, role );
+		}
+	}
+
+	bool OpenXRRuntime::GetTrackerState( TrackerRole role, TrackerState &out )
+	{
+		const int index = static_cast< int >( role );
+		if( index < 0 || index >= kTrackerRoleCount )
+		{
+			out = {};
+			return false;
+		}
+		out = m_trackers[ index ];
+		return out.active;
 	}
 
 	void OpenXRRuntime::DestroyActions()
@@ -350,6 +466,12 @@ namespace PSUVR
 			if( m_aimSpace[ hand ] ) { xrDestroySpace( static_cast< XrSpace >( m_aimSpace[ hand ] ) ); m_aimSpace[ hand ] = 0; }
 			m_controllers[ hand ] = {};
 		}
+		for( int role = 0; role < kTrackerRoleCount; ++role )
+		{
+			if( m_trackerSpace[ role ] ) { xrDestroySpace( static_cast< XrSpace >( m_trackerSpace[ role ] ) ); m_trackerSpace[ role ] = 0; }
+			m_trackers[ role ] = {};
+		}
+		m_actTrackerPose = 0;
 		// Destroying the set destroys its actions.
 		if( m_actionSet )
 		{
@@ -415,6 +537,10 @@ namespace PSUVR
 			// Not focused (SteamVR dashboard open): no controller input.
 			m_controllers[ 0 ] = {};
 			m_controllers[ 1 ] = {};
+			for( TrackerState &t : m_trackers )
+			{
+				t = {};
+			}
 			return;
 		}
 
@@ -501,6 +627,42 @@ namespace PSUVR
 			if( readBool( m_actPrimary ) ) c.buttons |= kControllerPrimary;
 			if( readBool( m_actSecondary ) ) c.buttons |= kControllerSecondary;
 			if( readBool( m_actMenu ) ) c.buttons |= kControllerMenu;
+		}
+
+		// Body trackers, same display time and space as the hands (plus the height above the floor).
+		for( int role = 0; m_actTrackerPose && role < kTrackerRoleCount; ++role )
+		{
+			TrackerState &t = m_trackers[ role ];
+			t = {};
+			XrActionStateGetInfo get{ XR_TYPE_ACTION_STATE_GET_INFO };
+			get.action = static_cast< XrAction >( m_actTrackerPose );
+			get.subactionPath = static_cast< XrPath >( m_trackerRolePath[ role ] );
+			XrActionStatePose poseState{ XR_TYPE_ACTION_STATE_POSE };
+			t.active = XR_SUCCEEDED( xrGetActionStatePose( session, &get, &poseState ) ) && poseState.isActive;
+			if( !t.active || !m_trackerSpace[ role ] )
+			{
+				continue;
+			}
+			const XrSpace space = static_cast< XrSpace >( m_trackerSpace[ role ] );
+			XrSpaceLocation location{ XR_TYPE_SPACE_LOCATION };
+			if( XR_SUCCEEDED( xrLocateSpace( space, base, time, &location ) ) )
+			{
+				constexpr XrSpaceLocationFlags kTracked = XR_SPACE_LOCATION_POSITION_TRACKED_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
+				t.valid = ( location.locationFlags & kPoseValid ) == kPoseValid;
+				t.tracked = ( location.locationFlags & kTracked ) == kTracked;
+				if( t.valid )
+				{
+					CopyPose( location.pose, t.position, t.orientation );
+				}
+			}
+			XrSpaceLocation floor{ XR_TYPE_SPACE_LOCATION };
+			if( t.valid && m_stageSpace &&
+				XR_SUCCEEDED( xrLocateSpace( space, static_cast< XrSpace >( m_stageSpace ), time, &floor ) ) &&
+				( floor.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT ) )
+			{
+				t.floorValid = true;
+				t.floorHeight = floor.pose.position.y;
+			}
 		}
 	}
 
@@ -942,6 +1104,21 @@ namespace PSUVR
 			if( ev.type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED )
 			{
 				LogInteractionProfiles();
+			}
+			else if( ev.type == XR_TYPE_EVENT_DATA_VIVE_TRACKER_CONNECTED_HTCX )
+			{
+				const auto *connected = reinterpret_cast< const XrEventDataViveTrackerConnectedHTCX * >( &ev );
+				char persistent[ XR_MAX_PATH_LENGTH ] = "?", role[ XR_MAX_PATH_LENGTH ] = "(no role)";
+				uint32_t length = 0;
+				if( connected->paths )
+				{
+					xrPathToString( instance, connected->paths->persistentPath, sizeof( persistent ), &length, persistent );
+					if( connected->paths->rolePath != XR_NULL_PATH )
+					{
+						xrPathToString( instance, connected->paths->rolePath, sizeof( role ), &length, role );
+					}
+				}
+				PSU_LOG( "OpenXR: tracker connected %s role %s\n", persistent, role );
 			}
 			else if( ev.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED )
 			{

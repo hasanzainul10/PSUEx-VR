@@ -747,7 +747,43 @@ Follow-up (voice-session review): RequestAttack now sets s_lastAttackHand = hand
 **User (2026-11-01): works** (right swing casts the wand, TCSM only from the left; committed in `6e596e6`).
 **Holster zones enlarged (2026-10-31, built Debug, NOT deployed: PSUC was running).** Zones are now ellipsoids (`VRHolster::ZoneShape`, half extents right/up/forward at 1.7 m, x radius setting / default): head-back centre (0, +0.12, -0.20) half (0.28, 0.30, 0.30) (up and back, forward to the shoulders); waist centre (0, -0.72, -0.28) half (0.34, 0.28, 0.30); mouth centre (0, -0.20, +0.14) in head axes, half (0.20, 0.25, 0.20) (face to chest, out front). The radius sliders now scale the whole zone (defaults unchanged). Debug discs mark the centre and six extreme points. Deploy `Debug\PSUExD.dll` + `PSUExVRConfig.exe` when the game is closed.
 
-## Full-body tracking (Phase 1 `a63ec2b`, Phase 2a `eaff1fd` user-tested OK; Phase 2b built Debug 2026-11-05, uncommitted, untested)
+## Full-body tracking (Phase 1 `a63ec2b`, 2a `eaff1fd`, 2b + fixes `d0f5ba2`, all user-tested OK; Phase 3 built 2026-11-05, uncommitted)
+**Phase 3, tracker input only (built Debug + Release 2026-11-05, Debug deployed 22:54 with `PSUExVRConfig.exe`, previous DLL `PSUExD.dll.bak_prefbt3`; uncommitted, untested):** no IK change.
+- `VRRuntime.h`: `TrackerRole` (waist, chest, feet, knees, elbows), `TrackerState` (active / valid / tracked, LOCAL pose,
+  `floorHeight` from STAGE), `IVRRuntime::GetTrackerState` (OpenVR: default false).
+- `OpenXRRuntime`: enables `XR_HTCX_vive_tracker_interaction` when available and `vr.trackersEnabled` (read at start: restart);
+  action `tracker_pose` with one subaction path per role, bindings for `/interaction_profiles/htc/vive_tracker_htcx`, one
+  space per role, located in `UpdateInput` at the hands' time; logs the extension, `tracker bindings ok|rejected`,
+  `trackers: N connected` + `tracker <persistent> role <role>` (xrEnumerateViveTrackerPathsHTCX) and `tracker connected ...` events.
+- New `PSUVR/VRTrackers.{h,cpp}`: `Update` after `VRControllers::Update` (VRSystem), one-euro smoothing (`trackerSmoothing` 0.3),
+  hold after loss (`trackerLostHold` 0.3 s), `Get` / `GetWorld` (via `VRCamera::BodyTrackingToWorld`) / `Any` / `StatusLine`;
+  log `VRTrackers: waist ok (x y z) floor 0.95; left foot lost 120 ms;` every 3 s, `VRTrackers: <role> found` once.
+- Discs (`VRControllers::DrawMarkers`, `trackerShowDiscs`): 4 cm per role, dim while held; shown without Show controllers too.
+- Panel: Camera > First person, under the rest-pose block: "Body trackers (restart the game)", discs, smoothing, hold, live status.
+- Game files: `trackersEnabled` + `trackerShowDiscs` set **true** for the test (`psuex_vr.json.bak14` / `config.json.bak13` = before).
+- The deployed DLL also carries the haptics hit/hurt work (`Hook_0047AD30_ActorHit`, `VRGameHaptics`; user: done).
+**Test 3 (Standable):** SteamVR > Manage Trackers: give Standable's trackers roles (waist, left foot, right foot). Start the game.
+`tools/lastlog.sh -d 'HTCX|tracker|VRTrackers'`: extension available + enabled, `tracker bindings ok`, one `role` line per tracker,
+`VRTrackers: waist ok ...`, feet `floor` ~0.0-0.1 standing. Headset: discs at waist and feet follow you; body unchanged.
+If `none active`: roles not set, or Standable's devices aren't trackers to SteamVR (send the log). **Next:** Phase 4 (trackers drive IK).
+**Phase 3 result (2026-11-05 23:09, 3 runs): OpenXR sees NO Standable trackers.** Log: `HTCX available, enabled`, `tracker bindings ok`,
+`trackers: 0 connected` (xrEnumerateViveTrackerPathsHTCX lists every tracker, role or not), no `tracker connected` event, `VRTrackers: none
+active`. User has the roles set in SteamVR (don't ask again). SteamVR side: Standable driver adds 8 devices (serials `Hips`, `Chest`,
+`Elbow Left/Right`, `Knee Left/Right`, `Foot Left/Right`, paths `/devices/standable/<serial>`); `steamvr.vrsettings` `trackers` only
+lists `/devices/standable/Chest` = Chest; Standable's input profiles (`D:\SteamLibrary\steamapps\common\Standable Full Body
+Estimationesources\input	racker\standable_tracker_<role>_profile.json`) use controller types `standable_tracker_<role>`
+(base `standable_tracker_profile.json` = `vive_tracker` with `tracker_types`), so SteamVR's OpenXR HTCX layer likely skips them.
+VRChat works because it uses OpenVR, which lists all devices; it also auto-calibrates them (Standable's poses are rough, "way off" raw).
+**Next (new session): OpenVR tracker source.** In `PSUVR/OpenVRRuntime.cpp` (runtime rule), a pose-only side connection:
+`VR_Init( &err, vr::VRApplication_Background )` (or `_Other`) next to the OpenXR session; each frame
+`GetDeviceToAbsoluteTrackingPose( TrackingUniverseStanding, predicted )`, devices with `TrackedDeviceClass_GenericTracker`, role from
+`Prop_ControllerType_String` / `vr::VRSettings()` `trackers` section / serial name (Hips -> waist, Foot Left -> left foot, ...).
+Convert STANDING -> our OpenXR LOCAL space (both SteamVR universes: compare the HMD pose from OpenVR with OpenXR's view pose to get
+the offset, or use STAGE = standing and our `m_stageSpace`). Feed `VRTrackers` when OpenXR has no trackers (setting `trackerSource`
+auto / openxr / openvr). Risk: a 2nd vrclient connection in the same process; fallback = helper exe (like `PSUExSpeech`) piping
+poses. Then Phase 4 + 5 together: calibration (stand straight, offset = inverse(tracker) * bone, saved) + trackers drive the IK.
+Phase 3 code (HTCX, `VRTrackers`, discs, panel) is uncommitted; game files have `trackersEnabled` / `trackerShowDiscs` true.
+
 **Phase 2b (deployed Debug DLL + config exe 2026-11-05 ~22:00, previous DLL `PSUExD.dll.bak_prefbt2b`), third person (`bodyIkThirdPerson`, default off; panel: Camera > Third person > "Body follows me (arms, head, crouch)"):**
 - Before 2b the player model was never hooked in third person (`VRPlayerDraw::Update(firstPerson)`), so no rest pose / arms
   there at all (the Phase 1 "third person" test can't have shown it). Now `Update(firstPerson, VRCamera::ThirdPersonBodyWanted())`;
@@ -764,7 +800,7 @@ Follow-up (voice-session review): RequestAttack now sets s_lastAttackHand = hand
   clamped to 50 deg from the facing), no eye lean. Debug log `VRBody: third person eye ... units/m, head ok ...` every 3 s.
 **User test 2b (2026-11-05):** "it's following" (third person body follows). Not committed yet: commit 2b (ask), skip
 `PSUVR/VRHaptics.cpp` (separate uncommitted haptic value bump).
-**Bugs reported 2026-11-05, fixed (built Debug, deployed 22:24 with `PSUExVRConfig.exe`, untested, uncommitted):**
+**Bugs reported 2026-11-05, fixed (user-confirmed, committed `d0f5ba2`):**
 1. TCSM Shifta not a voice command: the TCSM reads id 6 (level rose 0 -> 2 over sessions), which `kTechNames` (`VRSpeech.cpp`,
    provisional order) called "Jellen". Swapped 5 / 6 (6 = Shifta, 5 = Jellen still a guess). "Shifter" / "Shift+R" share the
    skeleton. **Test:** whip + TCSM, say "Shifta": log `VRVoice: slots ... = - / - / Shifta / Resta` and `"Shifta" -> slot 3`.
@@ -913,3 +949,18 @@ two pulses (0 and +0.2 s, 0.7/60 ms). **Pending:** user reports click felt y/n, 
 **Result (2026-11-05 22:0x):** chord two pulses: both felt; twin handguns left trigger: works; laser click (on release): still not
 felt -> not a press-timing issue, single 0.45/30 ms is too weak in use. Built: Tick 0.5/40 ms,
 Click 0.7/60, Grab 0.75/70; deployed 22:25 (Debug + config exe). **Pending:** user retests laser click / panel drag ticks.
+**Committed `e9ef783`** (haptic values, laser click on release, twin handguns). User: laser click can't be told from the trigger's
+own click (fine), panel drag buzz + ticks felt.
+**Phase B1/B2 built + deployed (Debug + config exe, 22:49; uncommitted; the deploy also carries the other session's uncommitted
+tracker code, gated by `vr.trackersEnabled`):** `PSUVR/VRGameHaptics.{h,cpp}` (Update in VRSystem after VRSyntheticPad).
+B1: hook `0x0047AD30` (TActor receive hit, `PSUDetour/Hook_0047AD30_ActorHit.hpp`, read only) counts hits whose attacker id ==
+`[0x009CA7D4]` (not on ourselves) -> `Hit` (0.85/60 ms) on `VRSyntheticPad::LastAttack` hand, `HeavyHit` (1.0/80 + 0.8/60) when
+that press was in the JA window (`StartAttack` records it) or a Photon Art. B2: polls `[[0x009CA8AC]+0x48]` +0x20 HP / +0x24 max;
+a drop -> `Hurt` both hands (0.7/100 + 0.5/70, scale 0.75 + 2.5 x share lost, max 1.6). Settings `hapticHits` / `hapticHurt`
+(default on), checkboxes under the combo buzz one (Controllers tab). Addresses in `docs/ADDRESS_MAP.md` (HP block, hit, damage
+manager: network path, not hooked).
+**Pending test:** hit an enemy (melee, gun, technique): buzz on the attacking hand when it lands, harder for a JA / PA; get hit:
+both hands buzz, bigger hits harder; heal: nothing. Log `tools/lastlog.sh -d VRHaptic`: `our hit on ... vtable`, `hit landed`,
+`hurt A -> B of M`. If no `hurt` lines: look for `has no status block` (then use the 0x00B90F30 lookup / hook `+0x68`). If no `our
+hit` lines: enemies override vtable +0x30 (check the vtables in the log of other hits).
+Next after the test: B3 (gun recoil per shot, technique charge / release), then B4 (walking haptics).

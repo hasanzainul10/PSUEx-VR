@@ -54,6 +54,27 @@ namespace PSUVR
 		uint32_t buttons = 0;        // ControllerButton bits
 	};
 
+	// Body trackers (OpenXR XR_HTCX_vive_tracker_interaction): SteamVR trackers with a role set in
+	// SteamVR > Manage Trackers (Vive / Tundra / SlimeVR / Standable).
+	enum class TrackerRole
+	{
+		Waist, Chest, LeftFoot, RightFoot, LeftKnee, RightKnee, LeftElbow, RightElbow, Count
+	};
+	constexpr int kTrackerRoleCount = static_cast< int >( TrackerRole::Count );
+
+	// One tracker, in the same space as the eye poses (LOCAL, meters), predicted for the
+	// same display time as the next views.
+	struct TrackerState
+	{
+		bool active = false;         // a device holds this role and the runtime reads it
+		bool valid = false;          // position and orientation valid
+		bool tracked = false;        // both actively tracked (not inferred)
+		bool floorValid = false;     // floorHeight is set (STAGE space)
+		float position[ 3 ]{};
+		float orientation[ 4 ]{ 0.0f, 0.0f, 0.0f, 1.0f };
+		float floorHeight = 0.0f;    // meters above the floor
+	};
+
 	// The quad layer that shows the PSUEx overlay (ImGui) in the headset: LOCAL-space pose
 	// (the quad faces +Z, x right, y up), size in meters and the image size in pixels.
 	struct UiQuad
@@ -88,5 +109,7 @@ namespace PSUVR
 		// Head (VIEW origin) height above the floor (STAGE space), meters. False without a STAGE
 		// space or a valid head pose.
 		virtual bool GetHeadHeightAboveFloor( float &meters ) { meters = 0.0f; return false; }
+		// Body tracker by role. False when the role has no active device (or no tracker support).
+		virtual bool GetTrackerState( TrackerRole /*role*/, TrackerState &out ) { out = {}; return false; }
 	};
 }

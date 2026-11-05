@@ -135,6 +135,15 @@ struct VRSettings
 	// Third person: the arms follow the controllers and (with bodyIk) the body follows the headset, mapped
 	// from your head onto the character (rest pose, its facing).
 	bool m_bodyIkThirdPerson = false;
+	// Body trackers through OpenXR (XR_HTCX_vive_tracker_interaction; roles set in SteamVR > Manage
+	// Trackers). Read at VR start: changing it needs a game restart. Phase 3: read and shown only.
+	bool m_trackersEnabled = false;
+	// A disc at each tracker in the headset (debug).
+	bool m_trackerShowDiscs = false;
+	// Smoothing of the tracker positions, 0 = raw, 1 = heavy (one-euro filter).
+	float m_trackerSmoothing = 0.3f;
+	// A lost tracker keeps its last pose this long (seconds) before it counts as gone.
+	float m_trackerLostHold = 0.3f;
 	// Arms on the controllers: the shoulders lift toward far / high hands (0 = off, 0.5 = up to 20 deg).
 	float m_bodyShoulderShrug = 0.5f;
 	// Arms on the controllers: how much the elbow follows the controller's angle (0 = hangs by the

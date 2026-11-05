@@ -23,6 +23,7 @@ namespace PSUVR
 		void Haptic( int hand, float amplitude, float seconds, float frequency ) override;
 		bool GetUiQuad( UiQuad &out ) override;
 		bool GetHeadHeightAboveFloor( float &meters ) override;
+		bool GetTrackerState( TrackerRole role, TrackerState &out ) override;
 
 		// Sync controller actions and locate the controllers for the next views' display
 		// time (after BeginFrame, with LocateNextViews).
@@ -198,6 +199,14 @@ namespace PSUVR
 		uint64_t m_gripSpace[ 2 ]{};
 		uint64_t m_aimSpace[ 2 ]{};
 		ControllerState m_controllers[ 2 ]{};
+
+		// Body trackers (XR_HTCX_vive_tracker_interaction, vr.trackersEnabled).
+		bool m_trackerExt = false;           // extension enabled on the instance
+		uint64_t m_actTrackerPose = 0;
+		uint64_t m_trackerRolePath[ kTrackerRoleCount ]{};
+		uint64_t m_trackerSpace[ kTrackerRoleCount ]{};
+		TrackerState m_trackers[ kTrackerRoleCount ]{};
+		void LogTrackers();
 
 		// The layer that carried the overlay in the last EndFrame (user HUD in stereo, the
 		// back-buffer panel otherwise), in LOCAL space.

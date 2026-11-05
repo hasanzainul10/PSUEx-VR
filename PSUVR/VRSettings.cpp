@@ -116,6 +116,10 @@ namespace
 	X( m_holsterMouthRadius, "holsterMouthRadius" ) \
 	X( m_holsterItemScript, "holsterItemScript" ) \
 	X( m_holsterShowZones, "holsterShowZones" ) \
+	X( m_trackersEnabled, "trackersEnabled" ) \
+	X( m_trackerShowDiscs, "trackerShowDiscs" ) \
+	X( m_trackerSmoothing, "trackerSmoothing" ) \
+	X( m_trackerLostHold, "trackerLostHold" ) \
 	X( m_triangleChatL2, "triangleChatL2" ) \
 	X( m_strafeBody, "strafeBody" ) \
 	X( m_strafeBodyBlend, "strafeBodyBlend" ) \

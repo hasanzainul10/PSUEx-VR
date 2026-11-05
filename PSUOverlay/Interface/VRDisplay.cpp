@@ -7,6 +7,7 @@
 #include "../../PSUVR/VRHaptics.h"
 #include "../../PSUVR/VRHud.h"
 #include "../../PSUVR/VRSystem.h"
+#include "../../PSUVR/VRTrackers.h"
 #include "../../PSUVR/VRUiPointer.h"
 
 #include <cfloat>
@@ -36,6 +37,10 @@ VRDisplay::VRDisplay() : IFWinCtrl( "VRDisplay", false )
 	m_context.testVibration = []( int test )
 	{
 		PSUVR::VRHaptics::PlayBoth( test == 0 ? PSUVR::VRHaptics::Effect::TestStrength : PSUVR::VRHaptics::Effect::TestLength );
+	};
+	m_context.trackerStatus = []()
+	{
+		return PSUVR::VRTrackers::StatusLine();
 	};
 	m_context.openToolkit = [this]()
 	{

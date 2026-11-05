@@ -159,7 +159,7 @@ T-pose gives arm span; save + toast.
    bone-map guard. Expected: no game animation on the player in any camera / input combo, weapons stay in hands.
 2. **3-point IK (`VRBodyIk.cpp`)** (2a built 2026-11-05: split, crouch, CCD spine, head, hands yaw, shrug, elbow; 2b built 2026-11-05: third person via `VRCamera::Body*` mapping; knee pole from foot yaw skipped, feet are levelled to the pelvis yaw already): pelvis + crouch, CCD spine, head, shrug, elbow from hand, third person. Risk: camera clipping
    the shoulders (tune `bodyBack`), third-person placement.
-3. **Tracker input only:** HTCX, `GetTrackerState`, `VRTrackers`, debug discs (reuse the holster discs), logs; no IK change.
+3. **Tracker input only** (built 2026-11-05: HTCX + `VRTrackers`, discs, status line; untested with Standable): HTCX, `GetTrackerState`, `VRTrackers`, debug discs (reuse the holster discs), logs; no IK change.
    Risk: trackers without roles, rejected bindings, Standable role setup.
 4. **Trackers drive IK:** waist, feet, poles, chest; per-role fallback ~0.3 s, no pop. Risk: foot height on slopes (clamp to
    `groundY`, root stays the game's), stick movement with tracked feet.

@@ -506,6 +506,21 @@ namespace PSUVR
 				ImGui::Checkbox( "Planted feet that step", &s.m_bodyProceduralLegs );
 				Help( "The feet stay where they are in the world and step to a new spot when the hips move away. Replaces the strafe legs." );
 			}
+			ImGui::Checkbox( "Body trackers (restart the game)", &s.m_trackersEnabled );
+			Help( "Reads SteamVR trackers (Vive, Tundra, SlimeVR, Standable) through OpenXR. Each tracker needs a role "
+				"(waist, foot, ...) in SteamVR > Settings > Controllers > Manage Trackers. For now they are only shown, "
+				"they don't move the body yet." );
+			if( s.m_trackersEnabled )
+			{
+				ImGui::Checkbox( "Show tracker discs", &s.m_trackerShowDiscs );
+				ImGui::SliderFloat( "Tracker smoothing", &s.m_trackerSmoothing, 0.0f, 1.0f, "%.2f" );
+				ImGui::SliderFloat( "Hold a lost tracker (s)", &s.m_trackerLostHold, 0.0f, 1.0f, "%.2f" );
+				if( context.trackerStatus )
+				{
+					const std::string status = context.trackerStatus();
+					ImGui::TextWrapped( "Trackers: %s", status.c_str() );
+				}
+			}
 			ImGui::SliderFloat( "Neck cut below eyes (m)", &s.m_fpNeckDrop, 0.05f, 0.5f, "%.2f" );
 			ImGui::SliderFloat( "Lean limit (m)", &s.m_fpLeanLimit, 0.0f, 0.5f, "%.2f" );
 			ImGui::SliderFloat( "Crouch limit (m)", &s.m_fpCrouchLimit, 0.0f, 0.5f, "%.2f" );
