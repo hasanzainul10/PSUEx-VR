@@ -27,9 +27,24 @@ namespace PSUVR
 
 		// Body IK on the rest pose (first person, or third person through VRCamera's Body* mapping). upper (headWorld set): hips follow the head (pushed back
 		// by a crouch), the CCD spine leans the neck to it, the head turns to the HMD. legs: planted feet
-		// that step. world = model -> game world, toModel its inverse.
+		// that step. Tracked roles (UpdateTrackers) take over by their weight: waist -> hips position + leg
+		// yaw, chest -> chest turn, feet -> ankle targets + foot turn, knees -> leg poles.
+		// world = model -> game world, toModel its inverse.
 		void Solve( float *out, const uint8_t *records, const D3DXMATRIX &world, const D3DXMATRIX &toModel,
 			const float *headWorld, bool upper, bool legs, float dt, bool log );
+
+		// vr.trackerDriveBody: each calibrated tracker role eases in (0.3 s) while usable and out after a
+		// loss, its last pose kept for the ease-out. Once per Apply, after VRCamera's body mapping is set
+		// (third person). Logs "VRBody: sources pelvis=tracker|estimate ..." with log.
+		void UpdateTrackers( float dt, bool log );
+		// Some tracker role has weight: Solve has something to do even without bodyIk / planted feet.
+		bool TrackersDriving();
+		// The waist tracker's facing (game yaw) and its weight; false while it has none.
+		bool TrackedPelvisYaw( float &yaw, float &weight );
+		// The arm's elbow tracker (arm 0 left, 1 right) blended into pole (model space; target = the wrist
+		// the arm reaches for). pole unchanged without one.
+		D3DXVECTOR3 TrackedElbowPole( int arm, const float *out, const D3DXMATRIX &toModel, const D3DXVECTOR3 &target,
+			const D3DXVECTOR3 &pole );
 
 		// Where the body should face (game yaw): the look yaw pulled toward the hands when both are in
 		// front, below the head. Returns lookYaw when the hands don't say anything.

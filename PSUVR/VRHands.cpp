@@ -891,6 +891,11 @@ namespace PSUVR
 				float dt = s_weightTick ? static_cast< float >( now - s_weightTick ) / 1000.0f : 0.0f;
 				dt = dt > 0.1f ? 0.1f : dt;
 				s_weightTick = now;
+				// Tracker roles ease in / out (after SetThirdPersonBody: they map through the body mapping).
+				if( restPose )
+				{
+					VRBodyIk::UpdateTrackers( dt, log );
+				}
 				PSUCombat::State combat{};
 				const bool haveCombat = PSUCombat::Read( combat );
 				const bool attacking = haveCombat && ( combat.comboStep > 0 || PSUCombat::Swinging( combat ) );
@@ -978,6 +983,13 @@ namespace PSUVR
 						const float facing = rootForward.x * rootForward.x + rootForward.z * rootForward.z > 1.0e-6f
 							? std::atan2( rootForward.x, rootForward.z ) : gameFacing;
 						StrafeUpdate( combat, bodyLook, facing, dt );
+						// Waist tracker: the body faces where your hips do (no dead-zone guess); after a
+						// loss it stays there and the dead-zone takes over again.
+						float hipsYaw = 0.0f, hipsWeight = 0.0f;
+						if( VRBodyIk::TrackedPelvisYaw( hipsYaw, hipsWeight ) )
+						{
+							s_bodyYaw = WrapPi( s_bodyYaw + WrapPi( hipsYaw - s_bodyYaw ) * hipsWeight );
+						}
 						const float whole = WrapPi( s_bodyYaw - facing ) * w;
 #ifdef _DEBUG
 						static int s_lastState = -1;
@@ -1031,7 +1043,8 @@ namespace PSUVR
 					}
 				}
 
-				if( restPose && w > 0.0f && ( vr.m_bodyIk || vr.m_bodyProceduralLegs ) && VRBodyIk::BoneMapOk( records ) )
+				if( restPose && w > 0.0f && ( vr.m_bodyIk || vr.m_bodyProceduralLegs || VRBodyIk::TrackersDriving() ) &&
+					VRBodyIk::BoneMapOk( records ) )
 				{
 					float head[ 3 ];
 					const bool haveHead = vr.m_bodyIk && VRCamera::BodyHeadWorld( head );
@@ -1100,6 +1113,10 @@ namespace PSUVR
 						D3DXVECTOR3 back;
 						D3DXVec3TransformNormal( &back, &backWorld, &toModel );
 						pole = VRBodyIk::ElbowPole( out, arm, reach, pole, back );
+					}
+					if( restPose )
+					{
+						pole = VRBodyIk::TrackedElbowPole( hand, out, toModel, reach, pole );
 					}
 					SolveArm( out, records, arm, reach, pole );
 					{

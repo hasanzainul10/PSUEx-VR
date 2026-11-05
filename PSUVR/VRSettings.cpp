@@ -122,6 +122,13 @@ namespace
 	X( m_trackerCal, "trackerCal" ) \
 	X( m_trackerSmoothing, "trackerSmoothing" ) \
 	X( m_trackerLostHold, "trackerLostHold" ) \
+	X( m_trackerCalibWithEyeHeight, "trackerCalibWithEyeHeight" ) \
+	X( m_trackerDriveBody, "trackerDriveBody" ) \
+	X( m_trackerDriveWaist, "trackerDriveWaist" ) \
+	X( m_trackerDriveChest, "trackerDriveChest" ) \
+	X( m_trackerDriveFeet, "trackerDriveFeet" ) \
+	X( m_trackerDriveKnees, "trackerDriveKnees" ) \
+	X( m_trackerDriveElbows, "trackerDriveElbows" ) \
 	X( m_triangleChatL2, "triangleChatL2" ) \
 	X( m_strafeBody, "strafeBody" ) \
 	X( m_strafeBodyBlend, "strafeBodyBlend" ) \

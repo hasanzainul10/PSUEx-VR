@@ -106,6 +106,7 @@ namespace PSUVR
 				float t[ 3 ]{};
 				float r[ 4 ]{ 0.0f, 0.0f, 0.0f, 1.0f };
 				float s = 1.0f;
+				float stature = 0.0f; // meters, 0 = not saved
 				bool has[ kTrackerRoleCount ]{};
 				float offPos[ kTrackerRoleCount ][ 3 ]{};
 				float offRot[ kTrackerRoleCount ][ 4 ]{};
@@ -137,6 +138,10 @@ namespace PSUVR
 						QNorm( s_cal.r );
 						s_cal.s = std::clamp( v[ 7 ], 0.5f, 2.0f );
 						s_cal.valid = true;
+					}
+					else if( std::sscanf( item.c_str(), " h %f", &v[ 0 ] ) == 1 )
+					{
+						s_cal.stature = std::clamp( v[ 0 ], 1.0f, 2.3f );
 					}
 					else if( std::sscanf( item.c_str(), " r%d %f %f %f %f %f %f %f", &role, &v[ 0 ], &v[ 1 ], &v[ 2 ], &v[ 3 ], &v[ 4 ], &v[ 5 ], &v[ 6 ] ) == 8 &&
 						role >= 0 && role < kTrackerRoleCount )
@@ -331,7 +336,9 @@ namespace PSUVR
 				if( n >= 3 && spreadA > 0.01f )
 				{
 					HornRotation( da, db, w, n, cal.r );
-					cal.s = std::clamp( std::sqrt( spreadB / spreadA ), 0.7f, 1.4f );
+					// Scale kept near 1: Standable's space is metric, and a fitted 0.79 (run 2, upright space,
+					// noisy joint guesses) shrank every tracker motion by a fifth.
+					cal.s = std::clamp( std::sqrt( spreadB / spreadA ), 0.9f, 1.1f );
 				}
 				else
 				{
@@ -374,6 +381,7 @@ namespace PSUVR
 				char text[ 1024 ];
 				int len = sprintf_s( text, "g %.4f %.4f %.4f %.5f %.5f %.5f %.5f %.4f", cal.t[ 0 ], cal.t[ 1 ], cal.t[ 2 ], cal.r[ 0 ], cal.r[ 1 ],
 					cal.r[ 2 ], cal.r[ 3 ], cal.s );
+				len += sprintf_s( text + len, sizeof( text ) - len, ";h %.3f", stature );
 				for( int i = 0; i < n; ++i )
 				{
 					float p[ 3 ], q[ 4 ], inv[ 4 ], d[ 3 ], off[ 3 ], offRot[ 4 ];
@@ -419,6 +427,7 @@ namespace PSUVR
 				for( int k = 0; k < 3; ++k ) p.joint[ k ] += stagePos[ k ];
 				QMul( stageRot, jq, p.jointOrientation );
 				QNorm( p.jointOrientation );
+				p.jointFloorHeight = js[ 1 ];
 				p.jointValid = true;
 			}
 			LARGE_INTEGER s_lastTime{};
@@ -600,6 +609,22 @@ namespace PSUVR
 		bool Calibrated()
 		{
 			return s_cal.valid;
+		}
+
+		float CalibratedStature()
+		{
+			return s_cal.valid ? s_cal.stature : 0.0f;
+		}
+
+		float CalibratedJointHeight( TrackerRole role )
+		{
+			const int index = static_cast< int >( role );
+			if( index < 0 || index >= kTrackerRoleCount )
+			{
+				return 0.0f;
+			}
+			const JointModel &j = kJoints[ index ];
+			return j.absoluteHeight ? j.height : j.height * s_cal.stature;
 		}
 
 		bool Get( TrackerRole role, Pose &out )

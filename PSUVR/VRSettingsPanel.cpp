@@ -201,8 +201,8 @@ namespace PSUVR
 
 	// The panel is split into tabs (one screen each in the headset, no long scroll); sections
 	// keep their order in the code and say which tab they belong to.
-	enum class Tab : int { General, Camera, Hud, Controllers, Combat, Voice, Performance, Keys, Count };
-	const char *const kTabNames[] = { "General", "Camera", "HUD", "Controllers", "Combat", "Voice", "Performance", "Keys" };
+	enum class Tab : int { General, Camera, Body, Hud, Controllers, Combat, Voice, Performance, Keys, Count };
+	const char *const kTabNames[] = { "General", "Camera", "Body", "HUD", "Controllers", "Combat", "Voice", "Performance", "Keys" };
 	static Tab s_tab = Tab::General;
 
 	// A section of the selected tab: a heading, then its widgets.
@@ -457,91 +457,11 @@ namespace PSUVR
 			Combo( "Own body", s.m_fpBody, bodyIds, bodyNames, 4 );
 			Help( "Hands only: just the hands and weapons, right on the controllers (no reach limit), while the arms "
 				"follow the controllers (otherwise like Headless)." );
-			ImGui::Checkbox( "Body faces my head, legs strafe", &s.m_strafeBody );
-			Help( "Needs the arms to follow the controllers and a body that shows legs (not Hands only). The body "
-				"trails where you look; moving left, right or back turns the legs against the body." );
-			if( s.m_strafeBody )
-			{
-				ImGui::SliderFloat( "Legs toward the body", &s.m_strafeBodyBlend, 0.0f, 1.0f, "%.2f" );
-			}
 			ImGui::SliderFloat( "Eye height (m)", &s.m_fpEyeHeight, 1.2f, 2.0f, "%.2f" );
 			ImGui::SliderFloat( "Eye forward (m)", &s.m_fpEyeForward, 0.0f, 0.3f, "%.2f" );
 			ImGui::Checkbox( "Eye follows the walking lean", &s.m_fpEyeFollowsNeck );
 			Help( "The eye moves with the animated neck while you walk, so the camera isn't behind the shoulders. "
 				"Needs the arms to follow the controllers (first person)." );
-			ImGui::Checkbox( "Body in rest pose (no animations)", &s.m_bodyRestPose );
-			Help( "Replaces the game's idle, walk and attack animations with the plain skeleton; the arms, torso and legs "
-				"are then posed only by VR." );
-			if( s.m_bodyRestPose )
-			{
-				ImGui::Checkbox( "Scale body to my height", &s.m_bodyFitHeight );
-				Help( "Scales the model so its eyes are at the Eye height above. Set Eye height to your real eye height." );
-				ImGui::TextUnformatted( "Keep the game's animation on:" );
-				ImGui::CheckboxFlags( "Legs", &s.m_bodyAnimKeep, kVRKeepLegs );
-				Help( "The pelvis and legs keep the walk / idle animation (the strafe legs turn them)." );
-				ImGui::SameLine();
-				ImGui::CheckboxFlags( "Spine", &s.m_bodyAnimKeep, kVRKeepSpine );
-				ImGui::SameLine();
-				ImGui::CheckboxFlags( "Head", &s.m_bodyAnimKeep, kVRKeepHead );
-				ImGui::CheckboxFlags( "Arms", &s.m_bodyAnimKeep, kVRKeepArms );
-				Help( "Only shows where the arms don't follow the controllers (third person, or that option off)." );
-				ImGui::SameLine();
-				ImGui::CheckboxFlags( "Weapons", &s.m_bodyAnimKeep, kVRKeepWeapons );
-				Help( "The weapon turns in the hand as in the attack animations." );
-				ImGui::SameLine();
-				ImGui::CheckboxFlags( "Extras", &s.m_bodyAnimKeep, kVRKeepExtras );
-				Help( "Unticked parts are the plain skeleton; ticked parts move as the game animates them, on top of the "
-					"parts they hang from. All unticked = a skeleton for VR and body tracking." );
-				ImGui::Checkbox( "Body follows my head (hips, spine)", &s.m_bodyIk );
-				if( s.m_bodyIk )
-				{
-					ImGui::SliderFloat( "Neck below eyes (m)", &s.m_bodyNeckDrop, 0.05f, 0.35f, "%.2f" );
-					Help( "Higher keeps the camera out of the shoulders; lower straightens the legs (the hips follow the neck)." );
-					ImGui::SliderFloat( "Body behind eyes (m)", &s.m_bodyBack, 0.0f, 0.4f, "%.2f" );
-					ImGui::Checkbox( "Head turns with the headset", &s.m_bodyHeadFollowsHmd );
-					Help( "The neck and head turn and tilt with your head (shadow, mirrors, the \"full\" body). "
-						"Crouching pushes the hips back; the spine bends over the waist, chest and shoulders." );
-				}
-				Help( "First person. The hips drop when you crouch and the spine leans toward your head." );
-				ImGui::Checkbox( "Planted feet that step", &s.m_bodyProceduralLegs );
-				Help( "The feet stay where they are in the world and step to a new spot when the hips move away. Replaces the strafe legs." );
-			}
-			ImGui::Checkbox( "Body trackers (restart the game)", &s.m_trackersEnabled );
-			Help( "Reads SteamVR trackers (Vive, Tundra, SlimeVR, Standable) through OpenXR, or OpenVR when OpenXR "
-				"doesn't list them. Roles come from SteamVR > Manage Trackers or the tracker's name. For now they are only "
-				"shown, they don't move the body yet." );
-			if( s.m_trackersEnabled )
-			{
-				static const char *const sourceIds[] = { "auto", "openxr", "openvr" };
-				static const char *const sourceNames[] = { "Auto", "OpenXR only", "OpenVR" };
-				Combo( "Tracker source", s.m_trackerSource, sourceIds, sourceNames, 3 );
-				Help( "Auto: OpenXR's trackers, or OpenVR's when OpenXR lists none (Standable). OpenVR also finds trackers "
-					"by name (Hips, Foot Left, ...) when they have no role." );
-				ImGui::Checkbox( "Show tracker discs", &s.m_trackerShowDiscs );
-				if( context.inGame )
-				{
-					if( ImGui::Button( "Calibrate trackers" ) )
-					{
-						++s.m_trackerCalibRequest;
-					}
-					ImGui::SameLine();
-					ImGui::TextDisabled( s.m_trackerCal.empty() ? "(not calibrated)" : "(calibrated)" );
-					Help( "After the click, stand straight, arms hanging, look ahead and keep still: taken after 5 seconds "
-						"(a buzz each second, a long buzz when done), saved. It lines the trackers up with your body, also "
-						"when the tracking app's space is turned (Standable). Redo it after moving a tracker." );
-					if( !s.m_trackerCal.empty() && ImGui::Button( "Reset tracker calibration" ) )
-					{
-						s.m_trackerCal.clear();
-					}
-				}
-				ImGui::SliderFloat( "Tracker smoothing", &s.m_trackerSmoothing, 0.0f, 1.0f, "%.2f" );
-				ImGui::SliderFloat( "Hold a lost tracker (s)", &s.m_trackerLostHold, 0.0f, 1.0f, "%.2f" );
-				if( context.trackerStatus )
-				{
-					const std::string status = context.trackerStatus();
-					ImGui::TextWrapped( "Trackers: %s", status.c_str() );
-				}
-			}
 			ImGui::SliderFloat( "Neck cut below eyes (m)", &s.m_fpNeckDrop, 0.05f, 0.5f, "%.2f" );
 			ImGui::SliderFloat( "Lean limit (m)", &s.m_fpLeanLimit, 0.0f, 0.5f, "%.2f" );
 			ImGui::SliderFloat( "Crouch limit (m)", &s.m_fpCrouchLimit, 0.0f, 0.5f, "%.2f" );
@@ -582,10 +502,175 @@ namespace PSUVR
 			ImGui::SliderFloat( "Zoom speed (m/s)", &s.m_tpZoomSpeed, 0.5f, 10.0f, "%.1f" );
 			ImGui::SliderFloat( "Closest (m)", &s.m_tpMinDistance, 0.5f, 5.0f, "%.1f" );
 			ImGui::SliderFloat( "Farthest (m)", &s.m_tpMaxDistance, 3.0f, 20.0f, "%.1f" );
+		}
+
+		if( Section( Tab::Body, "Body pose (first person)" ) )
+		{
+			ImGui::Checkbox( "Body in rest pose (no animations)", &s.m_bodyRestPose );
+			Help( "Replaces the game's idle, walk and attack animations with the plain skeleton; the arms, torso and legs "
+				"are then posed only by VR." );
+			if( s.m_bodyRestPose )
+			{
+				ImGui::Checkbox( "Scale body to my height", &s.m_bodyFitHeight );
+				Help( "Scales the model so its eyes are at the Eye height (Camera tab). Set Eye height to your real eye height." );
+				ImGui::TextUnformatted( "Keep the game's animation on:" );
+				ImGui::CheckboxFlags( "Legs", &s.m_bodyAnimKeep, kVRKeepLegs );
+				Help( "The pelvis and legs keep the walk / idle animation (the strafe legs turn them)." );
+				ImGui::SameLine();
+				ImGui::CheckboxFlags( "Spine", &s.m_bodyAnimKeep, kVRKeepSpine );
+				ImGui::SameLine();
+				ImGui::CheckboxFlags( "Head", &s.m_bodyAnimKeep, kVRKeepHead );
+				ImGui::CheckboxFlags( "Arms", &s.m_bodyAnimKeep, kVRKeepArms );
+				Help( "Only shows where the arms don't follow the controllers (third person, or that option off)." );
+				ImGui::SameLine();
+				ImGui::CheckboxFlags( "Weapons", &s.m_bodyAnimKeep, kVRKeepWeapons );
+				Help( "The weapon turns in the hand as in the attack animations." );
+				ImGui::SameLine();
+				ImGui::CheckboxFlags( "Extras", &s.m_bodyAnimKeep, kVRKeepExtras );
+				Help( "Unticked parts are the plain skeleton; ticked parts move as the game animates them, on top of the "
+					"parts they hang from. All unticked = a skeleton for VR and body tracking." );
+				ImGui::Checkbox( "Body follows my head (hips, spine)", &s.m_bodyIk );
+				if( s.m_bodyIk )
+				{
+					ImGui::SliderFloat( "Neck below eyes (m)", &s.m_bodyNeckDrop, 0.05f, 0.35f, "%.2f" );
+					Help( "Higher keeps the camera out of the shoulders; lower straightens the legs (the hips follow the neck)." );
+					ImGui::SliderFloat( "Body behind eyes (m)", &s.m_bodyBack, 0.0f, 0.4f, "%.2f" );
+					ImGui::Checkbox( "Head turns with the headset", &s.m_bodyHeadFollowsHmd );
+					Help( "The neck and head turn and tilt with your head (shadow, mirrors, the \"full\" body). "
+						"Crouching pushes the hips back; the spine bends over the waist, chest and shoulders." );
+				}
+				Help( "First person. The hips drop when you crouch and the spine leans toward your head." );
+				ImGui::Checkbox( "Planted feet that step", &s.m_bodyProceduralLegs );
+				Help( "The feet stay where they are in the world and step to a new spot when the hips move away. Replaces the strafe legs." );
+			}
+			ImGui::Checkbox( "Body faces my head, legs strafe", &s.m_strafeBody );
+			Help( "Needs the arms to follow the controllers and a body that shows legs (not Hands only). The body "
+				"trails where you look; moving left, right or back turns the legs against the body." );
+			if( s.m_strafeBody )
+			{
+				ImGui::SliderFloat( "Legs toward the body", &s.m_strafeBodyBlend, 0.0f, 1.0f, "%.2f" );
+			}
+		}
+
+		if( Section( Tab::Body, "Arms" ) )
+		{
+			ImGui::Checkbox( "Arms follow the controllers (first person)", &s.m_handsFollow );
+			Help( "The character's arms reach for where you hold the controllers." );
+			if( s.m_handsFollow )
+			{
+				ImGui::Checkbox( "Find the body once per frame (faster)", &s.m_handsWorldOncePerFrame );
+				Help( "The arms need to know where the body is. The game is asked once per frame instead of every time the "
+					"body is drawn (about 9 times). Untick if the arms lag behind or jitter." );
+				ImGui::Checkbox( "Stretch arms to reach my hands", &s.m_armStretch );
+				Help( "The character's arms are shorter than most players'. On: they stretch (up to half again) so the "
+					"hands sit on the controllers. Off: the arm stops at its own length." );
+					ImGui::SliderFloat( "Shoulder lift", &s.m_bodyShoulderShrug, 0.0f, 1.0f, "%.2f" );
+					Help( "The shoulders rise and reach forward when your hand is far out or above the shoulder. 0 = off." );
+					ImGui::SliderFloat( "Elbow follows the controller", &s.m_bodyElbowFromHand, 0.0f, 1.0f, "%.2f" );
+					Help( "0: the elbows hang down and out. Higher: they follow how you turn the controller (wrist up, elbow out)." );
+				bool attackAnimation = s.m_handsAttack == "animation";
+				if( ImGui::Checkbox( "Play the game's attack animation", &attackAnimation ) )
+				{
+					s.m_handsAttack = attackAnimation ? "animation" : "controller";
+				}
+				Help( "Off: your arms stay on the controllers while attacking (your swing is the swing). "
+					"On: the arms hand over to the game's attack animation." );
+				ImGui::Checkbox( "Play the game's Photon Art / technique animation", &s.m_handsPhotonArtAnimation );
+				Help( "The same for grip + swing / trigger (Photon Arts, technique slot 2). Off: your arms stay on "
+					"the controllers." );
+				ImGui::Checkbox( "Staff / rod stays in the hand while casting", &s.m_techWeaponStill );
+				Help( "The staff or rod keeps the hold it had before the cast instead of moving with the casting "
+					"animation. The technique itself is unchanged. The TCSM keeps its animation." );
+				if( context.inGame )
+				{
+					if( ImGui::Button( "Calibrate hand angles" ) )
+					{
+						++s.m_handCalibRequest;
+					}
+					ImGui::SameLine();
+					ImGui::TextDisabled( s.m_handCalibrated ? "(calibrated)" : "(automatic)" );
+					Help( "After the click, hold both arms straight out in front, hands in fists around the controllers, "
+						"palms facing each other (knuckles forward), and keep still: the angle is taken after 5 seconds "
+						"(a buzz each second, a long buzz when done); it is saved. Also on both grips + both triggers. "
+						"Without it the angle is estimated, which suits most controllers." );
+					if( s.m_handCalibrated && ImGui::Button( "Back to automatic" ) )
+					{
+						s.m_handCalibrated = false;
+					}
+				}
+				{
+					ImGui::SliderFloat( "Hand pitch (deg)", &s.m_handPitch, -90.0f, 90.0f, "%.0f" );
+					ImGui::SliderFloat( "Hand roll (deg)", &s.m_handRoll, -180.0f, 180.0f, "%.0f" );
+					Help( "Fine tune the hand angle on top of the calibration (tip up / down, twist)." );
+				}
+			}
+		}
+
+		if( Section( Tab::Body, "Third person body" ) )
+		{
 			ImGui::Checkbox( "Body follows me (arms, head, crouch)", &s.m_bodyIkThirdPerson );
 			Help( "The character's arms follow the controllers. With \"Body in rest pose\" and \"Body follows my head\" "
-				"(First person section) its head, hips and spine also follow your headset, relative to where you stood "
+				"(Body pose above) its head, hips and spine also follow your headset, relative to where you stood "
 				"at the last recenter." );
+		}
+
+		if( Section( Tab::Body, "Full-body trackers" ) )
+		{
+			ImGui::Checkbox( "Body trackers (restart the game)", &s.m_trackersEnabled );
+			Help( "Reads SteamVR trackers (Vive, Tundra, SlimeVR, Standable) through OpenXR, or OpenVR when OpenXR "
+				"doesn't list them. Roles come from SteamVR > Manage Trackers or the tracker's name. Calibrate them, then "
+				"\"Trackers move the body\" puts your hips, chest, knees, feet and elbows on the character." );
+			if( s.m_trackersEnabled )
+			{
+				static const char *const sourceIds[] = { "auto", "openxr", "openvr" };
+				static const char *const sourceNames[] = { "Auto", "OpenXR only", "OpenVR" };
+				Combo( "Tracker source", s.m_trackerSource, sourceIds, sourceNames, 3 );
+				Help( "Auto: OpenXR's trackers, or OpenVR's when OpenXR lists none (Standable). OpenVR also finds trackers "
+					"by name (Hips, Foot Left, ...) when they have no role." );
+				ImGui::Checkbox( "Show tracker discs", &s.m_trackerShowDiscs );
+				if( context.inGame )
+				{
+					if( ImGui::Button( "Calibrate trackers" ) )
+					{
+						++s.m_trackerCalibRequest;
+					}
+					ImGui::SameLine();
+					ImGui::TextDisabled( s.m_trackerCal.empty() ? "(not calibrated)" : "(calibrated)" );
+					Help( "After the click, stand straight, arms hanging, look ahead and keep still: taken after 5 seconds "
+						"(a buzz each second, a long buzz when done), saved. It lines the trackers up with your body, also "
+						"when the tracking app's space is turned (Standable). Redo it after moving a tracker." );
+					if( !s.m_trackerCal.empty() && ImGui::Button( "Reset tracker calibration" ) )
+					{
+						s.m_trackerCal.clear();
+					}
+				}
+				ImGui::Checkbox( "Measuring eye height also calibrates trackers", &s.m_trackerCalibWithEyeHeight );
+				Help( "Both grips + left stick down sets the eye height; with this on and a tracker tracked it also starts the "
+					"tracker calibration: let the arms hang and keep still for 5 seconds (a buzz each second)." );
+				ImGui::SliderFloat( "Tracker smoothing", &s.m_trackerSmoothing, 0.0f, 1.0f, "%.2f" );
+				ImGui::SliderFloat( "Hold a lost tracker (s)", &s.m_trackerLostHold, 0.0f, 1.0f, "%.2f" );
+				ImGui::Checkbox( "Trackers move the body", &s.m_trackerDriveBody );
+				Help( "Needs a tracker calibration, the rest pose and \"Body follows my head\". Each tracker takes over its part of "
+					"the body; a lost one eases back to the estimate (from the head and hands) in 0.3 s." );
+				if( s.m_trackerDriveBody )
+				{
+					ImGui::Indent();
+					ImGui::Checkbox( "Hips", &s.m_trackerDriveWaist );
+					ImGui::SameLine();
+					ImGui::Checkbox( "Chest", &s.m_trackerDriveChest );
+					ImGui::SameLine();
+					ImGui::Checkbox( "Feet", &s.m_trackerDriveFeet );
+					ImGui::Checkbox( "Knees", &s.m_trackerDriveKnees );
+					ImGui::SameLine();
+					ImGui::Checkbox( "Elbows", &s.m_trackerDriveElbows );
+					ImGui::Unindent();
+				}
+				if( context.trackerStatus )
+				{
+					const std::string status = context.trackerStatus();
+					ImGui::TextWrapped( "Trackers: %s", status.c_str() );
+				}
+			}
 		}
 
 		if( Section( Tab::General, "Turning" ) )
@@ -688,56 +773,6 @@ namespace PSUVR
 			Help( "For testing without the headset on: Ctrl+Shift+F9 toggles. Ctrl+numpad: 7/8/9 left/both/right, 1-5 rest/forward/gun/"
 				"raised/calib, 0 trigger, . grip, / Cross (A), + Circle (B), - stick click, 6 swing, * both grips. Ctrl+T/G/F/H "
 				"stick. A command file (psuex_vr_script.txt) runs whenever it changes; see VR_GUIDE.md." );
-			ImGui::Checkbox( "Arms follow the controllers (first person)", &s.m_handsFollow );
-			Help( "The character's arms reach for where you hold the controllers." );
-			if( s.m_handsFollow )
-			{
-				ImGui::Checkbox( "Find the body once per frame (faster)", &s.m_handsWorldOncePerFrame );
-				Help( "The arms need to know where the body is. The game is asked once per frame instead of every time the "
-					"body is drawn (about 9 times). Untick if the arms lag behind or jitter." );
-				ImGui::Checkbox( "Stretch arms to reach my hands", &s.m_armStretch );
-				Help( "The character's arms are shorter than most players'. On: they stretch (up to half again) so the "
-					"hands sit on the controllers. Off: the arm stops at its own length." );
-					ImGui::SliderFloat( "Shoulder lift", &s.m_bodyShoulderShrug, 0.0f, 1.0f, "%.2f" );
-					Help( "The shoulders rise and reach forward when your hand is far out or above the shoulder. 0 = off." );
-					ImGui::SliderFloat( "Elbow follows the controller", &s.m_bodyElbowFromHand, 0.0f, 1.0f, "%.2f" );
-					Help( "0: the elbows hang down and out. Higher: they follow how you turn the controller (wrist up, elbow out)." );
-				bool attackAnimation = s.m_handsAttack == "animation";
-				if( ImGui::Checkbox( "Play the game's attack animation", &attackAnimation ) )
-				{
-					s.m_handsAttack = attackAnimation ? "animation" : "controller";
-				}
-				Help( "Off: your arms stay on the controllers while attacking (your swing is the swing). "
-					"On: the arms hand over to the game's attack animation." );
-				ImGui::Checkbox( "Play the game's Photon Art / technique animation", &s.m_handsPhotonArtAnimation );
-				Help( "The same for grip + swing / trigger (Photon Arts, technique slot 2). Off: your arms stay on "
-					"the controllers." );
-				ImGui::Checkbox( "Staff / rod stays in the hand while casting", &s.m_techWeaponStill );
-				Help( "The staff or rod keeps the hold it had before the cast instead of moving with the casting "
-					"animation. The technique itself is unchanged. The TCSM keeps its animation." );
-				if( context.inGame )
-				{
-					if( ImGui::Button( "Calibrate hand angles" ) )
-					{
-						++s.m_handCalibRequest;
-					}
-					ImGui::SameLine();
-					ImGui::TextDisabled( s.m_handCalibrated ? "(calibrated)" : "(automatic)" );
-					Help( "After the click, hold both arms straight out in front, hands in fists around the controllers, "
-						"palms facing each other (knuckles forward), and keep still: the angle is taken after 5 seconds "
-						"(a buzz each second, a long buzz when done); it is saved. Also on both grips + both triggers. "
-						"Without it the angle is estimated, which suits most controllers." );
-					if( s.m_handCalibrated && ImGui::Button( "Back to automatic" ) )
-					{
-						s.m_handCalibrated = false;
-					}
-				}
-				{
-					ImGui::SliderFloat( "Hand pitch (deg)", &s.m_handPitch, -90.0f, 90.0f, "%.0f" );
-					ImGui::SliderFloat( "Hand roll (deg)", &s.m_handRoll, -180.0f, 180.0f, "%.0f" );
-					Help( "Fine tune the hand angle on top of the calibration (tip up / down, twist)." );
-				}
-			}
 			ImGui::Checkbox( "Left stick works menus (D-pad) automatically", &s.m_autoDpad );
 			Help( "In menus, shops, the mission counter, login screens and the weapon / item palette the left stick sends the D-pad. "
 				"Both grips + left stick click still flips it by hand." );

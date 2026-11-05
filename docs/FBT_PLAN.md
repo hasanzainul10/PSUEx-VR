@@ -189,7 +189,8 @@ waist -0.4, knees -0.7, feet -1.1 m): a body **lying in the air in front of you*
 - Discs: raw disc (dim) + calibrated joint disc (bright) per role. **Test 5a:** after calibrating, the bright discs sit on your
   hips / knees / feet / elbows and follow them; walking / turning keeps them on.
 
-**4. Trackers drive `VRBodyIk`** (after 5a tests OK), per role, `trackerDriveBody` (true) + group toggles waist / chest / feet /
+**4. Trackers drive `VRBodyIk`** (built 2026-11-06, untested; details in VR_HANDOFF "Phase 4 trackers drive the body". Deviation:
+lower-body heights come from the floor (STAGE) scaled by character hip / calibrated hip, so feet meet the ground whatever fpEyeHeight is), per role, `trackerDriveBody` (true) + group toggles waist / chest / feet /
 knees / elbows:
 - Waist -> pelvis 1 position + orientation (replaces the head-derived hips and the `StrafeUpdate` yaw while tracked).
 - Chest -> spine CCD end orientation (10 / 11), head still to the HMD.

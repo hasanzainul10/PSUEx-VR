@@ -24,6 +24,7 @@ namespace PSUVR
 			bool jointValid = false;
 			float joint[ 3 ]{};
 			float jointOrientation[ 4 ]{ 0.0f, 0.0f, 0.0f, 1.0f };
+			float jointFloorHeight = 0.0f; // the joint's height above the floor (STAGE), meters
 		};
 
 		// Once per frame after the runtime's input update (next to VRControllers::Update).
@@ -40,5 +41,10 @@ namespace PSUVR
 		std::string StatusLine();
 		// vr.trackerCal holds a calibration.
 		bool Calibrated();
+		// The user's stature the calibration assumed (meters), 0 when unknown (older calibrations).
+		float CalibratedStature();
+		// Where the calibration put the joint of a role on a person standing straight, meters above the floor
+		// (0 for stature-relative joints when the stature is unknown).
+		float CalibratedJointHeight( TrackerRole role );
 	}
 }

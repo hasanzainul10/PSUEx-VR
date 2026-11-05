@@ -136,7 +136,7 @@ struct VRSettings
 	// from your head onto the character (rest pose, its facing).
 	bool m_bodyIkThirdPerson = false;
 	// Body trackers through OpenXR (XR_HTCX_vive_tracker_interaction; roles set in SteamVR > Manage
-	// Trackers). Read at VR start: changing it needs a game restart. Phase 3: read and shown only.
+	// Trackers). Read at VR start: changing it needs a game restart.
 	bool m_trackersEnabled = false;
 	// Where tracker poses come from: "auto" (OpenXR; OpenVR when OpenXR lists none after ~2 s),
 	// "openxr" (HTCX only), "openvr" (OpenVR side connection for every role HTCX doesn't have).
@@ -146,12 +146,22 @@ struct VRSettings
 	// Tracker calibration (VRTrackers::Calibrate), STAGE space: "g px py pz qx qy qz qw s;r<role> x y z qx qy qz qw;..."
 	// (whole-frame fit, then each tracker's offset to its joint). Empty = not calibrated.
 	std::string m_trackerCal;
+	// Both grips + left stick down (measure eye height) also calibrates the trackers when any is tracked.
+	bool m_trackerCalibWithEyeHeight = true;
 	// Runtime only (not saved): bumped by the panel's Calibrate trackers button.
 	int m_trackerCalibRequest = 0;
 	// Smoothing of the tracker positions, 0 = raw, 1 = heavy (one-euro filter).
 	float m_trackerSmoothing = 0.3f;
 	// A lost tracker keeps its last pose this long (seconds) before it counts as gone.
 	float m_trackerLostHold = 0.3f;
+	// Calibrated trackers drive the body (VRBodyIk, rest pose + bodyIk): each role eases in / out over
+	// 0.3 s, the estimate (head-derived hips, planted feet, body-derived poles) fills in for missing ones.
+	bool m_trackerDriveBody = true;
+	bool m_trackerDriveWaist = true;  // hips position + yaw
+	bool m_trackerDriveChest = true;  // chest turn and lean
+	bool m_trackerDriveFeet = true;   // feet position + orientation (kept above the ground)
+	bool m_trackerDriveKnees = true;  // which way the knees bend
+	bool m_trackerDriveElbows = true; // which way the elbows bend
 	// Arms on the controllers: the shoulders lift toward far / high hands (0 = off, 0.5 = up to 20 deg).
 	float m_bodyShoulderShrug = 0.5f;
 	// Arms on the controllers: how much the elbow follows the controller's angle (0 = hangs by the

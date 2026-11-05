@@ -747,7 +747,7 @@ Follow-up (voice-session review): RequestAttack now sets s_lastAttackHand = hand
 **User (2026-11-01): works** (right swing casts the wand, TCSM only from the left; committed in `6e596e6`).
 **Holster zones enlarged (2026-10-31, built Debug, NOT deployed: PSUC was running).** Zones are now ellipsoids (`VRHolster::ZoneShape`, half extents right/up/forward at 1.7 m, x radius setting / default): head-back centre (0, +0.12, -0.20) half (0.28, 0.30, 0.30) (up and back, forward to the shoulders); waist centre (0, -0.72, -0.28) half (0.34, 0.28, 0.30); mouth centre (0, -0.20, +0.14) in head axes, half (0.20, 0.25, 0.20) (face to chest, out front). The radius sliders now scale the whole zone (defaults unchanged). Debug discs mark the centre and six extreme points. Deploy `Debug\PSUExD.dll` + `PSUExVRConfig.exe` when the game is closed.
 
-## Full-body tracking (Phase 1 `a63ec2b`, 2a `eaff1fd`, 2b + fixes `d0f5ba2`, all user-tested OK; Phase 3 HTCX `32b9986`; OpenVR source built 2026-11-05, uncommitted)
+## Full-body tracking (Phase 1 `a63ec2b`, 2a `eaff1fd`, 2b + fixes `d0f5ba2`, all user-tested OK; Phase 3 HTCX `32b9986`; OpenVR source `d733d7e`; 5a calibration `bfecafa`; Phase 4 built 2026-11-06, uncommitted, untested)
 **OpenVR tracker source (built Debug + Release 2026-11-05 23:25, Debug + config exe deployed, previous DLL `PSUExD.dll.bak_preopenvr`;
 uncommitted, untested):** haptics B1/B2 committed `dd737bb`, Phase 3 HTCX `32b9986` (both local, not pushed).
 - `PSUVR/OpenVRRuntime.{h,cpp}` = `OpenVRTrackerSource` (not an `IVRRuntime`): no `openvr_api.dll`; uses SteamVR's `vrclient.dll`
@@ -773,7 +773,50 @@ the HMD` -> STAGE != STANDING, fine but note it; discs mirrored / rotated -> con
 Standable now emulates Vive trackers?), so the OpenVR source never connected (auto). Raw poses lie flat ~1 m up in front of the user
 (whole-frame error, see `docs/FBT_PLAN.md` "Phase 4 + 5 plan"). Minor: the HTCX `tracker connected` event logs the same path
 (footright) 8 times. OpenVR source still untested (set `trackerSource` openvr to try). Next: 5a calibration with a global fit.
-**Phase 5a tracker calibration (built Debug + Release 2026-11-06, Debug + config exe deployed 23:58, previous DLL `PSUExD.dll.bak_precal`; uncommitted, untested; OpenVR
+**Phase 4 trackers drive the body + scale clamp (built Debug + Release 2026-11-06 00:13, Debug DLL + config exe deployed, previous DLL
+`PSUExD.dll.bak_prephase4` = 5a; uncommitted, untested):** 5a committed `bfecafa`.
+- Calibration: scale clamped 0.9..1.1 (was 0.7..1.4; run 2's 0.79 shrank motion ~20%); `trackerCal` now also saves `h <stature>`.
+  `Pose::jointFloorHeight` (STAGE y of the joint); `VRTrackers::CalibratedStature` / `CalibratedJointHeight`.
+  **The game's saved `trackerCal` is the old one (scale 0.79, no `h`): recalibrate first**, else leg scale stays 1.
+- `VRBodyIk::UpdateTrackers` (VRHands `Apply`, after dt, rest pose only): per role weight 0 <-> 1 over 0.3 s (`live` = drive on +
+  group on + calibrated + `jointValid`; last pose kept for the ease-out, re-mapped each frame). Log every 3 s:
+  `VRBody: sources pelvis=tracker|estimate|blend x chest=... feet=L/R knees=L/R elbows=L/R (legs xS)`.
+- Mapping: joints through `VRCamera::BodyTrackingToWorld` (first + third person). Lower body (hips, knees, feet) take their **height
+  from the floor** instead: `groundY + jointFloorHeight * units * legScale` (legScale = character hip (bone 2 rest) / your calibrated
+  hip 0.55 x stature, 0.6..1.6); feet = `groundY + ankleHeight + max(0, floorH - 0.07) * ...` (never below the ground).
+- `Solve`: waist -> hips shift (bone 2 to the tracker, blended with the head estimate) + legs subtree (bone 2) yaw to the tracker; chest
+  -> chest subtree (bone 10) to the tracker frame (rest axes turned by the tracker's turn from the root's level frame), limit 70 deg,
+  after the CCD, before head-to-HMD; feet -> ankle target (blend from planted feet, or the rest ankle without them) + foot orientation
+  (slerp level <-> tracker, limit 120 deg; foot levelling now on bone 2, not 1); knees -> leg pole (`PoleToward`, part across the reach).
+  Legs run when planted feet are on or a foot / knee has weight. VRHands: strafe `s_bodyYaw` pulled to the waist yaw by its weight
+  (first person); elbows -> arm pole after `ElbowPole` (`TrackedElbowPole`); Solve also runs when only trackers drive.
+- Settings `trackerDriveBody` + `trackerDriveWaist / Chest / Feet / Knees / Elbows` (all default true; absent in the game files =
+  true). Panel: under the tracker sliders, "Trackers move the body" + Hips / Chest / Feet / Knees / Elbows.
+- Panel: new Advanced tab **Body** (after Camera), sections "Body pose (first person)" (rest pose, anim keep, bodyIk, planted feet,
+  strafe legs; moved from Camera > First person), "Arms" (arms follow, stretch, shrug, elbow, attack / PA animation, hand calibration;
+  moved from Controllers), "Third person body" (`bodyIkThirdPerson`, from Camera > Third person), "Full-body trackers" (all tracker
+  settings). Own body, eye height / lean, room walk stay in Camera. Deployed with the Phase 4 DLL (same backup).
+- **Upper body "shoulders over the head" (user, third person) fixed, built, deployed:** log had head 5.5 units
+  above the third person eye anchor (recenter taken 53 cm low), so floor-placed hips left the neck 56 cm under the head; the arms
+  reached up and the shrug maxed. `VRCamera::TpHeadWorld` now takes the head height from the floor when STAGE is known:
+  `off.y = min(headAboveFloor - fpEyeHeight, 0.3)`. First person unaffected (anchor leash). Deployed 00:28 (Debug DLL + config exe). **User: "that works"** (upper body OK;
+lower body already OK). Phase 4 + Body tab + shortcut + this fix all still uncommitted. **Test:** third person, recenter
+  while crouched, stand: `VRBody: third person eye ... head ...` head y within ~1 unit of the eye; hips line `neck error` < 1.5.
+- Shortcut: both grips + left stick down (measure eye height, `VRSyntheticPad::MeasureEyeHeight`) also bumps `trackerCalibRequest`
+  when `trackersEnabled` + `trackerCalibWithEyeHeight` (new, default true; checkbox in Body > Full-body trackers) + `VRTrackers::Any()`.
+  Toast "Eye height X m. Trackers: arms down, keep still 5 s"; log `tracker calibration requested with the eye height`; controller
+  label says "Down: eye height + calibrate trackers". The panel's Measure button (Simple page / wizard) does not calibrate trackers.
+**Test 4:** recalibrate (panel > Calibrate trackers; log `VRTrackerCal: ... scale` within 0.90..1.10). Then `tools/lastlog.sh -d
+'VRBody: sources|VRBody: hips|VRBody: feet'`: `sources pelvis=tracker ... (legs x~1)` (0.8-1.2 normal), hips line `waist tracker 1.00`.
+1) Stand: the body looks as before (calibration = rest pose). 2) Squat: hips drop, knees go forward, feet stay on the floor.
+3) Kick / lift a knee: that leg follows, the foot doesn't go under the floor. 4) Step sideways: feet and hips follow you.
+5) Turn the hips without the head: legs turn, the chest follows the chest tracker. 6) Cover a tracker: the limb eases back to the
+estimate in ~0.3 s after the 0.3 s hold, no pop (`sources` shows `estimate`). 7) Stick walking: the body moves with the character;
+the feet slide with it (no stepping while tracked: expected). 8) Untick "Trackers move the body": back to the estimate. Third person
+(`bodyIkThirdPerson` on): same with the orbit camera. Bad outcomes: legs too long / hips floating -> `legs x` far from 1; feet below the
+floor -> ankle height; chest twisted at rest -> recalibrate, else the chest frame math; knees backward -> knee pole.
+**Later (note only):** detect Standable re-aligning its space (calibration residual jump) and toast "recalibrate trackers".
+**Phase 5a tracker calibration (built Debug + Release 2026-11-06, committed `bfecafa`, user-tested OK; OpenVR
 source committed `d733d7e`):** in `VRTrackers.cpp` (no new file). `IVRRuntime::GetHeadPose` / `GetStagePose` (OpenXR: VIEW and
 STAGE located in LOCAL in `UpdateInput` at the trackers' time). Panel (Body trackers block, in game): "Calibrate trackers" ->
 `trackerCalibRequest` -> 5 s countdown (Countdown buzz each second, Done) -> `Capture`: expected joints in STAGE from a body model
@@ -793,7 +836,7 @@ rms raw 104 / shift 54 / fit 18 cm`, offsets 9..36 cm (elbows noisiest). Run 2: 
 heights (ankles 0.07, knees 0.45, hips 0.87, chest 1.12 m). Lessons: Standable can re-align its space during a session, so a saved
 whole-frame fit goes stale -> recalibrate then (later: detect a jump in the fit residual and toast "recalibrate"). Scale 0.79 shrinks
 tracker motion by ~20%: consider clamping the scale to 0.9..1.1, or fitting scale only with a big turn. Uncommitted (5a code).
-**Next:** commit 5a (ask), then Phase 4 (trackers drive VRBodyIk, `docs/FBT_PLAN.md`) in a new session.
+**Next (done above):** 5a committed, scale clamp + Phase 4 built; see "Phase 4 trackers drive the body".
 **Old note, Phase 4 + 5** (superseded by the plan in FBT_PLAN): calibration (stand straight, rest skeleton under the HMD, `offset = inverse(trackerWorld) *
 boneWorld` per role, saved as `trackerCal<Role>`) + trackers drive `VRBodyIk` (waist -> pelvis, chest -> spine end, feet -> leg
 `SolveArm` targets, knees / elbows -> poles; per-role fallback to the estimate with a 0.3 s blend).
@@ -1013,3 +1056,6 @@ both hands buzz, bigger hits harder; heal: nothing. Log `tools/lastlog.sh -d VRH
 `hurt A -> B of M`. If no `hurt` lines: look for `has no status block` (then use the 0x00B90F30 lookup / hook `+0x68`). If no `our
 hit` lines: enemies override vtable +0x30 (check the vtables in the log of other hits).
 Next after the test: B3 (gun recoil per shot, technique charge / release), then B4 (walking haptics).
+**Result (2026-11-06): B1/B2 work as intended** (hit buzz on the attacking hand, JA / PA harder, hurt buzz both hands). Already
+in commit `dd737bb`; addresses 0x0047AD30 / status block +0x20 / +0x24 can be marked verified. **Next: B3** (gun recoil per shot,
+technique charge / release), then B4.

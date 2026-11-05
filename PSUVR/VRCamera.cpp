@@ -1190,6 +1190,14 @@ namespace PSUVR
 			{
 				Vec3 off = TpDirToWorld( { s_hmdTracking[ 0 ] - s_refPosition.x, s_hmdTracking[ 1 ] - s_refPosition.y,
 					s_hmdTracking[ 2 ] - s_refPosition.z } );
+				// Height from the floor when the headset knows it: standing straight (at fpEyeHeight) is the
+				// character's eye, wherever you recentered. A recenter while crouched or seated put the head
+				// 55 cm above the eye (2026-11-06), and floor-placed trackers then left the body far below it.
+				float aboveFloor = 0.0f;
+				if( System::Get().HeadHeightAboveFloor( aboveFloor ) && aboveFloor > 0.3f )
+				{
+					off.y = ( std::min )( aboveFloor - Config::Get().vr.m_fpEyeHeight, 0.3f );
+				}
 				const float level = std::sqrt( off.x * off.x + off.z * off.z );
 				if( level > kTpBodyLeanMeters )
 				{

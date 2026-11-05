@@ -7,6 +7,7 @@
 #include "VRHolster.h"
 #include "VRSystem.h"
 #include "VRMotionLayout.h"
+#include "VRTrackers.h"
 #include "VRPerf.h"
 #include "VRSpeech.h"
 #include "VRUiPointer.h"
@@ -1112,6 +1113,15 @@ namespace PSUVR
 			PSU_LOG( "VRSyntheticPad: eye height measured %.2f m, set %.2f m\n", head, clamped );
 			Buzz( 0 );
 			Buzz( 1 );
+			// With trackers in use, the same standing-straight moment calibrates them (VRTrackers counts
+			// 5 s down with a buzz each second, then captures).
+			if( vr.m_trackersEnabled && vr.m_trackerCalibWithEyeHeight && VRTrackers::Any() )
+			{
+				++vr.m_trackerCalibRequest;
+				sprintf_s( s_text, "Eye height %.2f m. Trackers: arms down, keep still 5 s", clamped );
+				VRBindings::ShowToast( s_text );
+				PSU_LOG( "VRSyntheticPad: tracker calibration requested with the eye height\n" );
+			}
 		}
 
 		// One grip's state machine. Returns whether L1 / R1 is pressed this frame.
@@ -1944,7 +1954,8 @@ namespace PSUVR
 				}
 				set( 0, Control::Trigger, "Both triggers: calibrate hands" );
 				set( 1, Control::Trigger, "Both triggers: calibrate hands" );
-				set( 0, Control::Stick, "Up: Rogue's Toolkit menu / Down: measure eye height" );
+				set( 0, Control::Stick, vr.m_trackersEnabled && vr.m_trackerCalibWithEyeHeight && VRTrackers::Any()
+					? "Up: Rogue's Toolkit menu / Down: eye height + calibrate trackers" : "Up: Rogue's Toolkit menu / Down: measure eye height" );
 				int aimHand = 0;
 				if( vr.m_aimLeash && GunAiming( aimHand ) )
 				{
