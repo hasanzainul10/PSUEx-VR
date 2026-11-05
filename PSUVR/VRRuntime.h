@@ -112,5 +112,8 @@ namespace PSUVR
 		virtual bool GetHeadHeightAboveFloor( float &meters ) { meters = 0.0f; return false; }
 		// Body tracker by role. False when the role has no active device (or no tracker support).
 		virtual bool GetTrackerState( TrackerRole /*role*/, TrackerState &out ) { out = {}; return false; }
+		// Head (VIEW) and the STAGE origin (floor) in LOCAL, at the trackers' time. False when unknown.
+		virtual bool GetHeadPose( float /*position*/[ 3 ], float /*orientation*/[ 4 ] ) { return false; }
+		virtual bool GetStagePose( float /*position*/[ 3 ], float /*orientation*/[ 4 ] ) { return false; }
 	};
 }

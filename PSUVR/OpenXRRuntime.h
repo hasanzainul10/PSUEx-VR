@@ -24,6 +24,8 @@ namespace PSUVR
 		bool GetUiQuad( UiQuad &out ) override;
 		bool GetHeadHeightAboveFloor( float &meters ) override;
 		bool GetTrackerState( TrackerRole role, TrackerState &out ) override;
+		bool GetHeadPose( float position[ 3 ], float orientation[ 4 ] ) override;
+		bool GetStagePose( float position[ 3 ], float orientation[ 4 ] ) override;
 
 		// Sync controller actions and locate the controllers for the next views' display
 		// time (after BeginFrame, with LocateNextViews).
@@ -210,6 +212,9 @@ namespace PSUVR
 		// OpenVR tracker source (vr.trackerSource): roles HTCX doesn't give, from OpenVR's STANDING
 		// universe, aligned to LOCAL through STAGE (or the HMD when STAGE disagrees).
 		void UpdateOpenVRTrackers();
+		bool m_headValid = false, m_stageValid = false; // GetHeadPose / GetStagePose, from UpdateInput
+		float m_headPos[ 3 ]{}, m_headRot[ 4 ]{ 0.0f, 0.0f, 0.0f, 1.0f };
+		float m_stagePos[ 3 ]{}, m_stageRot[ 4 ]{ 0.0f, 0.0f, 0.0f, 1.0f };
 		bool m_htcxSeen = false;             // an HTCX tracker was active this session (auto: no OpenVR)
 		int m_openvrWaitFrames = 0;
 		bool m_openvrHmdAlign = false;       // aligning by the HMD instead of STAGE

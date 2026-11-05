@@ -518,6 +518,22 @@ namespace PSUVR
 				Help( "Auto: OpenXR's trackers, or OpenVR's when OpenXR lists none (Standable). OpenVR also finds trackers "
 					"by name (Hips, Foot Left, ...) when they have no role." );
 				ImGui::Checkbox( "Show tracker discs", &s.m_trackerShowDiscs );
+				if( context.inGame )
+				{
+					if( ImGui::Button( "Calibrate trackers" ) )
+					{
+						++s.m_trackerCalibRequest;
+					}
+					ImGui::SameLine();
+					ImGui::TextDisabled( s.m_trackerCal.empty() ? "(not calibrated)" : "(calibrated)" );
+					Help( "After the click, stand straight, arms hanging, look ahead and keep still: taken after 5 seconds "
+						"(a buzz each second, a long buzz when done), saved. It lines the trackers up with your body, also "
+						"when the tracking app's space is turned (Standable). Redo it after moving a tracker." );
+					if( !s.m_trackerCal.empty() && ImGui::Button( "Reset tracker calibration" ) )
+					{
+						s.m_trackerCal.clear();
+					}
+				}
 				ImGui::SliderFloat( "Tracker smoothing", &s.m_trackerSmoothing, 0.0f, 1.0f, "%.2f" );
 				ImGui::SliderFloat( "Hold a lost tracker (s)", &s.m_trackerLostHold, 0.0f, 1.0f, "%.2f" );
 				if( context.trackerStatus )

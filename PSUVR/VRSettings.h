@@ -143,6 +143,11 @@ struct VRSettings
 	std::string m_trackerSource = "auto";
 	// A disc at each tracker in the headset (debug).
 	bool m_trackerShowDiscs = false;
+	// Tracker calibration (VRTrackers::Calibrate), STAGE space: "g px py pz qx qy qz qw s;r<role> x y z qx qy qz qw;..."
+	// (whole-frame fit, then each tracker's offset to its joint). Empty = not calibrated.
+	std::string m_trackerCal;
+	// Runtime only (not saved): bumped by the panel's Calibrate trackers button.
+	int m_trackerCalibRequest = 0;
 	// Smoothing of the tracker positions, 0 = raw, 1 = heavy (one-euro filter).
 	float m_trackerSmoothing = 0.3f;
 	// A lost tracker keeps its last pose this long (seconds) before it counts as gone.

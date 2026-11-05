@@ -537,13 +537,21 @@ namespace PSUVR
 					{
 						continue;
 					}
+					// Calibrated: the joint bright, the raw tracker small and dim.
 					float sx, sy, depth;
 					const V3 point{ pose.position[ 0 ], pose.position[ 1 ], pose.position[ 2 ] };
 					if( proj.Project( point, sx, sy, depth ) )
 					{
+						float radius = ( pose.jointValid ? 0.025f : 0.04f ) * proj.Scale( depth );
+						radius = radius < 3.0f ? 3.0f : radius;
+						DrawDisc( device, sx, sy, radius, ( pose.held || pose.jointValid ? 0x50000000u : 0xC0000000u ) | rgb[ role ] );
+					}
+					const V3 joint{ pose.joint[ 0 ], pose.joint[ 1 ], pose.joint[ 2 ] };
+					if( pose.jointValid && proj.Project( joint, sx, sy, depth ) )
+					{
 						float radius = 0.04f * proj.Scale( depth );
 						radius = radius < 3.0f ? 3.0f : radius;
-						DrawDisc( device, sx, sy, radius, ( pose.held ? 0x50000000u : 0xC0000000u ) | rgb[ role ] );
+						DrawDisc( device, sx, sy, radius, ( pose.held ? 0x60000000u : 0xE0000000u ) | rgb[ role ] );
 					}
 				}
 			}

@@ -119,6 +119,7 @@ namespace
 	X( m_trackersEnabled, "trackersEnabled" ) \
 	X( m_trackerSource, "trackerSource" ) \
 	X( m_trackerShowDiscs, "trackerShowDiscs" ) \
+	X( m_trackerCal, "trackerCal" ) \
 	X( m_trackerSmoothing, "trackerSmoothing" ) \
 	X( m_trackerLostHold, "trackerLostHold" ) \
 	X( m_triangleChatL2, "triangleChatL2" ) \

@@ -773,6 +773,27 @@ the HMD` -> STAGE != STANDING, fine but note it; discs mirrored / rotated -> con
 Standable now emulates Vive trackers?), so the OpenVR source never connected (auto). Raw poses lie flat ~1 m up in front of the user
 (whole-frame error, see `docs/FBT_PLAN.md` "Phase 4 + 5 plan"). Minor: the HTCX `tracker connected` event logs the same path
 (footright) 8 times. OpenVR source still untested (set `trackerSource` openvr to try). Next: 5a calibration with a global fit.
+**Phase 5a tracker calibration (built Debug + Release 2026-11-06, Debug + config exe deployed 23:58, previous DLL `PSUExD.dll.bak_precal`; uncommitted, untested; OpenVR
+source committed `d733d7e`):** in `VRTrackers.cpp` (no new file). `IVRRuntime::GetHeadPose` / `GetStagePose` (OpenXR: VIEW and
+STAGE located in LOCAL in `UpdateInput` at the trackers' time). Panel (Body trackers block, in game): "Calibrate trackers" ->
+`trackerCalibRequest` -> 5 s countdown (Countdown buzz each second, Done) -> `Capture`: expected joints in STAGE from a body model
+under the head (stature = head height / 0.936; heights hips 0.55, chest 0.72, knees 0.285, elbows 0.63 of stature, ankles 7 cm;
+spine 8 cm behind the eyes, level head yaw); whole-frame fit by Horn's quaternion (Jacobi 4x4) + uniform scale 0.7..1.4 (>= 3
+trackers, else yaw / shift), kept only if it beats a plain shift by 5 cm (else identity); per-tracker offset (position + rotation,
+tracker frame). Saved as `trackerCal` string ("g ...;r<role> ..."), "Reset tracker calibration" clears it. `Pose::joint` /
+`jointOrientation` / `jointValid` (LOCAL) every frame; discs: calibrated joint bright 4 cm, raw tracker small and dim; log adds
+`joint (...)`. Python check of the Horn code: recovers a -90 deg X tilt exactly.
+**Test 5a:** deploy Debug `PSUExD.dll` + `PSUExVRConfig.exe` (backup `PSUExD.dll.bak_precal` first). Game, trackers on, panel >
+Calibrate trackers, stand straight 5 s. Log `tools/lastlog.sh -d VRTrackerCal`: `whole-frame fit full: turn ~90 deg, scale ~1,
+rms raw ... / fit < 10 cm`, offsets per role (a few cm .. 20 cm). Headset: bright discs on hips / knees / ankles / elbows / chest,
+following when you squat, lift a knee, turn around, walk. Then Phase 4 (trackers drive VRBodyIk, plan in FBT_PLAN).
+**Test 5a result (2026-11-06 ~00:10, user: "looks correct"):** run 1 (Standable space tilted): `fit full: turn 84 deg, scale 0.99,
+rms raw 104 / shift 54 / fit 18 cm`, offsets 9..36 cm (elbows noisiest). Run 2: Standable's raw space had become upright on its own
+(raw feet floor -0.07, waist 0.73, knees 0.36), `turn 1 deg, scale 0.79, rms raw 21 / shift 18 / fit 12 cm` -> joints at the right
+heights (ankles 0.07, knees 0.45, hips 0.87, chest 1.12 m). Lessons: Standable can re-align its space during a session, so a saved
+whole-frame fit goes stale -> recalibrate then (later: detect a jump in the fit residual and toast "recalibrate"). Scale 0.79 shrinks
+tracker motion by ~20%: consider clamping the scale to 0.9..1.1, or fitting scale only with a big turn. Uncommitted (5a code).
+**Next:** commit 5a (ask), then Phase 4 (trackers drive VRBodyIk, `docs/FBT_PLAN.md`) in a new session.
 **Old note, Phase 4 + 5** (superseded by the plan in FBT_PLAN): calibration (stand straight, rest skeleton under the HMD, `offset = inverse(trackerWorld) *
 boneWorld` per role, saved as `trackerCal<Role>`) + trackers drive `VRBodyIk` (waist -> pelvis, chest -> spine end, feet -> leg
 `SolveArm` targets, knees / elbows -> poles; per-role fallback to the estimate with a 0.3 s blend).

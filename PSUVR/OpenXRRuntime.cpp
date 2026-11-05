@@ -665,7 +665,38 @@ namespace PSUVR
 				t.floorHeight = floor.pose.position.y;
 			}
 		}
+		// Head and floor for the tracker calibration (same time as the trackers).
+		{
+			XrSpaceLocation loc{ XR_TYPE_SPACE_LOCATION };
+			m_headValid = m_viewSpace && XR_SUCCEEDED( xrLocateSpace( static_cast< XrSpace >( m_viewSpace ), base, time, &loc ) ) &&
+				( loc.locationFlags & kPoseValid ) == kPoseValid;
+			if( m_headValid )
+			{
+				CopyPose( loc.pose, m_headPos, m_headRot );
+			}
+			XrSpaceLocation stage{ XR_TYPE_SPACE_LOCATION };
+			m_stageValid = m_stageSpace && XR_SUCCEEDED( xrLocateSpace( static_cast< XrSpace >( m_stageSpace ), base, time, &stage ) ) &&
+				( stage.locationFlags & kPoseValid ) == kPoseValid;
+			if( m_stageValid )
+			{
+				CopyPose( stage.pose, m_stagePos, m_stageRot );
+			}
+		}
 		UpdateOpenVRTrackers();
+	}
+
+	bool OpenXRRuntime::GetHeadPose( float position[ 3 ], float orientation[ 4 ] )
+	{
+		std::copy( m_headPos, m_headPos + 3, position );
+		std::copy( m_headRot, m_headRot + 4, orientation );
+		return m_headValid;
+	}
+
+	bool OpenXRRuntime::GetStagePose( float position[ 3 ], float orientation[ 4 ] )
+	{
+		std::copy( m_stagePos, m_stagePos + 3, position );
+		std::copy( m_stageRot, m_stageRot + 4, orientation );
+		return m_stageValid;
 	}
 
 	namespace
