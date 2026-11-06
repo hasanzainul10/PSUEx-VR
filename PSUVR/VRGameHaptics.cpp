@@ -1,8 +1,10 @@
 #include "VRGameHaptics.h"
 
+#include "VRCamera.h"
 #include "VRControllers.h"
 #include "VRHaptics.h"
 #include "VRSyntheticPad.h"
+#include "VRUiPointer.h"
 #include "../Misc/Log.h"
 #include "../PSUExConfig.h"
 #include "../PSUMemory/Memory.hpp"
@@ -10,6 +12,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 
 namespace PSUVR
 {
@@ -47,6 +50,188 @@ namespace PSUVR
 			uint32_t s_spentStep = 0;  // the step that already cast / timed out: no new charge for it
 			double s_chargeStart = 0.0;
 			double s_nextChargePulse = 0.0;
+
+			double Now();
+
+			// Footfalls (vr.hapticSteps). Speed in game units / s from player +0x114, smoothed.
+			constexpr uintptr_t kInputContext = 0x00B9CC80;   // low word 0x0405 = a menu has the input
+			constexpr float kStepMoving = 8.0f;               // slower = standing (VRHands' kMovingSpeed)
+			constexpr float kStepRunning = 30.0f;             // faster = running (tune from the log speeds)
+			constexpr float kStepTeleport = 60.0f;            // units in one frame: warp / area change, not a step
+			constexpr double kPlantFresh = 0.3;               // s since VRBodyIk's last foot update: plants are live
+			constexpr double kPlantMinInterval = 0.3;         // s between plant-sourced buzzes
+			double s_lastFootfall = 0.0;
+			std::atomic< int > s_plantLanded{ 0 };            // feet that landed since the last Update (bits)
+			std::atomic< int > s_plantUpdates{ 0 };
+			double s_plantSeen = -1.0;
+			bool s_haveStepPos = false;
+			float s_stepPos[ 2 ]{};
+			double s_stepPosTime = 0.0;
+			float s_stepSpeed = 0.0f;
+			// Motion loop source: the frame wrapping back is one footfall, half the loop the other.
+			int s_loopMotion = -1;      // class << 16 | motion id
+			float s_loopFrame = -1.0f;  // last frame
+			float s_loopMax = 0.0f;     // highest frame since the last wrap
+			bool s_loopHalfDone = false;
+			struct LoopLength
+			{
+				int motion = -1;
+				float frames = 0.0f;
+			};
+			LoopLength s_loops[ 8 ];
+			int s_loopNext = 0;
+#ifdef _DEBUG
+			int s_stepLogs = 0;
+#endif
+
+			float LoopFrames( int motion )
+			{
+				for( const LoopLength &l : s_loops )
+				{
+					if( l.motion == motion )
+					{
+						return l.frames;
+					}
+				}
+				return 0.0f;
+			}
+
+			void StoreLoop( int motion, float frames )
+			{
+				for( LoopLength &l : s_loops )
+				{
+					if( l.motion == motion )
+					{
+						l.frames = frames;
+						return;
+					}
+				}
+				s_loops[ s_loopNext ] = { motion, frames };
+				s_loopNext = ( s_loopNext + 1 ) % 8;
+			}
+
+			void Footfall( const char *source, int motion, float frame, float loop )
+			{
+				s_lastFootfall = Now();
+				const bool running = s_stepSpeed > kStepRunning;
+				const float scale = Config::Get().vr.m_hapticStepStrength * ( running ? 1.2f : 1.0f );
+				if( scale > 0.0f )
+				{
+					VRHaptics::PlayBoth( VRHaptics::Effect::Step, scale );
+				}
+#ifdef _DEBUG
+				if( s_stepLogs < 400 )
+				{
+					++s_stepLogs;
+					PSU_LOG( "VRHaptic: footfall %s, speed %.1f, source %s, motion %X frame %.1f loop %.1f\n", running ? "run" : "walk",
+						s_stepSpeed, source, motion, frame, loop );
+				}
+#endif
+			}
+
+			void ResetLoop()
+			{
+				s_loopMotion = -1;
+				s_loopFrame = -1.0f;
+				s_loopMax = 0.0f;
+				s_loopHalfDone = false;
+			}
+
+			void UpdateSteps()
+			{
+				const double now = Now();
+				const int landed = s_plantLanded.exchange( 0 );
+				if( s_plantUpdates.exchange( 0 ) > 0 )
+				{
+					s_plantSeen = now;
+				}
+				const auto &vr = Config::Get().vr;
+				const uintptr_t player = PSUMemory::ReadAbsoluteMemory< uint32_t >( kLocalPlayer );
+				PSUCombat::State combat{};
+				const bool view = VRCamera::FirstPersonMode() || ( vr.m_hapticStepsThirdPerson && VRCamera::ThirdPersonMode() );
+				if( !vr.m_hapticSteps || !player || !view || ( PSUMemory::ReadAbsoluteMemory< uint32_t >( kInputContext ) & 0xFFFF ) == 0x0405 ||
+					VRUiPointer::Wanted() || !PSUCombat::Read( combat ) || combat.paletteOpen )
+				{
+					s_haveStepPos = false;
+					s_stepSpeed = 0.0f;
+					ResetLoop();
+					return;
+				}
+
+				// Ground speed.
+				const float x = combat.position[ 0 ], z = combat.position[ 2 ];
+				if( s_haveStepPos && now > s_stepPosTime )
+				{
+					const float dx = x - s_stepPos[ 0 ], dz = z - s_stepPos[ 1 ];
+					const float dist = std::sqrt( dx * dx + dz * dz );
+					const float dt = static_cast< float >( now - s_stepPosTime );
+					if( dist > kStepTeleport )
+					{
+						s_stepSpeed = 0.0f;
+						ResetLoop();
+					}
+					else if( dt > 0.001f )
+					{
+						const float k = dt * 10.0f > 1.0f ? 1.0f : dt * 10.0f;
+						s_stepSpeed += ( dist / dt - s_stepSpeed ) * k;
+					}
+				}
+				s_stepPos[ 0 ] = x;
+				s_stepPos[ 1 ] = z;
+				s_stepPosTime = now;
+				s_haveStepPos = true;
+				const bool moving = s_stepSpeed > kStepMoving && combat.comboStep == 0;
+
+				if( !moving )
+				{
+					ResetLoop();
+					return;
+				}
+				const int motion = ( combat.motionClass & 0xFF ) << 16 | ( combat.motionId & 0xFFFF );
+				const float frame = combat.motionFrame;
+
+				// Until the motion's loop length is known (its first wrap): the planted feet's steps, at most one per
+				// kPlantMinInterval (the IK feet step ~3x as often as the game's legs: B4 test 1).
+				if( LoopFrames( motion ) <= 0.0f && landed && s_plantSeen >= 0.0 && now - s_plantSeen < kPlantFresh &&
+					now - s_lastFootfall >= kPlantMinInterval )
+				{
+					Footfall( ( landed & 1 ) ? "plant left" : "plant right", combat.motionId, frame, 0.0f );
+				}
+
+				// The walk / run motion's loop: two footfalls per loop.
+				if( motion != s_loopMotion )
+				{
+					ResetLoop();
+					s_loopMotion = motion;
+					s_loopFrame = frame;
+					s_loopMax = frame;
+					return;
+				}
+				if( frame + 2.0f < s_loopFrame )
+				{
+					// Wrapped: the loop is as long as the highest frame reached.
+					const float loop = s_loopMax;
+					if( loop > 4.0f )
+					{
+						StoreLoop( motion, loop );
+						Footfall( "motion wrap", combat.motionId, frame, loop );
+					}
+					s_loopMax = frame;
+					s_loopHalfDone = false;
+				}
+				else
+				{
+					const float loop = LoopFrames( motion );
+					const float half = loop * 0.5f;
+					if( loop > 4.0f && !s_loopHalfDone && s_loopFrame < half && frame >= half )
+					{
+						s_loopHalfDone = true;
+						Footfall( "motion half", combat.motionId, frame, loop );
+					}
+					s_loopMax = frame > s_loopMax ? frame : s_loopMax;
+				}
+				s_loopFrame = frame;
+			}
 
 			// HP baseline: a drop against it is a hurt; a new player / status block or a new max starts over.
 			uintptr_t s_player = 0;
@@ -333,12 +518,22 @@ namespace PSUVR
 #endif
 		}
 
+		void NoteFootPlant( int landed )
+		{
+			s_plantUpdates.fetch_add( 1 );
+			if( landed )
+			{
+				s_plantLanded.fetch_or( landed );
+			}
+		}
+
 		void Update()
 		{
 			UpdateHits();
 			UpdateHurt();
 			UpdateShots();
 			UpdateTechs();
+			UpdateSteps();
 		}
 	}
 }

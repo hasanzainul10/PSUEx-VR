@@ -109,6 +109,9 @@ namespace
 	X( m_hapticRecoil, "hapticRecoil" ) \
 	X( m_hapticTechs, "hapticTechs" ) \
 	X( m_autoDpad, "autoDpad" ) \
+	X( m_hapticSteps, "hapticSteps" ) \
+	X( m_hapticStepStrength, "hapticStepStrength" ) \
+	X( m_hapticStepsThirdPerson, "hapticStepsThirdPerson" ) \
 	X( m_swingAttack, "swingAttack" ) \
 	X( m_paGesture, "paGesture" ) \
 	X( m_gripPhotonArt, "gripPhotonArt" ) \

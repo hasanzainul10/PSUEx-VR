@@ -794,6 +794,17 @@ namespace PSUVR
 				if( ImGui::Button( "Test: strength steps" ) )
 				{
 					context.testVibration( 0 );
+			ImGui::Checkbox( "Footsteps", &s.m_hapticSteps );
+			Help( "A soft buzz in both hands at each footfall while your character walks or runs (quicker and stronger when "
+				"running). Nothing while standing, in menus or with the palette open." );
+			if( s.m_hapticSteps )
+			{
+				ImGui::Indent();
+				ImGui::SliderFloat( "Footstep strength", &s.m_hapticStepStrength, 0.0f, 1.5f, "%.2f" );
+				ImGui::Checkbox( "Footsteps in third person", &s.m_hapticStepsThirdPerson );
+				Help( "Off: footsteps buzz in first person only." );
+				ImGui::Unindent();
+			}
 				}
 				ImGui::SameLine();
 				if( ImGui::Button( "Test: length steps" ) )

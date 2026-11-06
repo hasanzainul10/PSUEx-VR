@@ -276,6 +276,12 @@ struct VRSettings
 	bool m_swingAttack = true;
 	// Photon Art (Y) / technique slot 2 gestures.
 	bool m_paGesture = true;
+	// A soft buzz on both hands at each footfall while walking / running (faster and stronger running).
+	bool m_hapticSteps = false;
+	// Scale of the footfall buzz (0..1.5; 1.0 felt too strong).
+	float m_hapticStepStrength = 0.7f;
+	// Footfall buzz in third person too (off = first person only).
+	bool m_hapticStepsThirdPerson = true;
 	// On: trigger click or swing = attack / slot 1, with that hand's grip held = Photon Art /
 	// slot 2 (the right grip sends no R1 while the right weapon has controls). Off: the old
 	// scheme, melee swings only, swing with the trigger held = Photon Art.

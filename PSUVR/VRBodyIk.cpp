@@ -1,6 +1,7 @@
 #include "VRBodyIk.h"
 
 #include "VRCamera.h"
+#include "VRGameHaptics.h"
 #include "VRRuntime.h"
 #include "VRTrackers.h"
 #include "../Misc/Log.h"
@@ -751,6 +752,7 @@ namespace PSUVR
 			const bool on = vr.m_trackersEnabled && vr.m_trackerDriveBody && VRTrackers::Calibrated();
 			const bool group[ kTrackerRoleCount ] = { vr.m_trackerDriveWaist, vr.m_trackerDriveChest, vr.m_trackerDriveFeet,
 				vr.m_trackerDriveFeet, vr.m_trackerDriveKnees, vr.m_trackerDriveKnees, vr.m_trackerDriveElbows, vr.m_trackerDriveElbows };
+					int landed = 0;
 			const float step = ( std::max )( dt, 0.0f ) / kTrackerRamp;
 			for( int role = 0; role < kTrackerRoleCount; ++role )
 			{
@@ -765,6 +767,7 @@ namespace PSUVR
 				d.weight = std::clamp( d.weight + ( d.live ? step : -step ), 0.0f, 1.0f );
 				if( d.weight <= 0.0f && !d.live )
 				{
+								landed |= 1 << i; // footfall haptic (vr.hapticSteps)
 					d.have = false;
 				}
 			}
@@ -792,6 +795,7 @@ namespace PSUVR
 		}
 
 		bool TrackedPelvisYaw( float &yaw, float &weight )
+					VRGameHaptics::NoteFootPlant( landed );
 		{
 			weight = DriveWeight( TrackerRole::Waist );
 			D3DXVECTOR3 forward, up;

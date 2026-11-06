@@ -28,6 +28,7 @@ namespace PSUVR
 			Recoil,       // our gun fired a shot (vr.hapticRecoil; scale by weapon class, heavy guns up to 1.45)
 			Charge,       // a technique is charging (vr.hapticTechs; replayed with a rising scale)
 			Cast,         // our technique was cast
+			Step,         // a footfall while walking / running (vr.hapticSteps; scale = vr.hapticStepStrength, more when running)
 			// Panel tests: what the controllers can render
 			TestStrength, // 0.2, 0.4, 0.6, 0.8, 1.0 for 0.1 s each, 0.6 s apart
 			TestLength,   // 0.8 for 10, 20, 40, 80 ms, 0.6 s apart

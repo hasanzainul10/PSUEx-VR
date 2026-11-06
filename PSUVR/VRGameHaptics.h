@@ -14,6 +14,8 @@ namespace PSUVR
 	//     alternate hands with the game's muzzle flag.
 	//   vr.hapticTechs: a technique weapon is attacking (+0x1E4 step) and hasn't cast yet -> Charge,
 	//     replayed with a rising scale; our technique spawned (0x004D3510) -> Cast.
+	//   vr.hapticSteps: footfalls while the character walks / runs -> Step on both hands (from the motion
+	//     loop: frame wrap + half way; IK planted feet until the loop is known), stronger when running.
 	namespace VRGameHaptics
 	{
 		// From the 0x0047AD30 hook (game thread): a hit arrived at `target` from actor id `attacker`.
@@ -22,6 +24,10 @@ namespace PSUVR
 		void NoteWeaponFire( const void *weapon, uint32_t alternate );
 		// From the 0x004D3510 hook (game thread): `weapon` spawned a technique.
 		void NoteTechSpawn( const void *weapon );
+		// From VRBodyIk's planted feet (vr.bodyProceduralLegs), once per foot update: `landed` bit 0 left /
+		// bit 1 right = that foot finished a step this update. The footfalls come from the walk / run motion's
+		// loop (vr.hapticSteps); these only stand in, rate-limited, until the loop length is known.
+		void NoteFootPlant( int landed );
 		// Once per frame after VRSyntheticPad::Update, before VRHaptics::Update.
 		void Update();
 	}
