@@ -199,6 +199,8 @@
     <ClInclude Include="PSUVR\VRHaptics.h" />
     <ClInclude Include="PSUVR\VRGameHaptics.h" />
     <ClInclude Include="PSUDetour\Hook_0047AD30_ActorHit.hpp" />
+    <ClInclude Include="PSUDetour\Hook_004CACB0_WeaponFire.hpp" />
+    <ClInclude Include="PSUDetour\Hook_004D3510_TechSpawn.hpp" />
     <ClInclude Include="PSUVR\VRHolster.h" />
     <ClInclude Include="PSUVR\VRTrackers.h" />
     <ClInclude Include="PSUVR\OpenVRRuntime.h" />

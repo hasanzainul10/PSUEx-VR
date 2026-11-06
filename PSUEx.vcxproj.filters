@@ -249,6 +249,12 @@
     <ClInclude Include="PSUDetour\Hook_0047AD30_ActorHit.hpp">
       <Filter>Header Files\PSUFunction</Filter>
     </ClInclude>
+    <ClInclude Include="PSUDetour\Hook_004CACB0_WeaponFire.hpp">
+      <Filter>Header Files\PSUFunction</Filter>
+    </ClInclude>
+    <ClInclude Include="PSUDetour\Hook_004D3510_TechSpawn.hpp">
+      <Filter>Header Files\PSUFunction</Filter>
+    </ClInclude>
     <ClInclude Include="PSUDetour\Hook_004D50B0_TechAim.hpp">
       <Filter>Header Files\PSUFunction</Filter>
     </ClInclude>

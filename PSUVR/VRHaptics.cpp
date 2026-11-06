@@ -48,6 +48,11 @@ namespace PSUVR
 				{ "Hit", 2, false, 1, { { 0.0f, 0.85f, 0.06f, 0.0f } } },
 				{ "HeavyHit", 3, false, 2, { { 0.0f, 1.0f, 0.08f, 0.0f }, { 0.12f, 0.8f, 0.06f, 0.0f } } },
 				{ "Hurt", 4, false, 2, { { 0.0f, 0.7f, 0.1f, 0.0f }, { 0.16f, 0.5f, 0.07f, 0.0f } } },
+				// Amplitudes clamp at 1.0: Recoil / Charge start at 0.7 so the scale (heavy guns, a long
+				// charge) has room to make them stronger; scale 1 is still at the felt threshold.
+				{ "Recoil", 2, false, 2, { { 0.0f, 0.7f, 0.06f, 0.0f }, { 0.07f, 0.7f, 0.06f, 0.0f } } },
+				{ "Charge", 1, false, 2, { { 0.0f, 0.7f, 0.06f, 0.0f }, { 0.1f, 0.7f, 0.06f, 0.0f } } },
+				{ "Cast", 3, false, 2, { { 0.0f, 1.0f, 0.1f, 0.0f }, { 0.14f, 0.85f, 0.08f, 0.0f } } },
 				{ "TestStrength", 9, false, 5, { { 0.0f, 0.2f, 0.1f, 0.0f }, { 0.6f, 0.4f, 0.1f, 0.0f },
 					{ 1.2f, 0.6f, 0.1f, 0.0f }, { 1.8f, 0.8f, 0.1f, 0.0f }, { 2.4f, 1.0f, 0.1f, 0.0f } } },
 				{ "TestLength", 9, false, 4, { { 0.0f, 0.8f, 0.01f, 0.0f }, { 0.6f, 0.8f, 0.02f, 0.0f },

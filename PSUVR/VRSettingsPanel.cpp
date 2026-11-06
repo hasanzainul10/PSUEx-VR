@@ -782,6 +782,11 @@ namespace PSUVR
 			Help( "The hand that attacked buzzes when the hit lands on an enemy; a Just Attack or Photon Art hit buzzes harder." );
 			ImGui::Checkbox( "Buzz when I get hit", &s.m_hapticHurt );
 			Help( "Both hands buzz when you lose HP; the more HP a hit takes, the stronger." );
+			ImGui::Checkbox( "Gun recoil", &s.m_hapticRecoil );
+			Help( "The shooting hand buzzes for each shot the gun fires (twin handguns: the hands take turns); rifles, "
+				"shotguns, grenade launchers and laser cannons kick harder." );
+			ImGui::Checkbox( "Technique charge and cast", &s.m_hapticTechs );
+			Help( "A light buzz that builds up in the casting hand while a technique charges, then a strong one when it is cast." );
 			ImGui::SliderFloat( "Vibration strength", &s.m_hapticStrength, 0.0f, 1.5f, "%.2f" );
 			Help( "Scales every controller vibration. 0 turns them all off." );
 			if( context.inGame && context.testVibration )

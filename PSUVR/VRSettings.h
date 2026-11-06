@@ -265,6 +265,10 @@ struct VRSettings
 	bool m_hapticHits = true;
 	// Buzz both hands when we lose HP (stronger for a bigger share of max HP).
 	bool m_hapticHurt = true;
+	// Recoil buzz on the shooting hand for each shot fired (stronger for rifles, shotguns, laser cannons).
+	bool m_hapticRecoil = true;
+	// Rising buzz on the casting hand while a technique charges, a strong one when it is cast.
+	bool m_hapticTechs = true;
 	// Motion mode: the left stick works the D-pad while a menu has the input.
 	bool m_autoDpad = true;
 	// Motion mode combat: swing a melee hand to attack (X), pull a gun hand's trigger to

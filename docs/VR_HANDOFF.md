@@ -1059,3 +1059,33 @@ Next after the test: B3 (gun recoil per shot, technique charge / release), then 
 **Result (2026-11-06): B1/B2 work as intended** (hit buzz on the attacking hand, JA / PA harder, hurt buzz both hands). Already
 in commit `dd737bb`; addresses 0x0047AD30 / status block +0x20 / +0x24 can be marked verified. **Next: B3** (gun recoil per shot,
 technique charge / release), then B4.
+**Phase B3 built + deployed (Debug `PSUExD.dll`, 2026-11-06 00:54; previous DLL = `PSUExD.dll.bak_preB3`; uncommitted; the
+config exe could NOT be copied (in use): copy `Debug\PSUExVRConfig.exe` once it is closed):** two read-only hooks feed
+`VRGameHaptics`. Recoil: `0x004CACB0` weapon fire (one call per shot, all pellets; returns 1 when bullets spawned), ours when
+the weapon is `player+0x2E0` / `+0x2E4`; hand = left object -> left, bow -> left, twin handguns (0x21) -> arg2 != 0 left / 0 right
+(the game flips arg2 between shots in `0x004FA400`; mapping **unverified**), else right. Scale: rifle 0x1C 1.2, shotgun 0x1D /
+grenade 0x1F / laser cannon 0x20 1.45 (0x1F / 0x20 inferred from the class order), others 1.0. Techniques: `0x004D3510`
+technique spawn (EDI = weapon, naked stub) -> `Cast` (1.0/100 + 0.85/80 ms) on the charging hand; charge = `player+0x1E4` != 0
+with a technique weapon on the hand that last pressed (right: rod 3 / wand 8; left: TCSM B or rod slots 3 / 4) and no cast yet
+for that step -> `Charge` (2 x 0.7/60 ms) every 0.22 s, scale 1.0 -> 1.45 over 0.9 s, max 2 s. Effects Recoil (2 x 0.7/60 ms,
+priority 2), Charge (1), Cast (3) in `VRHaptics`. Settings `hapticRecoil` / `hapticTechs` (default on), checkboxes "Gun recoil"
+/ "Technique charge and cast" under the hurt one (Controllers tab). Addresses in `docs/ADDRESS_MAP.md` (`0x004CACB0`, `0x004D3510`).
+**Pending test** (`tools/lastlog.sh -d VRHaptic`): handgun / rifle / shotgun: one buzz per shot on the gun hand, heavier for
+rifle / shotgun (log `shot, weapon ... class X arg2 Y -> hand`); twin handguns: hands alternate per shot (if they go the wrong
+way round, swap the arg2 mapping in `NoteWeaponFire`); machinegun: buzz per bullet while held; other players' shots: nothing.
+Rod / wand / TCSM cast: light rising buzz while casting, strong buzz on release (log `technique charge`, `technique cast`,
+`charge lasted N s`). If `charge lasted` is ~0 s the spawn comes at the press, not at the end of the cast motion: then time the
+charge from the cast motion instead. If no `technique charge` line: the cast doesn't set `+0x1E4` (log shows step 0) -> key the
+charge off `+0x170` motion / `+0x710` instead. Settings off = no recoil / technique buzz.
+**Next after the test:** B4 walking haptics.
+**B3 test 1 (2026-11-06 01:15): not a real test.** The other session redeployed `PSUExD.dll` at 00:55:45 (built without B3), over the B3 one (now `PSUExD.dll.bak_prefbt6`); the log has no `shot` / `technique` lines. Deploys from either session must be built from the current tree, which has both B3 and the tracker work. **Pending:** rebuild Debug + deploy (and the config exe) when PSUC is closed, then retest B3.
+**Redeployed 01:26 (2026-11-06):** Debug `PSUExD.dll` built from the current tree (B3 + tracker work) + `PSUExVRConfig.exe`; the other session's 00:55 DLL is `PSUExD.dll.bak_fbt0055`. Retest B3 pending.
+
+**B3 result (2026-11-06): works** (user: twin handgun recoil alternates hands, wand / TCSM charge + cast felt). Log: each twin
+handgun shot alternates arg2 1 / 0 -> left / right; casts spawn 0.18..0.27 s after the step starts; RCSM auto shots buzz the left
+hand (user wants to keep that: it tells them it is shooting). Fixes built + deployed (Debug + config exe): charge pulse every 0.1 s,
+ramp 1.0 -> 1.45 over 0.3 s (was 0.22 s / 0.9 s, too slow for a 0.2 s cast); charge check from the weapon in use (`player+0x230`
+bit 1, RCSM never casts) instead of the pressing hand (wand + RCSM left-trigger casts had no charge; a left press that landed on the
+right melee weapon buzzed a 1 s false charge). **Pending:** user feels the charge build up; log `technique charge ... +230` shows
+bit 1 set for TCSM casts and clear for wand casts. **Next:** B4 walking haptics (new session).
+
