@@ -353,10 +353,10 @@ struct VRSettings
 	// PSUExSpeech helper (Moonshine, English); speechModel tiny / small / medium picks the model
 	// in PSUExSpeech\models. The text goes to the game chat (speechChat) or, with voiceCommands,
 	// casts a technique on the equipped weapon when it names one ("Barta").
-	bool m_speechToText = false;
+	bool m_speechToText = true;
 	std::string m_speechModel = "small";
 	bool m_speechChat = true;
-	bool m_voiceCommands = false;
+	bool m_voiceCommands = true;
 	// Voice item use ("item two"): drives the weapon / item palette through the virtual pad. The
 	// script is space separated steps: hold:<button> (kept until the end), wait:open (palette up),
 	// tap:<button> or tap:slot, wait:<seconds>. voiceItemButtons = the buttons of items one..four.

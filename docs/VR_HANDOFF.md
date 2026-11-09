@@ -1193,3 +1193,10 @@ when all tracker floor heights agree within 0.3 m).
 rolled-back build again. Fix: rollback beta + empty `saves` (3.0.4 files in `saves_3.0.4_backup` / `saves_cloud_restored`) + the
 old version's own floor calibration. The user has Steam Cloud for Standable off. 3.0.x dropped the separate floor calibration for
 "floor = HMD height - user height" on T-pose (+ optional sync to SteamVR), which went wrong on PS VR2 here.
+
+## Release v0.5.0-vr (2026-11-09)
+Defaults for other users (starter `psuex_vr.json` from `PSUExVRConfig.exe --write-defaults`): VR on, first person, motion input,
+OpenXR, setup wizard on first start; all FBT off (`trackersEnabled`, `bodyIk`, `bodyRestPose`, `bodyProceduralLegs`,
+`bodyIkThirdPerson`); experimental off (`holsterEnabled`, `voiceItems`, `hapticSteps`, `perfOverlay`). Voice changed for the
+release: `speechToText` and `voiceCommands` now default ON (hold left Square to talk, a technique name casts, else chat),
+`speechAlwaysOn` off, `voiceRoute` auto. Package: `tools/package-release.ps1 -Version 0.5.0` -> `dist/PSUEx-VR-v0.5.0.zip`.
