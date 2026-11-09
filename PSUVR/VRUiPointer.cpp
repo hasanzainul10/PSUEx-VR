@@ -2,6 +2,7 @@
 
 #include "VRBindings.h"
 #include "VRControllers.h"
+#include "VRHaptics.h"
 
 #include "../Misc/Log.h"
 #include "../PSUExConfig.h"
@@ -283,10 +284,15 @@ namespace PSUVR
 			if( s_triggerDown && !wasDown && s_hit )
 			{
 				s_click = true;
-				VRControllers::Haptic( kHand, 0.3f, 0.02f );
 			}
 			if( !s_triggerDown )
 			{
+				// The buzz comes on release, when ImGui acts on the click: pulses sent while the trigger
+				// is going down weren't felt on the Sense controllers.
+				if( s_click && s_hit )
+				{
+					VRHaptics::Play( kHand, VRHaptics::Effect::Click );
+				}
 				s_click = false;
 			}
 
@@ -300,6 +306,12 @@ namespace PSUVR
 
 			if( VRControllers::Pressed( kHand ) & kControllerSecondary )
 			{
+				if( s_toolkitOpen && !s_windowOpen && !s_wizardOpen )
+				{
+					// The toolkit menu's open state is only assumed (its own close buttons aren't seen), so this
+					// is the way out of a stale "open": Circle sends its key again and the pointer lets go.
+					VRBindings::OpenToolkitMenu();
+				}
 				s_closeRequest = true;
 			}
 
@@ -326,7 +338,7 @@ namespace PSUVR
 				s_dragAlong = 0.0f;
 				s_dragStartDistance = vr.m_hudDistance;
 				s_dragTickDistance = vr.m_hudDistance;
-				VRControllers::Haptic( kHand, 0.4f, 0.03f );
+				VRHaptics::Play( kHand, VRHaptics::Effect::Grab );
 			}
 			if( s_dragging && ( !rightGrip || leftGrip ) )
 			{
@@ -355,7 +367,7 @@ namespace PSUVR
 				if( std::fabs( distance - s_dragTickDistance ) >= 0.25f )
 				{
 					s_dragTickDistance = distance;
-					VRControllers::Haptic( kHand, 0.2f, 0.01f );
+					VRHaptics::Play( kHand, VRHaptics::Effect::Tick );
 				}
 			}
 		}

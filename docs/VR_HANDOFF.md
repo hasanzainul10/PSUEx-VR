@@ -119,6 +119,11 @@ and pushed to origin `psu_vr` unless noted.
    palette"); no player-side use function and no readable slot contents, so there is no direct call and no
    item-name matching ("Monomate") yet. Game folder: Debug DLL + `PSUExVRConfig.exe` deployed, settings
    files untouched (`voiceItems` off).
+   **2026-10-31 changes:** route `auto` now = the held button's behaviour (command if it matches, else
+   chat; no more "ignored: no weapon out"); route `command` drops unmatched speech and matches by sound
+   (`Skeleton()` consonant key, +-1 on it, 2 letters off for 6+ letter names) plus element words (fire, ice,
+   thunder, lightning, dark, heal for the first technique of each element). Chat sender now calls the game's
+   text proc `0x004C9070` directly (the overlay hook was eating posted WM_CHARs; chat confirmed working).
    **Pending tests:** (1) regression: techniques by voice exactly as before. (2) Turn on *Voice items*,
    Always listening, route Command; with a palette item set say "item two" -> `tools/lastlog.sh VRVoice`
    shows `pad script ... (item 2 = Right)`, `done` or `aborted: the palette never opened`. Watch what the
@@ -324,6 +329,69 @@ and pushed to origin `psu_vr` unless noted.
    "local"** (built Debug + Release; the game folder's settings files already say "local"). Eye resolution scale and
    presets work; the scale barely changes GPU time on this PC (not fill-bound). Phase 3 done; not committed.
    **Next:** phase 4 (separate plan): shadows once per frame, D3D9Ex MANAGED->DYNAMIC remap, the game's frame cap.
+   **Phase 4 RE (2026-10-30, Ghidra; details in `docs/ADDRESS_MAP.md`):**
+   - Shadows: the light camera is built from the game's camera slot, which the eye passes don't move, so both eyes
+     would get the same shadow map. But `PSU_ShadowEnd` restores the game camera through `0x0048CC00`, which calls
+     `PSU_SetProjectionMatrix` with the **flat** projection: with shadows on, the rest of each eye pass would draw with the
+     wrong projection, and the casters go into the shadow map through our eye VIEW. Shadows were off in the game options
+     so far (user, 2026-10-30), which is why nobody saw it.
+   - Frame cap: `0x009CA780` = the game's fps setting (`0x004700A0` sets it; ~200 readers scale frame counts by it,
+     many callers switch it). Logic is frame-counted -> no change planned; the LOCAL layer covers 60 -> 90 Hz.
+   - Buffers: every MANAGED VB / IB becomes DEFAULT|DYNAMIC (`RemapManagedBuffer`); lock frequency was unknown.
+   **Step 1 probe built (Debug + Release) and deployed 2026-10-30 22:09 (Debug `PSUExD.dll` + `PSUExVRConfig.exe`, Release
+   `PSUExVR.dll`); log only, no behaviour change, no settings.** `Perf 5 s:` lines end with
+   `| probe shadow N/frame (eyes N), gameFps N, buffers +N (MB, total N MB), locks N/s KB/s`. Counters:
+   `Hook_ShadowBegin` (`0x005E3630`, `Hook_FrameRender.hpp`; logs `Shadow: first shadow pass (flat|eye pass)` once);
+   remapped VB / IB are tagged with private data and a Lock hook on their vtables (index 11) counts their locks
+   (`D3D9ExCompat.cpp`, logs `D3D9ExCompat: buffer Lock counter on vtable`).
+   **Pending test:** turn shadows on in the game options, `perfOverlay` on (it is, both files): town ~1 min, field mission
+   ~1 min, then `tools/lastlog.sh -a -n 0 'Perf 5 s'` and `tools/lastlog.sh 'Shadow:|Lock counter'`. Expected: shadow
+   ~2/frame in stereo (two eye passes; mirror on), and check the headset for wrong-looking shadows or a mono/flat
+   projection after the shadows. Decide from it: locks ~0 after load -> `perfStaticBuffers` (S); shadows running ->
+   fix the eye projection, then `perfShadowOnce` (W).
+   **Probe result (2026-10-31, Debug, shadows on): "VR doesn't look right anymore with shadows on"** (as predicted).
+   `shadow 2.00/frame (eyes 2.00)` in stereo, `gameFps 60` throughout, GPU eyes ~1.0-1.1 ms each with shadows.
+   **Remapped buffers: total 0** (no `remapped CreateVertexBuffer` line either): the game creates no MANAGED VB / IB, so
+   candidate 2 (static buffers) is dropped; the Lock counter stays as a probe.
+   **Shadow eye fix built (Debug + Release) and deployed 2026-10-31 01:15:** `Hook_ShadowBegin` (in an eye pass) saves the
+   device VIEW / PROJECTION and sets VIEW to identity for the casters; `Hook_ShadowEnd` (`0x005E37B0`, new detour) puts the
+   eye matrices back after the game restores its flat projection. **Pending test:** shadows on, town + field: does the
+   headset look right again, and do the shadows sit under people / stay put when turning the head? If shadows swim with
+   head rotation, the receivers' shadow lookup uses camera-space texgen and needs the eye delta in the texture transform.
+   **Result (2026-10-31): town fine, field mission still broken the same way.** Shadows run in the eye passes there too
+   (2/frame), so something else sets VIEW / PROJECTION mid eye pass in missions. **Diagnostic built + deployed 01:22:**
+   `PSUOverlay::Hook_SetTransform` logs each game call site (ret in 0x400000-0xA00000) that sets VIEW / PROJ inside an eye
+   pass once: `EyeTransform: game sets VIEW|PROJ in an eye pass, ret=... layer 0x.. mode .. | stack ...` (8 dwords above the
+   return; `0x0074ADAA` = the `PSU_SetProjectionMatrix` wrapper, its caller is in the stack dump). Known: the shadow
+   bracket's own calls. **Pending test:** mission with shadows on ~30 s, then `tools/lastlog.sh 'EyeTransform|Shadow:'`.
+   **Result (2026-10-31 01:27):** only `ret=0074ADAA` from `0x0048CC2F` (the shadow end, already handled), so no camera reset
+   in missions; user: "some textures are following the head". **Cause (Ghidra):** field-map nodes get an extra
+   vertex-shader shadow-receive pass; its callback `0x0055BB60` uploads the node's flat world-view-projection to c12
+   (see ADDRESS_MAP). **Fix (built Debug + Release, deployed 2026-10-31 01:35):**
+   `StereoRenderer::EyeShadowReceiverWvp` rebuilds c12 per eye (flat x inv game PROJ x inv game VIEW x eye VIEW x eye
+   PROJ) in `Hook_SetVertexShaderConstantF`; logs once `ShadowRecv: eye WVP rebuilt ... col4 = 0 0 0 1` (that column
+   proves c12 = model-view x game PROJ; anything else = wrong guess). The `EyeTransform:` diagnostic stays until the
+   user confirms missions look right, then remove it (`PSUOverlay::Hook_SetTransform`).
+   **`perfShadowOnce` (W) built, default off:** right eye skips `PSU_ShadowBegin`, layer 2 (disabled byte, restored in
+   the end hook) and `PSU_ShadowEnd`, reusing the left eye's map and shadow obj `+0x40` (eye-independent light camera;
+   receivers read only `+0x40` and the map). Checkbox "Draw shadows once for both eyes" (Performance tab), letter `W`
+   after `M` in the `fast` field. Log once: `Shadow: right eye reuses the left eye's shadow map (perfShadowOnce)`.
+   Expected: probe `shadow 1.00/frame (eyes 1.00)` and lower GPU eyeR with W.
+   **Pending tests:** (1) mission + town, shadows on, W off: textures no longer follow the head, shadows sit under
+   things; `tools/lastlog.sh 'ShadowRecv|EyeTransform|Shadow:'`. (2) A/B W off / on ~1 min each in the same spot:
+   `tools/lastlog.sh -a -n 0 'Perf 5 s'`; with W the right eye's shadows must match the left (no shadow swimming).
+   **Result (2026-10-31 ~01:50, W off):** `ShadowRecv ... col4 = 0.000 0.000 0.000 1.000` (c12 guess confirmed), one eye
+   right, the other eye's shadow-receive layer drawn in the wrong place. Cause: `0x0055BB60` uploads c12 only while
+   `[0xB9DB09]` is 0; the node update `0x0055B280` clears it once per frame, so eye 2 kept eye 1's c12. **Fix deployed
+   01:55:** `RenderEyes` clears `0xB9DB09` before each eye pass. **Pending:** same test 1 + 2 again.
+   **Result (2026-10-31, user):** W on: both eyes' shadows correct. W off: the LEFT eye's shadow-receive layer is still
+   drawn in the wrong place (right eye fine). A/B (different spots): W on eyeR 1.34 vs eyeL 1.63 ms GPU; W off eyeR 1.13 vs
+   eyeL 1.05 -> W saves ~0.3 ms. **`perfShadowOnce` now defaults to true** (user's call; game json already true);
+   `EyeTransform` diagnostic removed. Built + deployed 02:44 (Debug `PSUExD.dll` + `PSUExVRConfig.exe`, Release `PSUExVR.dll`).
+   **Open (low priority, W off only):** eye 1 differs from eye 2 only by the state the previous frame's eye-2 shadow
+   bracket leaves behind (with W on, eye 2 runs no bracket and eye 1 is right). Suspects: something `0x005E34C0` /
+   end `0x0048C3D0` reads or leaves for the receivers' setup `LAB_0055B9E0` (not decompiled yet; Ghidra has no function
+   there), e.g. another once-per-frame value like `[0xB9DB09]`, or the camera slot `[0xB9CB24]` / shadow obj `+0x34`.
 
 7. **Rogue's Toolkit 0.7.2 alongside PSUEx (UPDATED 2026-10-30, see "Status 2026-10-30" at the end of this item; the chain described next is superseded).** Plan:
    `C:\Users\hasan\.claude\plans\plan-to-make-our-giggly-sifakis.md`. The toolkit is a Rust `dinput8.dll` proxy
@@ -455,6 +523,100 @@ and pushed to origin `psu_vr` unless noted.
      and operable with the right controller (hover, click, scroll); `tools/lastlog.sh VRToolkit`. Toolkit `ui_scale` 2.0
      and `panel_x/y` are in game pixels: check placement on the panel. Not done: motion-controller gesture.
 
+11. **Shop / mission menus flat (built Debug + Release, deployed 2026-10-31 09:41: `PSUExD.dll`, `PSUExVRConfig.exe`, `PSUExVR.dll`; no settings-file
+   changes, the new keys default on; untested).** In town these menus keep scene mode 5, so `SceneAllowsStereo` now also returns false while a
+   game task named in `vr.flatMenuTasks` is alive (default `TCounterSequence,TDressShop,TBeautyParlor`; JSON only). Then the eyes, the left-eye
+   mirror and first person stand down and the flat frame goes to the menu panel like the other 2D menus. Setting `flatMenus` (default on), checkbox
+   HUD > HUD and menus "Shop and mission menus on a flat screen". `StereoRenderer.cpp` `FlatMenuOpen`: walks the TTask tree from the static root
+   `0x009CA8D4` (`+0x18` child, `+0x10` next, name at `+0x04`; see ADDRESS_MAP) at most every 100 ms. Logs (all builds): `VRMenu: flat menu open (<task>)`
+   / `VRMenu: flat menu closed`. Debug only: `VRMenu: task tree has N tasks` once, then `VRMenu: task + <name>` / `task - <name>` as tasks come and go.
+   Open questions: whether TCounterSequence lives only while the mission menu is open (it is made by TDungeonCounterCtrl state 5); if the counter
+   stays mono after leaving, or doesn't go mono, read the `task +/-` lines around opening it and change the default list. Hook_FrameRender's own
+   stereo gate wasn't touched (RenderEyes checks SceneAllowsStereo itself).
+   **Pending test:** in town open the mission counter (mission list), a clothing shop and the beauty parlor; each should switch to the flat panel and
+   go back to stereo on leaving. `tools/lastlog.sh 'VRMenu|scene mode='`.
+   **First run (2026-10-31, salon + mission counter): no `VRMenu` lines at all.** The static TTask `0x009CA8D4` has no children at runtime, so it
+   is not the root. Fix (built + deployed 09:54, untested): `Hook_TCameraTaskPlay` passes the camera task to `StereoRenderer::NoteGameTask`;
+   `FlatMenuOpen` climbs `+0x14` from it to the top task and walks the tree from there. Log once: `VRMenu: task root <p> (<name>), N levels above
+   <p> (TCameraTaskPlay)`. If that line is missing, the camera update never ran; if the root is found but no `task + TBeautyParlor` / `TDressShop`
+   / `TCounterSequence` shows when a menu opens, those tasks hang off another tree.
+   **Second run (2026-10-31): root found (`TMainTask` 0x00BA18A8, 3 levels above TCameraTaskPlay, 247 tasks). User: mission counter works well;
+   salon and clothes shop go flat too early (already while talking to the NPC). Log: TBeautyParlor is created with the NPC's TWindowSelect;
+   after the choice TCharaMakeDoll, TPlayerStatue, TWindowCharaMakeBack appear (the salon menu). The clothes shop's tasks weren't logged (cap
+   reached on area loads). Change (built Debug + Release, NOT deployed: the game was running): default `flatMenuTasks` =
+   `TCounterSequence,TCharaMakeDoll,TDressShopList` (TDressShopList is a guess from the string table); both settings files edited to it
+   (backups `psuex_vr.json.bak11`, `config.json.bak_flatmenus`; edited while the game ran, so a save from the panel may undo it). Debug log:
+   a walk with more than 16 name changes logs one `VRMenu: N task names changed (area load)` line instead of the names.
+   Also reported: "at the back of the flat screen the background animation is playing" (asked the user whether it's the game's own salon
+   backdrop inside the picture, or something around the panel in VR).
+   **User answer: in VR space behind the panel** (not inside the flat picture): something animated still shows around / behind the menu panel
+   while a flat menu is open. Not investigated yet. Suspects: HUD quads (`SubmitHudQuads`, user / world panels from pass B) still submitted in
+   the flat path, the salon backdrop (`TWindowCharaMakeBack`) captured into a HUD panel, or eye swapchains not cleared (`menuBackdrop` off?).
+   Check `VRSystem::OnPresentSubmit` order for the `!stereoSubmitted` branch.
+   **Found (2026-10-31 10:30): it happens on exit, not during the menu.** The flat path's layers are right (dark backdrop
+   projection + panel; no HUD quads, no stereo; no ClearEyes / xrEndFrame failures in the log). User: the animation is the
+   shop's own background (also seen in the flat picture), out in VR space, when leaving. Log order on leaving the salon:
+   `TCharaMakeDoll -` -> `flat menu closed` -> stereo back -> `TWindowCharaMakeBack -` later: the animated backdrop window
+   outlives the menu and was drawn in stereo while it faded out. Ghidra: the TDressShop ctor `0x00658E60` (mode 1) also makes
+   two TWindowCharaMakeBack (ctor `0x005B9B00`), so the clothes shop has the same backdrop, but made with TDressShop
+   (during the NPC talk), so it can't be a trigger. `TDressShopList` is only a name in a table next to "TDressShop"
+   (`0x009B9E48`), no RTTI class: it may never be a task.
+   Fix (built Debug + Release, deployed 10:31; settings files unchanged, still `TCounterSequence,TCharaMakeDoll,TDressShopList`):
+   new JSON-only setting `flatMenuHoldTasks` (default `TWindowCharaMakeBack`): once a flat menu is open, it stays open while
+   one of these tasks lives (they never open it). `FlatMenuOpen` list matching moved into `FindListedTask`. Log (all builds):
+   `VRMenu: flat menu held open by TWindowCharaMakeBack` once per hold.
+   **Pending test:** salon: NPC talk stereo, menu flat, on leaving the screen stays flat until the backdrop is gone, then
+   stereo with no animated background in VR space. Clothes shop: same; if it never goes flat, read the Debug
+   `VRMenu: task +` lines after the shop choice and put the shop menu's task in `flatMenuTasks` (VRSettings.h + both
+   settings files). Mission counter unchanged. `tools/lastlog.sh 'VRMenu: (flat|task [+-] T(Dress|Chara|Beauty|Counter|WindowChara))'`.
+
+   **User (2026-10-31): seems to work** (salon / shop exit no longer shows the backdrop in VR space).
+
+12. **Planet selector: planet models locked to the head -> flat panel (built Debug + Release, deployed 2026-10-31 10:48 after the game closed;
+   untested).** The spaceport planet selector stays in scene mode 5 and renders in stereo (log:
+   `scene mode=5 stereo=1`), but the planets follow head rotation. Debug log on opening it: `task + TLobbyCounterManager`,
+   `TLobbyCounterDisplayer`, `TWindowTitle`, `TLobbyCounterCamera`, `TWindowSelect`; on leaving `TWindowTitle -`,
+   `TWindowSelect -`, then the area load (planet travel). Ghidra: TLobbyCounterCamera ctor `0x006C8CB0` (stores itself in
+   `0x00BA0B8C`), made only by `0x006C8BF0` (callers `0x005D5780`, `0x006C87F0`, `0x00602440`). It is its own camera task,
+   not TCameraTaskPlay. Cause not proven (no live test): head-locked means the planets ignore our per-eye D3D VIEW, most
+   likely drawn with a shader WVP constant built from the lobby camera (like the shadow receivers before
+   `EyeShadowReceiverWvp`) or via an offscreen picture shown as a screen quad. A world-fixed fix would need that found per
+   draw, not cheap. Fix: `TLobbyCounterCamera` added to the default `flatMenuTasks` (`VRSettings.h`) and to both settings
+   files (backups `psuex_vr.json.bak12`, `config.json.bak11`; edited while the game ran, so a save from the VR panel before
+   restarting may undo it: re-check line `flatMenuTasks`).
+   **Pending test:** spaceport counter -> planet selector: should switch to the flat menu panel (mono) instead of stereo,
+   and go back to stereo after travel or after cancelling. Watch: cancelling out of the selector without travelling (if
+   TLobbyCounterCamera outlives the window, the view stays flat until it goes; then use `TWindowTitle`/a shorter-lived task
+   instead). `tools/lastlog.sh -a 'VRMenu: (flat|task [+-] T(LobbyCounter|WindowTitle|WindowSelect))|scene mode='`.
+   **User (2026-10-31): planet selector is flat now (works).**
+
+13. **Mall crowd ("mirage" NPCs) only in the left eye (built Debug + Release, deployed 2026-10-31 11:14; no settings changes; untested).**
+   Cause (Ghidra): the fake town crowd (`TObjLODModelPlayer`, low-poly `LodManModel` / `pl_lod_walk`) and far players are batched by
+   `TPlayerLODModelShader` (`[0x00B91140]`, 6 buckets, see ADDRESS_MAP). The batch is filled once per frame in the update, and its layer
+   `0x14` draw (`0x00551890`) zeroes each bucket's count after drawing, so the right eye got an empty batch (with `flatMirrorEye` off
+   the flat pass would empty it before both eyes). Fix: `StereoRenderer::SaveCrowdBatch` at the start of `Hook_PassA` saves the six
+   counts; `RestoreCrowdBatch` puts them back before each eye pass in `RenderEyes` (next to the `0x00B9DB09` shadow clear). Not a
+   setting (plain bug fix). Log (all builds, first 8): `VRCrowd: restored N LOD crowd instances for eye 1 (shader …)`.
+   **Pending test:** town mall with the crowd: NPC crowd in both eyes, same place and depth in each (close one eye at a time), no
+   doubled / flickering figures, far real players also in both eyes. `tools/lastlog.sh 'VRCrowd'`. If no `VRCrowd` line shows while
+   the crowd is in view, the right eye is missing them for another reason (check the layer `0x0B` draw `0x005517D0`).
+   **User (2026-10-31): works perfectly** (crowd in both eyes).
+
+14. **Settings UX rework + toolkit shortcut + eye-height chord (built Debug, deployed 2026-10-31 after the game closed; uncommitted, untested).**
+   - **Toolkit chord / partner card:** both grips + left stick up already ran the same `VRBindings::OpenToolkitMenu` path as the panel button;
+     the difference was that the pushed left stick (or D-pad) still went to the game. `VRSyntheticPad.cpp`: `s_chordStick` is set while both
+     grips are held and the left stick is up (> 0.8, released under 0.3) or down, and the left stick / D-pad output is then dropped.
+   - **Eye height chord:** both grips + left stick pushed down (free; up = toolkit) calls `MeasureEyeHeight()` (head height above floor
+     from `System::HeadHeightAboveFloor`, clamped 1.2-2.0, saved, toast "Eye height set to X m", buzz). Label cards (both grips) show
+     "Up: Rogue's Toolkit menu / Down: measure eye height" on the left stick. Log: `tools/lastlog.sh 'eye height'`.
+   - **Panel:** opens at the centre of the view (`ImGuiCond_Appearing`), text scaled by new `vr.panelTextScale` (default 1.5, 1.0-2.5; window
+     size follows). Three pages (`vr.settingsPage` presets / simple / advanced, remembered): Presets (picture quality, comfort, camera,
+     controls, text size), Simple (safe toggles, Measure my eye height, toolkit menu), Advanced (the old tabs, all keys unchanged).
+   **Pending test:** (1) both grips + stick up: toolkit menu opens, no partner card; same as the panel button. (2) Both grips + stick down
+   standing straight: toast with your eye height. (3) Open VR settings (Back+Start / left Square chord): centred, larger text, page buttons,
+   presets change values, Advanced is the old tabs; flat game (vr.enabled off) unchanged. Settings files untouched.
+   **User (2026-11-01): settings panel pages and the toolkit chord work** (committed in `6e596e6`).
+
 ## Features done this stretch (all toggles in the VR settings panel)
 
 - Combat by weapon category (`+0x2D4`/`+0x2D8`): trigger/swing = attack / tech slot 1, grip + = PA /
@@ -558,3 +720,483 @@ and pushed to origin `psu_vr` unless noted.
    body facing from the thigh line, real HMD position via `VRCamera::HeadWorld`). `bodyKeepLegAnim` ("Keep the game's leg animation"): rest pose skips bones 1-8, so the strafe layer's game leg
    animation stays (user: works like before). Planted-feet tuning (untested): step at 25 cm (was 35), step time 0.16-0.30 s by speed, lead 0.2 s of velocity, settle back to shoulder width after 0.35 s idle,
    legs never cross (each foot >= half the stance on its own side), knee pole 20% outward. Open: decide between planted feet and the game leg animation after the next test; tracker phases 4-6 not started.
+   **Body IK update 2026-10-31 (deployed Debug, user-confirmed working):** sliders `bodyNeckDrop` (neck below eyes, default 0.22 m) and `bodyBack` (body behind eyes, 0.20 m) added to Camera > First person. Standing-still stomping fixed: the "leg too stretched" step test (`tooFar`) now measures reach from the hip joint (`legLength * 1.02`) and needs `miss > 0.6 * fit`. VR paused or disabled: `VRHands::Apply` returns first, so rest pose, body IK and hand IK are all off and the game's own animations are back (user: both work). Open: choose planted feet vs game leg animation; tracker phases 4-6 (Standable via `XR_HTCX_vive_tracker_interaction`, `PSUVR/VRTrackers.cpp/.h`) not started; do them in a fresh session.
+
+## Holster gestures (built + deployed Debug 2026-10-31, untested, uncommitted)
+
+`PSUVR/VRHolster.{h,cpp}` (zones) + `VRSyntheticPad::Holster()`. Grip **press** edge (grip still `Pending`) with that hand's
+grip pose inside a zone fires once and sets the grip `Consumed` (no L1/R1): back of the head = script `hold:cancel wait:0.12 tap:up
+wait:0.15` (Circle + D-pad up), back of the waist = same with `down`, mouth = `holsterItemScript` (default `hold:cancel wait:0.12 tap:left wait:0.15`, user-confirmed input: Circle + D-pad left = use current item; the voice item
+script/buttons, **a guess**, no confirmed item-use button yet). Zones are in the HMD yaw frame (mouth: full head rotation), offsets
+for 1.7 m head height scaled by `HeadHeightAboveFloor / 1.7` (0.6-1.3); smallest distance/radius wins. Skipped in menus, with the
+palette open, a script running or the UI pointer active. Haptic on trigger. Log: `tools/lastlog.sh VRHolster`.
+Settings (Controllers tab, "Holster gestures"): `holsterEnabled` (default off), `holsterHeadRadius` 0.22, `holsterWaistRadius` 0.22,
+`holsterMouthRadius` 0.13, `holsterItemScript`, `holsterShowZones` (discs in the eye pass, needs Show controllers). Keys added to
+both game settings files (off; `.bak13` / `config.json.bak12` = before). Game folder: Debug `PSUExD.dll` + `PSUExVRConfig.exe` deployed.
+**Pending test:** turn on Holster gestures + Show zones; hand behind head + grip -> weapon up; behind waist -> down; at mouth -> item
+use (check whether the palette script does the right thing, else tune `voiceItemScript`/`voiceItemButtons`); grip anywhere else behaves
+as before; one switch per press. Tune offsets/radii in `VRHolster.cpp` (`ZoneCenter`) if zones feel off.
+
+## Voice items, palette-aware (2026-10-31)
+`VRSyntheticPad::UseItemSlot(slot)` (slot -1 = current item) now runs: hold Cancel (kPadA by default, via the layout), wait for the palette, `ItemRow` (tap Left until `PSUCombat::ReadItemPalette` shows the item row), `Seek` (tap Up/Down until the cursor is on the slot; learns which button adds +1; takes the short way), wait 0.2 s, release Cancel (uses the item). Commands: "item one".."item seven" = palette position (filled slots only), "use item" = current. vr.voiceItemScript / voiceItemButtons are no longer used. UNTESTED: palette offsets come from Ghidra only; check the Debug log lines "VRVoice: item palette read: row .. cursor .. of .." and "VRVoice: item script ..". If the palette reads "unreadable", send that log line; the current-item command still works by a blind Left tap.
+**User (2026-11-01): voice items work** (committed in `6e596e6`).
+
+## Right swing hit the sub weapon (2026-10-31, built Debug, not deployed, untested)
+With a wand/staff on the right and a TCSM on the left, a right trigger/swing fired the TCSM. `Gun()` (`VRSyntheticPad.cpp`) held R1 for the left hand whenever `s_turning` or an X/Y pulse was active, whatever hand started it. Now the turn, pulse and comboStep only count when `s_lastAttackHand == hand` (`ownAttack`). Voice casts are unchanged (`s_gunShot`). **Pending test:** wand main + TCSM sub: right trigger / swing casts the wand's technique; left trigger and "voice slot 3/4" still cast the TCSM. If it still misfires, `tools/lastlog.sh 'VRSwing|VRGun|VRVoice'`.
+Follow-up (voice-session review): RequestAttack now sets s_lastAttackHand = hand at request time, so a right swing queued during a left combo (comboStep > 0) no longer inherits the left hand's R1. Holster is off by default and does not touch this state.
+**User (2026-11-01): works** (right swing casts the wand, TCSM only from the left; committed in `6e596e6`).
+**Holster zones enlarged (2026-10-31, built Debug, NOT deployed: PSUC was running).** Zones are now ellipsoids (`VRHolster::ZoneShape`, half extents right/up/forward at 1.7 m, x radius setting / default): head-back centre (0, +0.12, -0.20) half (0.28, 0.30, 0.30) (up and back, forward to the shoulders); waist centre (0, -0.72, -0.28) half (0.34, 0.28, 0.30); mouth centre (0, -0.20, +0.14) in head axes, half (0.20, 0.25, 0.20) (face to chest, out front). The radius sliders now scale the whole zone (defaults unchanged). Debug discs mark the centre and six extreme points. Deploy `Debug\PSUExD.dll` + `PSUExVRConfig.exe` when the game is closed.
+
+## Full-body tracking (Phase 1 `a63ec2b`, 2a `eaff1fd`, 2b + fixes `d0f5ba2`, all user-tested OK; Phase 3 HTCX `32b9986`; OpenVR source `d733d7e`; 5a calibration `bfecafa`; Phase 4 `c2cb274` user-tested OK; Phase 6 polish built 2026-11-06 01:00, user-tested OK ("looks good"), uncommitted)
+**Phase 6 polish (built Debug + Release 2026-11-06 ~00:57 in a clean worktree off `c2cb274`, Debug DLL + config exe deployed
+00:58, previous game DLL `PSUExD.dll.bak_prefbt6`; uncommitted, untested):** Phase 4 + Body tab + shortcut + TpHeadWorld committed `c2cb274`.
+- **Heads-up, parallel session:** while this ran, another session was adding haptics B3 (gun recoil `Hook_004CACB0_WeaponFire`,
+  tech charge `Hook_004D3510_TechSpawn`, `hapticRecoil` / `hapticTechs`, `dllmain.cpp`, `VRHaptics*`, `VRGameHaptics.h`) in the
+  same tree, and the main tree's Release didn't link (`NoteWeaponFire` / `NoteTechSpawn` unresolved). So the deployed DLL is
+  FBT-only. `PSUExD.dll.bak_prefbt6` = that session's B3 Debug build (deployed 00:54:36): restore it to test B3, or rebuild
+  the main tree (both changes) once B3 links. Commit the FBT files separately from B3: VRBodyIk.cpp, VRTrackers.cpp, plus only
+  the `trackerFootLock` hunks in VRSettings.h / .cpp / VRSettingsPanel.cpp.
+- Calibration (`VRTrackerCal`): a whole-frame turn must now win by > 5 cm **and** fit <= 0.6 x shift; a turn < 60 deg only if the
+  shift residual >= 25 cm; a turn < 60 deg that passes keeps scale 1. Rejected: `VRTrackerCal: whole-frame full fit rejected
+  (<reason>): turn .., scale .., rms shift .. / fit .. cm; per-tracker offsets only`. Last run's 52 deg / 0.92 / 13 vs 8 cm is now rejected.
+- Residual watch (`VRTrackers.cpp` `WatchResidual`): standing still (head < 0.15 m/s, joints < 0.25 m/s, 0.5 s) and upright (head
+  >= 95% of the calibrated eye height): per joint (waist, chest, feet, knees; elbows skipped) height error vs the body model and
+  horizontal distance from the head vs the model (yaw-independent), weighted RMS, smoothed 0.3 s. Baseline starts at 0 (= the
+  calibration), averages over 20 s while no jump. `fast - baseline > 15 cm` for 2 s of standing -> log `VRTrackerCal: residual
+  jump X cm (baseline Y cm) for 2.0 s standing still: waist .. chest .. cm; trackers moved, recalibrate` + toast "Trackers moved:
+  recalibrate (both grips + left stick down)", once per calibration (reset by a new one). The 3 s `VRTrackers:` line ends
+  `residual N cm (baseline B, still S s[, warned])`. Also fires at game start if Standable's space changed since the saved calibration.
+- Foot lock (`trackerFootLock`, default true; Body > Full-body trackers > under the drive toggles "Foot lock"): a driven foot
+  tracker still (< 0.12 m/s) and on the floor (< 4 cm over its calibrated ankle height) for 0.15 s is pinned in the game world
+  (x/z; height stays tracked). Lets go when the real foot moves (> 0.35 m/s, 6 cm up or 6 cm away), eased over 0.2 s; or when
+  the body walked away from the pin (stick, snap turn) by 0.30 m (real-size, x units/m): a 0.2 s step with lift to the tracker,
+  one foot at a time (unless 0.6 m behind); > 1.5 m (teleport) jumps. Debug `VRBody: feet ...` line ends `foot lock
+  pinned|release|free/... (drift steps L R)`.
+- Filter: tracker orientation smoothing now speed-adaptive (cutoff 2 x minCutoff + beta x (lag - 3 deg) / dt), so fast foot /
+  hip turns don't lag; positions unchanged (one-euro).
+- Game files unchanged (`trackerFootLock` absent = true).
+**Test 6:** (recalibrate first: the saved `trackerCal` may hold a stale turn). `tools/lastlog.sh -d 'VRTrackerCal|VRBody: feet|VRTrackers:'`.
+1) Calibrate standing straight with the space upright: `fit none` + a `rejected (...)` line, or a full fit only with a big turn
+(Standable tilted). Joints / body look right. 2) Stand still 10 s: `residual` a few cm, no toast. 3) Toast check: in Standable,
+re-align / recenter its space (or move the hip tracker on the body by ~20 cm), stand still: toast within ~3 s, one `residual
+jump` line; recalibrate -> no more toasts, residual back to a few cm. 4) Foot lock: stand still, feet look rock steady; walk with
+the stick: feet stay planted then step (`drift steps` counting up), no gliding; lift / slide a real foot: it follows at once.
+Untick "Foot lock": feet glide with the stick as before. 5) Quick foot / hip turns: the character's feet turn without lag.
+Bad outcomes: toast while just standing normally (threshold too low: send the `residual` numbers); feet frozen while you step
+(unlock thresholds); constant stepping at rest (drift vs units/m mapping, send the `VRBody: feet` line).
+**OpenVR tracker source (built Debug + Release 2026-11-05 23:25, Debug + config exe deployed, previous DLL `PSUExD.dll.bak_preopenvr`;
+uncommitted, untested):** haptics B1/B2 committed `dd737bb`, Phase 3 HTCX `32b9986` (both local, not pushed).
+- `PSUVR/OpenVRRuntime.{h,cpp}` = `OpenVRTrackerSource` (not an `IVRRuntime`): no `openvr_api.dll`; uses SteamVR's `vrclient.dll`
+  (the 32-bit OpenXR runtime *is* `bin\vrclient.dll`, so already loaded; else loaded from `openvrpaths.vrpath`), `VRClientCoreFactory
+  ("IVRClientCore_003")`. Shared core: first `GetGenericInterface(IVRSystem_022)` **without** Init; if unavailable `Init(Background)`,
+  then `Init(Other)`. Never `Cleanup` a shared core. Header only: `third_party/openvr/openvr.h` v2.5.1 (+ LICENSE, THIRD_PARTY_NOTICES).
+- Device scan every 2 s: GenericTracker devices, role = SteamVR `trackers` setting (`/devices/<system>/<serial>`) > controller type >
+  serial (keywords hip/waist/pelvis, chest/spine, foot/knee/elbow + left/right). Poses: `GetDeviceToAbsoluteTrackingPose(Standing,
+  next vsync + vsync-to-photons + one display period)`; floorHeight = standing y.
+- `OpenXRRuntime::UpdateOpenVRTrackers` (end of `UpdateInput`): fills roles HTCX doesn't have (`TrackerState::fromOpenVR`).
+  STANDING -> LOCAL by the STAGE pose in LOCAL; checks the OpenVR HMD against OpenXR's VIEW each frame; > 10 cm for 1.5 s (or no
+  STAGE) -> yaw-only HMD alignment refreshed every 120 frames. Setting `trackerSource` auto (OpenVR after ~2 s if no HTCX tracker
+  was ever active) / openxr / openvr; panel combo "Tracker source". Status line / `found` log say OpenVR.
+- Game files unchanged (`trackerSource` absent = auto; `trackersEnabled` / `trackerShowDiscs` still true).
+**Test OVR:** Standable running, start the game, stand. `tools/lastlog.sh -d 'OpenVR|VRTrackers'`. Expected: `vrclient.dll already
+loaded`, `IVRSystem_022 without Init: ok` (or `Init(Background) -> ok`), `side connection up`, one `tracker #N serial 'Hips' ... -> waist
+(...)` line per device (8), `trackers aligned by STAGE`, `head check` < 3 cm, `VRTrackers: waist found (OpenVR)`, waist floor ~1.0,
+feet ~0.05. Headset: discs at hips / chest / knees / feet / elbows follow you (Standable's raw poses can sit a bit off: that's the
+calibration's job). Panel status ends "(OpenVR)". Bad outcomes: `in-process connection failed` -> build the helper exe (like
+`PSUExSpeech`, pipe poses); game hitch / OpenXR session lost after `side connection up` -> same; `head check` large and `aligned by
+the HMD` -> STAGE != STANDING, fine but note it; discs mirrored / rotated -> conversion bug.
+**Test OVR result (2026-11-05 23:4x):** trackers visible, but through **OpenXR HTCX** (all 8 roles, `/devices/htc/vive_tracker...`;
+Standable now emulates Vive trackers?), so the OpenVR source never connected (auto). Raw poses lie flat ~1 m up in front of the user
+(whole-frame error, see `docs/FBT_PLAN.md` "Phase 4 + 5 plan"). Minor: the HTCX `tracker connected` event logs the same path
+(footright) 8 times. OpenVR source still untested (set `trackerSource` openvr to try). Next: 5a calibration with a global fit.
+**Phase 4 trackers drive the body + scale clamp (built Debug + Release 2026-11-06 00:13, Debug DLL + config exe deployed, previous DLL
+`PSUExD.dll.bak_prephase4` = 5a; uncommitted, untested):** 5a committed `bfecafa`.
+- Calibration: scale clamped 0.9..1.1 (was 0.7..1.4; run 2's 0.79 shrank motion ~20%); `trackerCal` now also saves `h <stature>`.
+  `Pose::jointFloorHeight` (STAGE y of the joint); `VRTrackers::CalibratedStature` / `CalibratedJointHeight`.
+  **The game's saved `trackerCal` is the old one (scale 0.79, no `h`): recalibrate first**, else leg scale stays 1.
+- `VRBodyIk::UpdateTrackers` (VRHands `Apply`, after dt, rest pose only): per role weight 0 <-> 1 over 0.3 s (`live` = drive on +
+  group on + calibrated + `jointValid`; last pose kept for the ease-out, re-mapped each frame). Log every 3 s:
+  `VRBody: sources pelvis=tracker|estimate|blend x chest=... feet=L/R knees=L/R elbows=L/R (legs xS)`.
+- Mapping: joints through `VRCamera::BodyTrackingToWorld` (first + third person). Lower body (hips, knees, feet) take their **height
+  from the floor** instead: `groundY + jointFloorHeight * units * legScale` (legScale = character hip (bone 2 rest) / your calibrated
+  hip 0.55 x stature, 0.6..1.6); feet = `groundY + ankleHeight + max(0, floorH - 0.07) * ...` (never below the ground).
+- `Solve`: waist -> hips shift (bone 2 to the tracker, blended with the head estimate) + legs subtree (bone 2) yaw to the tracker; chest
+  -> chest subtree (bone 10) to the tracker frame (rest axes turned by the tracker's turn from the root's level frame), limit 70 deg,
+  after the CCD, before head-to-HMD; feet -> ankle target (blend from planted feet, or the rest ankle without them) + foot orientation
+  (slerp level <-> tracker, limit 120 deg; foot levelling now on bone 2, not 1); knees -> leg pole (`PoleToward`, part across the reach).
+  Legs run when planted feet are on or a foot / knee has weight. VRHands: strafe `s_bodyYaw` pulled to the waist yaw by its weight
+  (first person); elbows -> arm pole after `ElbowPole` (`TrackedElbowPole`); Solve also runs when only trackers drive.
+- Settings `trackerDriveBody` + `trackerDriveWaist / Chest / Feet / Knees / Elbows` (all default true; absent in the game files =
+  true). Panel: under the tracker sliders, "Trackers move the body" + Hips / Chest / Feet / Knees / Elbows.
+- Panel: new Advanced tab **Body** (after Camera), sections "Body pose (first person)" (rest pose, anim keep, bodyIk, planted feet,
+  strafe legs; moved from Camera > First person), "Arms" (arms follow, stretch, shrug, elbow, attack / PA animation, hand calibration;
+  moved from Controllers), "Third person body" (`bodyIkThirdPerson`, from Camera > Third person), "Full-body trackers" (all tracker
+  settings). Own body, eye height / lean, room walk stay in Camera. Deployed with the Phase 4 DLL (same backup).
+- **Upper body "shoulders over the head" (user, third person) fixed, built, deployed:** log had head 5.5 units
+  above the third person eye anchor (recenter taken 53 cm low), so floor-placed hips left the neck 56 cm under the head; the arms
+  reached up and the shrug maxed. `VRCamera::TpHeadWorld` now takes the head height from the floor when STAGE is known:
+  `off.y = min(headAboveFloor - fpEyeHeight, 0.3)`. First person unaffected (anchor leash). Deployed 00:28 (Debug DLL + config exe). **User: "that works"** (upper body OK;
+lower body already OK). Phase 4 + Body tab + shortcut + this fix all still uncommitted. **Test:** third person, recenter
+  while crouched, stand: `VRBody: third person eye ... head ...` head y within ~1 unit of the eye; hips line `neck error` < 1.5.
+- Shortcut: both grips + left stick down (measure eye height, `VRSyntheticPad::MeasureEyeHeight`) also bumps `trackerCalibRequest`
+  when `trackersEnabled` + `trackerCalibWithEyeHeight` (new, default true; checkbox in Body > Full-body trackers) + `VRTrackers::Any()`.
+  Toast "Eye height X m. Trackers: arms down, keep still 5 s"; log `tracker calibration requested with the eye height`; controller
+  label says "Down: eye height + calibrate trackers". The panel's Measure button (Simple page / wizard) does not calibrate trackers.
+**Test 4:** recalibrate (panel > Calibrate trackers; log `VRTrackerCal: ... scale` within 0.90..1.10). Then `tools/lastlog.sh -d
+'VRBody: sources|VRBody: hips|VRBody: feet'`: `sources pelvis=tracker ... (legs x~1)` (0.8-1.2 normal), hips line `waist tracker 1.00`.
+1) Stand: the body looks as before (calibration = rest pose). 2) Squat: hips drop, knees go forward, feet stay on the floor.
+3) Kick / lift a knee: that leg follows, the foot doesn't go under the floor. 4) Step sideways: feet and hips follow you.
+5) Turn the hips without the head: legs turn, the chest follows the chest tracker. 6) Cover a tracker: the limb eases back to the
+estimate in ~0.3 s after the 0.3 s hold, no pop (`sources` shows `estimate`). 7) Stick walking: the body moves with the character;
+the feet slide with it (no stepping while tracked: expected). 8) Untick "Trackers move the body": back to the estimate. Third person
+(`bodyIkThirdPerson` on): same with the orbit camera. Bad outcomes: legs too long / hips floating -> `legs x` far from 1; feet below the
+floor -> ankle height; chest twisted at rest -> recalibrate, else the chest frame math; knees backward -> knee pole.
+**Later (done in Phase 6 polish above):** residual-jump watch + "recalibrate" toast.
+**Phase 5a tracker calibration (built Debug + Release 2026-11-06, committed `bfecafa`, user-tested OK; OpenVR
+source committed `d733d7e`):** in `VRTrackers.cpp` (no new file). `IVRRuntime::GetHeadPose` / `GetStagePose` (OpenXR: VIEW and
+STAGE located in LOCAL in `UpdateInput` at the trackers' time). Panel (Body trackers block, in game): "Calibrate trackers" ->
+`trackerCalibRequest` -> 5 s countdown (Countdown buzz each second, Done) -> `Capture`: expected joints in STAGE from a body model
+under the head (stature = head height / 0.936; heights hips 0.55, chest 0.72, knees 0.285, elbows 0.63 of stature, ankles 7 cm;
+spine 8 cm behind the eyes, level head yaw); whole-frame fit by Horn's quaternion (Jacobi 4x4) + uniform scale 0.7..1.4 (>= 3
+trackers, else yaw / shift), kept only if it beats a plain shift by 5 cm (else identity); per-tracker offset (position + rotation,
+tracker frame). Saved as `trackerCal` string ("g ...;r<role> ..."), "Reset tracker calibration" clears it. `Pose::joint` /
+`jointOrientation` / `jointValid` (LOCAL) every frame; discs: calibrated joint bright 4 cm, raw tracker small and dim; log adds
+`joint (...)`. Python check of the Horn code: recovers a -90 deg X tilt exactly.
+**Test 5a:** deploy Debug `PSUExD.dll` + `PSUExVRConfig.exe` (backup `PSUExD.dll.bak_precal` first). Game, trackers on, panel >
+Calibrate trackers, stand straight 5 s. Log `tools/lastlog.sh -d VRTrackerCal`: `whole-frame fit full: turn ~90 deg, scale ~1,
+rms raw ... / fit < 10 cm`, offsets per role (a few cm .. 20 cm). Headset: bright discs on hips / knees / ankles / elbows / chest,
+following when you squat, lift a knee, turn around, walk. Then Phase 4 (trackers drive VRBodyIk, plan in FBT_PLAN).
+**Test 5a result (2026-11-06 ~00:10, user: "looks correct"):** run 1 (Standable space tilted): `fit full: turn 84 deg, scale 0.99,
+rms raw 104 / shift 54 / fit 18 cm`, offsets 9..36 cm (elbows noisiest). Run 2: Standable's raw space had become upright on its own
+(raw feet floor -0.07, waist 0.73, knees 0.36), `turn 1 deg, scale 0.79, rms raw 21 / shift 18 / fit 12 cm` -> joints at the right
+heights (ankles 0.07, knees 0.45, hips 0.87, chest 1.12 m). Lessons: Standable can re-align its space during a session, so a saved
+whole-frame fit goes stale -> recalibrate then (later: detect a jump in the fit residual and toast "recalibrate"). Scale 0.79 shrinks
+tracker motion by ~20%: consider clamping the scale to 0.9..1.1, or fitting scale only with a big turn. Uncommitted (5a code).
+**Next (done above):** 5a committed, scale clamp + Phase 4 built; see "Phase 4 trackers drive the body".
+**Old note, Phase 4 + 5** (superseded by the plan in FBT_PLAN): calibration (stand straight, rest skeleton under the HMD, `offset = inverse(trackerWorld) *
+boneWorld` per role, saved as `trackerCal<Role>`) + trackers drive `VRBodyIk` (waist -> pelvis, chest -> spine end, feet -> leg
+`SolveArm` targets, knees / elbows -> poles; per-role fallback to the estimate with a 0.3 s blend).
+**Phase 3, tracker input only (built Debug + Release 2026-11-05, Debug deployed 22:54 with `PSUExVRConfig.exe`, previous DLL `PSUExD.dll.bak_prefbt3`; uncommitted, untested):** no IK change.
+- `VRRuntime.h`: `TrackerRole` (waist, chest, feet, knees, elbows), `TrackerState` (active / valid / tracked, LOCAL pose,
+  `floorHeight` from STAGE), `IVRRuntime::GetTrackerState` (OpenVR: default false).
+- `OpenXRRuntime`: enables `XR_HTCX_vive_tracker_interaction` when available and `vr.trackersEnabled` (read at start: restart);
+  action `tracker_pose` with one subaction path per role, bindings for `/interaction_profiles/htc/vive_tracker_htcx`, one
+  space per role, located in `UpdateInput` at the hands' time; logs the extension, `tracker bindings ok|rejected`,
+  `trackers: N connected` + `tracker <persistent> role <role>` (xrEnumerateViveTrackerPathsHTCX) and `tracker connected ...` events.
+- New `PSUVR/VRTrackers.{h,cpp}`: `Update` after `VRControllers::Update` (VRSystem), one-euro smoothing (`trackerSmoothing` 0.3),
+  hold after loss (`trackerLostHold` 0.3 s), `Get` / `GetWorld` (via `VRCamera::BodyTrackingToWorld`) / `Any` / `StatusLine`;
+  log `VRTrackers: waist ok (x y z) floor 0.95; left foot lost 120 ms;` every 3 s, `VRTrackers: <role> found` once.
+- Discs (`VRControllers::DrawMarkers`, `trackerShowDiscs`): 4 cm per role, dim while held; shown without Show controllers too.
+- Panel: Camera > First person, under the rest-pose block: "Body trackers (restart the game)", discs, smoothing, hold, live status.
+- Game files: `trackersEnabled` + `trackerShowDiscs` set **true** for the test (`psuex_vr.json.bak14` / `config.json.bak13` = before).
+- The deployed DLL also carries the haptics hit/hurt work (`Hook_0047AD30_ActorHit`, `VRGameHaptics`; user: done).
+**Test 3 (Standable):** SteamVR > Manage Trackers: give Standable's trackers roles (waist, left foot, right foot). Start the game.
+`tools/lastlog.sh -d 'HTCX|tracker|VRTrackers'`: extension available + enabled, `tracker bindings ok`, one `role` line per tracker,
+`VRTrackers: waist ok ...`, feet `floor` ~0.0-0.1 standing. Headset: discs at waist and feet follow you; body unchanged.
+If `none active`: roles not set, or Standable's devices aren't trackers to SteamVR (send the log). **Next:** Phase 4 (trackers drive IK).
+**Phase 3 result (2026-11-05 23:09, 3 runs): OpenXR sees NO Standable trackers.** Log: `HTCX available, enabled`, `tracker bindings ok`,
+`trackers: 0 connected` (xrEnumerateViveTrackerPathsHTCX lists every tracker, role or not), no `tracker connected` event, `VRTrackers: none
+active`. User has the roles set in SteamVR (don't ask again). SteamVR side: Standable driver adds 8 devices (serials `Hips`, `Chest`,
+`Elbow Left/Right`, `Knee Left/Right`, `Foot Left/Right`, paths `/devices/standable/<serial>`); `steamvr.vrsettings` `trackers` only
+lists `/devices/standable/Chest` = Chest; Standable's input profiles (`D:\SteamLibrary\steamapps\common\Standable Full Body
+Estimationesources\input	racker\standable_tracker_<role>_profile.json`) use controller types `standable_tracker_<role>`
+(base `standable_tracker_profile.json` = `vive_tracker` with `tracker_types`), so SteamVR's OpenXR HTCX layer likely skips them.
+VRChat works because it uses OpenVR, which lists all devices; it also auto-calibrates them (Standable's poses are rough, "way off" raw).
+**Next (done above, see "OpenVR tracker source"): OpenVR tracker source.** In `PSUVR/OpenVRRuntime.cpp` (runtime rule), a pose-only side connection:
+`VR_Init( &err, vr::VRApplication_Background )` (or `_Other`) next to the OpenXR session; each frame
+`GetDeviceToAbsoluteTrackingPose( TrackingUniverseStanding, predicted )`, devices with `TrackedDeviceClass_GenericTracker`, role from
+`Prop_ControllerType_String` / `vr::VRSettings()` `trackers` section / serial name (Hips -> waist, Foot Left -> left foot, ...).
+Convert STANDING -> our OpenXR LOCAL space (both SteamVR universes: compare the HMD pose from OpenVR with OpenXR's view pose to get
+the offset, or use STAGE = standing and our `m_stageSpace`). Feed `VRTrackers` when OpenXR has no trackers (setting `trackerSource`
+auto / openxr / openvr). Risk: a 2nd vrclient connection in the same process; fallback = helper exe (like `PSUExSpeech`) piping
+poses. Then Phase 4 + 5 together: calibration (stand straight, offset = inverse(tracker) * bone, saved) + trackers drive the IK.
+Phase 3 code (HTCX, `VRTrackers`, discs, panel) is uncommitted; game files have `trackersEnabled` / `trackerShowDiscs` true.
+
+**Phase 2b (deployed Debug DLL + config exe 2026-11-05 ~22:00, previous DLL `PSUExD.dll.bak_prefbt2b`), third person (`bodyIkThirdPerson`, default off; panel: Camera > Third person > "Body follows me (arms, head, crouch)"):**
+- Before 2b the player model was never hooked in third person (`VRPlayerDraw::Update(firstPerson)`), so no rest pose / arms
+  there at all (the Phase 1 "third person" test can't have shown it). Now `Update(firstPerson, VRCamera::ThirdPersonBodyWanted())`;
+  free-aim force-show / node-flag tweaks stay first-person only.
+- `VRCamera`: `NoteHmd(views)` every frame (moved out of `UpdateFirstPersonAnchor`); `ThirdPersonBodyWanted()` (setting, our
+  orbit camera `s_tpActive`, reference, not first person, not the dressing room); `SetThirdPersonBody(eye, facingYaw, unitsPerMeter)`;
+  `Body*` variants (`BodyTrackingToWorld`, `BodyTrackingDirToWorld`, `BodyHeadWorld`, `BodyHeadAxes`, `BodyFrameAxes`, `BodyLookYaw`):
+  first person = the old functions, third person = head = eye anchor + (HMD - recenter position) in the recenter-yaw frame turned
+  to the character's facing, sideways clamped to 0.35 m; tracked points = head + (tracker - HMD). The old functions still return
+  false in third person (aim, holsters etc. untouched). VRHands / VRBodyIk use only the `Body*` ones.
+- `VRHands::Apply` in third person: eye anchor = rest neck (`VRBodyIk::RestNeck`, else the animated neck) + `bodyNeckDrop` up +
+  `bodyBack` forward (so standing at the recenter spot = zero hip shift); units/m = character eye height / `fpEyeHeight` (10 with
+  body fit); facing from root x world. No folding (`bodyMode` "full"), no strafe body (the game turns the character; chest twist
+  clamped to 50 deg from the facing), no eye lean. Debug log `VRBody: third person eye ... units/m, head ok ...` every 3 s.
+**User test 2b (2026-11-05):** "it's following" (third person body follows). Not committed yet: commit 2b (ask), skip
+`PSUVR/VRHaptics.cpp` (separate uncommitted haptic value bump).
+**Bugs reported 2026-11-05, fixed (user-confirmed, committed `d0f5ba2`):**
+1. TCSM Shifta not a voice command: the TCSM reads id 6 (level rose 0 -> 2 over sessions), which `kTechNames` (`VRSpeech.cpp`,
+   provisional order) called "Jellen". Swapped 5 / 6 (6 = Shifta, 5 = Jellen still a guess). "Shifter" / "Shift+R" share the
+   skeleton. **Test:** whip + TCSM, say "Shifta": log `VRVoice: slots ... = - / - / Shifta / Resta` and `"Shifta" -> slot 3`.
+2. Left grip (= L1, lock-on, camera state 2) in first person looked like the strafe animation. The log showed the VR pose still
+   solved in state 2 (no drop-out). Cause: `StrafeUpdate` / `TurnBody` assumed the root faces `+0x124` and that the game faces
+   its travel direction; in lock-on it sidesteps. Now the body turn uses the root's real world yaw and the gait uses the
+   movement direction (`s_travelYaw`). **Test:** first person, hold left grip and walk sideways / back: body stays facing your
+   head, feet step sideways. If it still looks wrong: `tools/lastlog.sh -d 'VRStrafe: cam state'` (root yaw vs +0x124 vs travel
+   in state 2 vs 1) and describe exactly what moves (legs only, whole body turned, bobbing).
+**Test 2b:** third person (`cameraMode` thirdPerson), motion controllers, rest pose + bodyIk on, tick "Body IK in third person",
+recenter standing. 1) Arms follow the controllers, hands where yours are relative to your head. 2) Crouch: character crouches
+(hips back, knees forward). 3) Lean / look around: head turns, chest twists up to 50 deg, no snap. 4) Walk with the stick:
+character turns as the game turns it, arms stay on the controllers, feet step (planted feet on). 5) Box off: third person as
+before (animated, no VR pose). 6) First person unchanged. Log: `tools/lastlog.sh -d 'VRBody: third'` (`head ok`, units/m ~10).
+Known limits: walking around the room clamps the lean at 0.35 m (recenter); arm length differences not stretched (armStretch applies).
+**Phase 2a (2026-11-05, uncommitted; previous DLL `PSUExD.dll.bak_prefbt2` = Phase 1 + haptics):** code split: shared pose math
+in `PSUVR/VRSkeletonMath.h` (`Skeleton::`), `RestPose` / `BoneMapOk` / body IK / feet in `PSUVR/VRBodyIk.{h,cpp}`
+(`VRBodyIk::Solve` = old `BodyIk`); `VRHands.cpp` 1,840 -> ~1,250 lines. New:
+- Crouch pushes the hips back (0.4 x drop) so the knees bend forward; spine is CCD over 9 / 10 / 11 (weights 0.3 / 0.4 / 0.3,
+  3 passes, 60 deg total, was 2 x 20 deg on 9 / 10).
+- `bodyHeadFollowsHmd` (true): neck 30% + head turn to the HMD (`VRCamera::HeadAxes`, new), limited to 80 deg.
+- Body yaw goal pulled 50% toward the hands' midpoint when both are below the head and 5-25 cm in front
+  (`VRBodyIk::BodyYawGoal`, feeds `StrafeUpdate` + torso); torso twist split over 9 / 10 / 11 (`TwistSpine`). Only with
+  rest pose + `bodyIk`.
+- Arms (always when they follow the controllers): `bodyShoulderShrug` (0.5 = up to 20 deg clavicle turn past 85% reach or
+  above the shoulder), `bodyElbowFromHand` (0.5: pole blended with wrist + grip +Z x forearm). Panel: Arms section sliders;
+  head checkbox under "Body follows my head".
+**Test 2a:** game settings unchanged (rest pose, bodyIk, planted feet, headless, first person; new keys at defaults).
+1) Stand: no change in camera / shoulders vs Phase 1. 2) Crouch: hips go back, knees forward, chest leans, eye not in the
+chest. 3) Bend forward / look at the floor: spine curves over three bones, no snap. 4) Hands together in front, turn the
+head 30 deg: torso stays between. 5) Reach far / overhead: shoulder lifts (slider 0 = old). 6) Rotate wrist (palm up / down):
+elbow moves (slider 0 = old). 7) Head: shadow / `fpBody` "full" shows the head tilting. Log: `tools/lastlog.sh -d 'VRBody'`
+(spine deg, crouch, head to HMD). **Next:** commit 2a on OK, then 2b third person (`bodyIkThirdPerson`).
+**Where it stands (2026-11-05):** Phase 0 + eye culling + once-per-frame world query committed (`ad15135`, not pushed;
+user-tested: arms OK, jitter no worse than before, no lag; the busy-mission slowdown didn't come back without a party).
+Phase 0 verdict in `docs/FBT_PLAN.md`: no `bodyGameplayPose`.
+Phase 1 (uncommitted, `VRHands.cpp` `RestPose`, settings, panel):
+- `bodyAnimKeep` (unsigned bitmask, `VRBodyAnimKeep` in `VRSettings.h`: 1 legs 1-8, 2 spine 9-11, 4 head 12-13, 8 arms,
+  16 weapon bones 18 / 23, 32 extras 24-27) replaces `bodyKeepLegAnim` (load migrates true -> legs bit). Panel: rest
+  pose block, "Keep the game's animation on:" checkboxes. Kept bones are re-parented: their animated pose relative to
+  the animated parent, put on the parent's new pose (so no `bodyRestLocal`); body fit now scales kept legs too.
+- Bone-map guard `BoneMapOk` (parent table `kBoneParents`): mismatch -> no rest pose / body IK for that model, logs
+  `VRBody: bone map mismatch ...`; ok logs `VRBody: bone map ok`.
+- `bodyFlatAnimated` dropped: the player is never drawn in the flat pass in stereo (monitor mirrors the left eye).
+**Test:** first person, rest pose on. 1) all boxes off: as before. 2) Legs: walk, legs animate, attached to the hips.
+3) Spine + Head: idle sway / attack torso moves, arms still on the controllers, head hidden as before. 4) Weapons:
+saber combo, blade turns in the hand. 5) Third person with Arms: attack animation on the rest torso. Log:
+`tools/lastlog.sh 'VRBody: bone map'` -> "ok". **Next:** commit (ask), then Phase 2 (`VRBodyIk.cpp`, 3-point IK).
+Game folder: VR was off in both settings files; turned on for this test (`enabled` true; previous state in
+`psuex_vr.json.bak1` / `config.json.bak1`). `bodyRestPose` true, `firstPerson`, `fpBody` "headless" already set.
+Plan in `docs/FBT_PLAN.md`. Phase 0 = probe only, no behaviour change:
+- `PSUDetour/Hook_004FFFA0_BoneQuery.hpp` (registered in Debug only): counts bone queries on the local player model by
+  return address / bone / context (`draw` = inside the player's draw callback, `world` = VRHands' world query, `other` =
+  anything else), logged every 5 s; dumps the model's bone name table once per model. Needs first person with
+  `fpBody` not "full" (that is when `VRPlayerDraw` knows the player model).
+- New accessors: `VRPlayerDraw::PlayerModel()`, `VRHands::InWorldQuery()`.
+- RE done: `TItemWpnKnock` `+0x68` / `+0x6C` (`0x004FC490` / `0x006098E0`) are plain getters, no bone reads. The name
+  table is `{mode, count, entries*}` (pointer, not inline).
+- Test (deploy `Debug\PSUExD.dll`, `bodyRestPose` on, first person): saber combo + JA timing, handgun / rifle, a
+  technique, a PA, a CAST character. Then `tools/lastlog.sh 'VRPoseQuery'`. Expected: hits / JA unaffected; callers
+  only `draw` (attachment `0x005525A0` area) and `world`; one name dump per character. Any `other` caller on bones
+  14-23 means Phase 1 needs `bodyGameplayPose = animated`.
+- Run 1 (2026-11-01, user: gameplay fine): bone names confirmed (0 Root 1 Navel 2 Pelvis 3-5 L_thigh/calf/foot 6-8 R_
+  9 Spine 10 Spine1 11 Neck_root 12 Neck 13 Head 14-18 L_clavicle/upperarm/forearm/hand/weapon 19-23 R_ 24/25 breasts
+  26 Belly 27 Body), same 28 on all three models seen. `other` callers every frame: `0x00500040` (bone by name;
+  17, 22, 11, 18) and `0x00553080` (render object model slot; 1, 13, 15, 16, 18, 20, 23, 26). Both are generic
+  helpers, so run 2 (deployed) logs their caller too (`ret=<helper>`<`caller`). World query (`world`) runs ~9x per
+  frame (once per player draw callback, each re-runs the pose build): worth caching later.
+- World query perf (same build, Debug logs only, no behaviour change yet): `VRPlayerDraw: player draws over N frames`
+  (calls per patched node, flat / eye) and `VRHands: world ...` (measures per frame, max move within a frame, and
+  the diff to the model's transform node `*(model+0x10)` matrices `+0x44` / `+0x84`, plain and transposed; node =
+  lazy transform, dirty flags `+0xE8`, rebuilt by `0x0055FDB0`). If a node matrix matches (diff ~0), read it instead
+  of the bone query (no pose rebuild at all); else measure once per frame on the first draw. Watch: the first draw
+  of a frame may be the flat pass before `VRPlayerDraw::Update`, so a frame-counter gate could use last frame's world.
+
+## Command-mode matching more lenient (2026-11-01, built Debug + deployed 17:37, untested, uncommitted)
+`VRSpeech.cpp`: `Skeleton()` now also merges l/r and drops a trailing r ("lester" = Resta, "barter" = Barta). In the command
+route (`MatchCommand` loose) the letter tolerance is about a third of the name (min 1), the skeleton may be 1 off (2 off for
+4+ consonants; both skeletons still need 3+ consonants, so "and" can't become Anti), and the closer of the two counts. A tie
+between two different names is refused, logged as `VRVoice: "..." fits more than one name equally, ignored`. Auto / chat
+route matching unchanged. **Pending test:** command mode, say each equipped technique a few ways (including "Lester" for
+Resta); check no casts from ordinary chatter. `tools/lastlog.sh -a -n 0 'VRVoice: ("|no command)'`.
+
+## Voice items by name: probe (2026-11-01, Debug built + deployed 17:45, untested, uncommitted)
+Goal: "monomate" etc. as voice commands. The palette has no names, only packed ids, but each item slot has an inventory handle
+(`TWindowCP +0x11C + i*4`, now `ItemPalette::handle`) that `0x004CA2A0` turns into the item object (ADDRESS_MAP, Item palette state).
+Debug-only probe `ProbeItemNames` (`VRSpeech.cpp`) runs when the palette contents change (first 4 times): per filled slot it logs
+the object, its `+0x1C` tag / `+0x34` id vs the palette id, the first UTF-16 text in the object (+0x000..+0x1FF) and one pointer
+deep (+0x00..+0x7C fields), plus a dword dump of the first object's +0x00..+0x7F.
+**Pending test:** voice items on, in the field, hold Circle once (palette open), then close the game.
+`tools/lastlog.sh -a 'VRVoice: item (probe|palette)'`. Expected: tag 00100000, id = palette id, text "Monomate" etc. at a fixed
+offset (or via a fixed pointer field). Then: add each item's name as a fuzzy Item command + KEYTERMS; fallback if no name found:
+find the id -> name lookup, or a static table keyed by packed id.
+
+## Eye frustum culling (built + deployed Debug 2026-11-01, untested)
+Pop-in at the headset's left / right edges: meshes and terrain are culled in the draw by `0x0074DA40` (sphere) /
+`0x0074D5B0` (box) against planes built from the flat projection (`0x0074B200`); the eye passes only set D3D PROJ.
+`PSUVR/VREyeCull.cpp` + hooks `Hook_0074DA40_CullSphere.hpp` / `Hook_0074D5B0_CullBox.hpp`: in each eye pass the
+tests use the six planes of eye VIEW x PROJ applied to the game's camera-space point (exactly what the GPU draws).
+Falls back to the game's test whenever the game's plane globals differ from the eye-pass start snapshot (shadow
+light camera, any other camera). Setting `eyeFrustumCull` (default true; panel General > Comfort "Cull for the
+headset's view"; not written to the settings files, default applies).
+Test: turn the head left / right fast in town and a field, in first and third person: no pop-in at the edges;
+shadows unchanged; perf overlay for cost. Debug log `tools/lastlog.sh VREyeCull`: "drawn but game-culled" > 0 (the
+fix working), "culled but game-drawn" = things outside the eye but inside the flat view (fine); if the world
+vanishes, untick the setting and report.
+Other culling may remain (object-level visibility in updates, LOD): if some things still pop, find which.
+
+## Immersion pass (started 2026-11-05)
+Plan: `C:\Users\hasan\.claude-3\plans\lets-plan-for-more-elegant-quokka.md`. Order: A haptics engine -> B1/B2 haptics when your
+attack lands / you get hit (Ghidra) -> B3 gun recoil + technique charge -> C2 head-in-wall fade -> E1 head-tracked 3D audio ->
+E2 wrist HUD -> C1 hand/weapon contact buzz -> the rest (vignette on damage, two-handed grip, bow draw, palm casting, poke UI, ...).
+**Phase A built + deployed (Debug `PSUExD.dll` + `PSUExVRConfig.exe`, 2026-11-05 00:32; previous DLL = `PSUExD.dll.bak_prehaptics`;
+settings files untouched, new keys default):** `PSUVR/VRHaptics.{h,cpp}`: named effects (Tick, Click, Grab, Confirm, AttackSent,
+ComboWindow, Holster, Countdown, Done), each a pattern of up to 4 pulses {at, amplitude, seconds, frequency}; one pattern per hand,
+lower priority dropped while a higher one plays; `VRHaptics::Update()` after `VRSyntheticPad::Update` in VRSystem.
+`IVRRuntime::Haptic` takes a frequency (OpenXR passes it, 0 = unspecified). All old `VRControllers::Haptic` calls moved to
+effects with the same amplitude / length. Settings `hapticStrength` (1.0, 0-1.5) and `hapticUi` (true): Controllers tab under
+the combo buzz checkbox; strength also on the Simple page. Debug log `tools/lastlog.sh VRHaptic` (non-UI effects).
+**Pending test:** everything buzzes as before at strength 1 (combo JA buzz, swing / shoot, holster, chords, UI clicks / panel
+drag); strength 0 = no vibration at all; 1.5 = stronger; UI off = no pointer / drag ticks, gameplay buzzes stay.
+**Next:** Phase B1/B2 Ghidra pass: the local player's HP field (hurt buzz from an HP drop) and the hit-apply path for the
+player's attacks (hit buzz on the swinging hand).
+**Plan update (2026-11-05):** user added 3D audio (E1), bow draw (E3), two-handed grip (E4), walking haptics (B4; the game
+already has no camera shake in VR) and Phase F: PS VR2 Sense HD haptics / adaptive triggers / headset rumble through the
+community PSVR2 Toolkit (BnuuySolutions/PSVR2Toolkit, replaces Sony's driver DLL; CAPI `psvr2_toolkit_capi.dll` is x64, so an
+x64 helper like PSUExSpeech; headset rumble needs the vr2jb jailbreak, the user's call). Stock Sony PC driver = basic vibration only.
+New order: B1/B2 -> B3 -> B4 -> F0/F1 -> C2 -> E1 -> E3 -> E4 -> E2 -> C1 -> rest.
+**Phase A test 1 (2026-11-05):** user felt only the Just Attack buzz. Log: all effects were sent (Confirm, AttackSent, ComboWindow).
+Same amplitudes as before Phase A, so likely Sony's basic-vibration driver drops weak pulses (only ComboWindow x1.6 = 0.8 is above
+the others' 0.25-0.5). Deployed 00:57 (Debug + config exe): panel buttons *Test: strength steps* (0.2..1.0, 100 ms) and
+*Test: length steps* (0.8 at 10/20/40/80 ms), effects `TestStrength` / `TestLength`; OpenXR logs `xrApplyHapticFeedback failed`.
+**Pending:** user counts felt buzzes per test -> raise effect amplitudes / lengths (or add an amplitude floor) above the threshold.
+**Test result (2026-11-05):** strength steps 5/5 felt, length steps 4/4 felt -> the controllers render weak and short pulses; the
+missed ones were weak AND short while moving. New values (built Debug, NOT deployed: PSUC running): Tick 0.3/20 ms, Click 0.45/30,
+Grab 0.55/50, Confirm 0.65/60, AttackSent 0.5/50 (ComboWindow, Holster, Countdown, Done unchanged). Deploy Debug `PSUExD.dll` +
+`PSUExVRConfig.exe` when the game closes. **Pending:** user retests swings / shots / chords / UI clicks.
+**Deployed (2026-11-05 evening):** Debug `PSUExD.dll` (9:33 PM build, up to date with the tree: new haptic values + FBT Phase 2a
+from `eaff1fd`) + `PSUExVRConfig.exe`. The haptic value bump in `PSUVR/VRHaptics.cpp` is still uncommitted.
+**Retest (2026-11-05 21:50):** only AttackSent and the JA buzz felt; Confirm (chord) and Click weren't, though the log shows them
+sent. Theory: pulses sent while a button is being pressed / held don't come through on the Sense controllers (the test buttons
+worked because ImGui fires on release). Deployed 21:56 (Debug + config exe): Click now plays on trigger **release**; Confirm is
+two pulses (0 and +0.2 s, 0.7/60 ms). **Pending:** user reports click felt y/n, chord: none / one / two buzzes.
+**Twin handguns (class 0x21, category 2):** both triggers fire now (`PSUCombat::TwinGuns`, `Roles()` gives both hands `shoot`,
+`Gun()` takes the held trigger, no R1; voice slots 3/4 skip twin guns). **Pending:** left trigger fires like the right.
+**Result (2026-11-05 22:0x):** chord two pulses: both felt; twin handguns left trigger: works; laser click (on release): still not
+felt -> not a press-timing issue, single 0.45/30 ms is too weak in use. Built: Tick 0.5/40 ms,
+Click 0.7/60, Grab 0.75/70; deployed 22:25 (Debug + config exe). **Pending:** user retests laser click / panel drag ticks.
+**Committed `e9ef783`** (haptic values, laser click on release, twin handguns). User: laser click can't be told from the trigger's
+own click (fine), panel drag buzz + ticks felt.
+**Phase B1/B2 built + deployed (Debug + config exe, 22:49; uncommitted; the deploy also carries the other session's uncommitted
+tracker code, gated by `vr.trackersEnabled`):** `PSUVR/VRGameHaptics.{h,cpp}` (Update in VRSystem after VRSyntheticPad).
+B1: hook `0x0047AD30` (TActor receive hit, `PSUDetour/Hook_0047AD30_ActorHit.hpp`, read only) counts hits whose attacker id ==
+`[0x009CA7D4]` (not on ourselves) -> `Hit` (0.85/60 ms) on `VRSyntheticPad::LastAttack` hand, `HeavyHit` (1.0/80 + 0.8/60) when
+that press was in the JA window (`StartAttack` records it) or a Photon Art. B2: polls `[[0x009CA8AC]+0x48]` +0x20 HP / +0x24 max;
+a drop -> `Hurt` both hands (0.7/100 + 0.5/70, scale 0.75 + 2.5 x share lost, max 1.6). Settings `hapticHits` / `hapticHurt`
+(default on), checkboxes under the combo buzz one (Controllers tab). Addresses in `docs/ADDRESS_MAP.md` (HP block, hit, damage
+manager: network path, not hooked).
+**Pending test:** hit an enemy (melee, gun, technique): buzz on the attacking hand when it lands, harder for a JA / PA; get hit:
+both hands buzz, bigger hits harder; heal: nothing. Log `tools/lastlog.sh -d VRHaptic`: `our hit on ... vtable`, `hit landed`,
+`hurt A -> B of M`. If no `hurt` lines: look for `has no status block` (then use the 0x00B90F30 lookup / hook `+0x68`). If no `our
+hit` lines: enemies override vtable +0x30 (check the vtables in the log of other hits).
+Next after the test: B3 (gun recoil per shot, technique charge / release), then B4 (walking haptics).
+**Result (2026-11-06): B1/B2 work as intended** (hit buzz on the attacking hand, JA / PA harder, hurt buzz both hands). Already
+in commit `dd737bb`; addresses 0x0047AD30 / status block +0x20 / +0x24 can be marked verified. **Next: B3** (gun recoil per shot,
+technique charge / release), then B4.
+**Phase B3 built + deployed (Debug `PSUExD.dll`, 2026-11-06 00:54; previous DLL = `PSUExD.dll.bak_preB3`; uncommitted; the
+config exe could NOT be copied (in use): copy `Debug\PSUExVRConfig.exe` once it is closed):** two read-only hooks feed
+`VRGameHaptics`. Recoil: `0x004CACB0` weapon fire (one call per shot, all pellets; returns 1 when bullets spawned), ours when
+the weapon is `player+0x2E0` / `+0x2E4`; hand = left object -> left, bow -> left, twin handguns (0x21) -> arg2 != 0 left / 0 right
+(the game flips arg2 between shots in `0x004FA400`; mapping **unverified**), else right. Scale: rifle 0x1C 1.2, shotgun 0x1D /
+grenade 0x1F / laser cannon 0x20 1.45 (0x1F / 0x20 inferred from the class order), others 1.0. Techniques: `0x004D3510`
+technique spawn (EDI = weapon, naked stub) -> `Cast` (1.0/100 + 0.85/80 ms) on the charging hand; charge = `player+0x1E4` != 0
+with a technique weapon on the hand that last pressed (right: rod 3 / wand 8; left: TCSM B or rod slots 3 / 4) and no cast yet
+for that step -> `Charge` (2 x 0.7/60 ms) every 0.22 s, scale 1.0 -> 1.45 over 0.9 s, max 2 s. Effects Recoil (2 x 0.7/60 ms,
+priority 2), Charge (1), Cast (3) in `VRHaptics`. Settings `hapticRecoil` / `hapticTechs` (default on), checkboxes "Gun recoil"
+/ "Technique charge and cast" under the hurt one (Controllers tab). Addresses in `docs/ADDRESS_MAP.md` (`0x004CACB0`, `0x004D3510`).
+**Pending test** (`tools/lastlog.sh -d VRHaptic`): handgun / rifle / shotgun: one buzz per shot on the gun hand, heavier for
+rifle / shotgun (log `shot, weapon ... class X arg2 Y -> hand`); twin handguns: hands alternate per shot (if they go the wrong
+way round, swap the arg2 mapping in `NoteWeaponFire`); machinegun: buzz per bullet while held; other players' shots: nothing.
+Rod / wand / TCSM cast: light rising buzz while casting, strong buzz on release (log `technique charge`, `technique cast`,
+`charge lasted N s`). If `charge lasted` is ~0 s the spawn comes at the press, not at the end of the cast motion: then time the
+charge from the cast motion instead. If no `technique charge` line: the cast doesn't set `+0x1E4` (log shows step 0) -> key the
+charge off `+0x170` motion / `+0x710` instead. Settings off = no recoil / technique buzz.
+**Next after the test:** B4 walking haptics.
+**B3 test 1 (2026-11-06 01:15): not a real test.** The other session redeployed `PSUExD.dll` at 00:55:45 (built without B3), over the B3 one (now `PSUExD.dll.bak_prefbt6`); the log has no `shot` / `technique` lines. Deploys from either session must be built from the current tree, which has both B3 and the tracker work. **Pending:** rebuild Debug + deploy (and the config exe) when PSUC is closed, then retest B3.
+**Redeployed 01:26 (2026-11-06):** Debug `PSUExD.dll` built from the current tree (B3 + tracker work) + `PSUExVRConfig.exe`; the other session's 00:55 DLL is `PSUExD.dll.bak_fbt0055`. Retest B3 pending.
+
+## Visual bugs pass (2026-11-06, phase 1 passed, uncommitted; phase 2 next)
+Plan (user-approved): `C:\Users\hasan\.claude-3\plans\now-that-fbt-is-serialized-meteor.md`. One phase at a time, each built,
+deployed (Debug + config exe) and tested by the user before the next.
+1. **HUD layering, third person (cause known):** `VRHud::CapturePassBDraw` sends pass-B pieces deeper than `kHudDepthThird`
+   (12 units) to the eyes; HUD z values decode to 14-15, so the map frame (0x30), arrow (0x33), 0x39 and the HP/MP/name/EXP
+   block (0x3A / 0x3B) went to `eyes` (log `VRHud layer=`). Fix: layers >= 0x30 always visor; nameplates (0x2B) keep depth
+   routing. Setting `hudLayersByLayer` (default on).
+2. **NPC talk in first person:** `TalkThirdPerson()` (cameraMode firstPerson, camera state 5, not the dressing room, setting
+   `fpTalkThirdPerson` default on) makes `FirstPersonMode()` false / `ThirdPersonMode()` true for the talk; re-prime first
+   person after it. Check the direct `m_cameraMode` readers.
+3. **Third-person rectangle** (user: stays put in the world, edges show on head turns). Lead: Debug `Stereo: 3D near camera
+   ret=00747BE7` (6 verts, fvf 0x42, 256x256, blended, z on/no write, ±121 units AROUND the game camera): a camera-locked sheet,
+   hidden in first person because the camera is 25 units behind the head. Probe (layer, blend, colour; DIP path too), confirm
+   with the site bisect, then `eyeCameraSheets` hide (default) / keep.
+4. **Mission glow through ground / weapon:** reprojected sprites (0x00747248) already depth-test; glare / hit spark skipped.
+   Candidate: `eye XYZRHW draw with projected z from ret=004A0F4A` (not reprojected; no Ghidra function there yet). Probe
+   blended no-depth-test draws in the mission, bisect, then reproject / force the depth test (`eyeEffectDepthTest`) / skip.
+**Phase 1 done in code (2026-11-06 22:32):** `VRHud::CapturePassBDraw`: with `hudLayersByLayer` on (default; not in
+`psuex_vr.json` / `config.json`, so the default applies), pass-B layers >= 0x30 log `visor` and skip both the first-person
+`skip-own` band and the depth `eyes` route (both camera modes); layers < 0x30 unchanged. Debug prints once per layer
+`VRHud: layer 0xNN depth D > L would go to the eyes, kept on the panel (hudLayersByLayer)`. Checkbox "HUD pieces always on
+the panel (third person)" in HUD tab > HUD and menus. **Game folder:** Debug `PSUExD.dll` + `PSUExVRConfig.exe` deployed
+22:32; previous DLL kept as `PSUExD.dll.bak_prehudlayer`. **Pending test:** third person, town + field: map frame, arrow and
+HP/MP/name/EXP block on the panel; nameplates still over heads. `tools/lastlog.sh 'VRHud layer='` -> no `0x3x ... eyes`;
+`tools/lastlog.sh 'kept on the panel'` lists 0x30/0x33/0x39/0x3A/0x3B. Checkbox off -> old behaviour (pieces in the world).
+First person: HUD unchanged. **Next:** phase 2 (NPC talk) after the user's OK.
+**Phase 1 test 1 (2026-11-06 22:54):** third-person HUD fixed, but other players' nameplates went to the panel too: layers
+0x3A / 0x3B carry both the status block (fixed z 0.9286) and player nameplates (z 0.95-0.995 by distance; own plate
+0.95-0.96). All HUD-widget z values seen in both logs are 0.856-0.9375. **Fix deployed 2026-11-06 (Debug DLL + config exe):** the
+layer rule also needs raw z < 0.94 (or no depth); nameplates fall through to the depth routing. **Pending:**
+retest: HUD on panel in third person AND player nameplates over heads.
+**Phase 1 test 2 (2026-11-06): passed.** User: HUD on the panel and nameplates over heads in third person. Log: 0x30 / 0x33 /
+0x3A / 0x3B at z 0.9286-0.9334 -> `visor` (with `kept on the panel` lines); 0x3A / 0x3B nameplates z 0.972 -> `eyes`. Uncommitted
+(VRHud.cpp, VRSettings.h/.cpp, VRSettingsPanel.cpp; the settings files also hold the other session's uncommitted work). Next: phase 2.
+
+**Tracker run 2026-11-06 ~22:50, user: "trackers seem weird" (diagnosed, no code change):** source OpenXR (HTCX now sees all 8
+Standable trackers). Standable's raw space was **flat / degenerate again**: every tracker's STAGE floor height 1.0..1.26 m (feet
+included), body laid along LOCAL z (feet +0.8 m from the waist), raw y almost constant all session (waist 0.14..0.25) while x / z move
+~1 m. That is image-plane (2D-like) output, not a rigid tilt. The calibration (7 runs, turn 84..94 deg, fit 9..20 cm) rotates it
+upright, so standing still looks right, but walking toward / away from the camera moves the whole body up / down (waist joint
+-0.06 -> -0.73 m with a 0.72 m raw z shift) and the floor-based legs follow. Also: all 8 trackers lost 2 s at once (Standable dropped
+the user) -> residual jump 85..90 cm warning; later `waist tracker 0.00` / chest 0 deg with no loss = drive switched off in the
+panel (saved file still has everything true). Fix on Standable's side (redo its space / floor calibration until raw floor heights are
+feet ~0.05, waist ~1.0). Possible code guard: at calibration, refuse or warn when raw feet-to-waist STAGE height < 0.3 m.
+**Follow-up run (same day, user: "still weird"):** worse. Every tracker's STAGE floor 3.17..3.31 m, raw LOCAL y fixed at 2.04 / 2.10
+for the whole session (zero motion on that axis), so Standable gives a flat 2D sheet 3.2 m up. The body also **flips end over end**:
+feet +0.8 m z from the waist in 89 log samples, -0.8 m in 71 (calibrated feet jump from -1.0 m to +0.9 m LOCAL = above the head);
+left / right feet swap their fixed y (2.04 <-> 2.10) too. Residual jump 214 cm. Not fixable by calibration; Standable's 3D / space
+setup must be fixed. Proposed guard (not built): don't calibrate / drive when all trackers' floor heights are within 0.3 m of each
+other, and drop frames where the feet-to-waist direction flips vs the calibration.
+**B3 result (2026-11-06): works** (user: twin handgun recoil alternates hands, wand / TCSM charge + cast felt). Log: each twin
+handgun shot alternates arg2 1 / 0 -> left / right; casts spawn 0.18..0.27 s after the step starts; RCSM auto shots buzz the left
+hand (user wants to keep that: it tells them it is shooting). Fixes built + deployed (Debug + config exe): charge pulse every 0.1 s,
+ramp 1.0 -> 1.45 over 0.3 s (was 0.22 s / 0.9 s, too slow for a 0.2 s cast); charge check from the weapon in use (`player+0x230`
+bit 1, RCSM never casts) instead of the pressing hand (wand + RCSM left-trigger casts had no charge; a left press that landed on the
+right melee weapon buzzed a 1 s false charge). **Pending:** user feels the charge build up; log `technique charge ... +230` shows
+bit 1 set for TCSM casts and clear for wand casts. **Next:** B4 walking haptics (new session).
+**Phase B4 built + deployed (Debug `PSUExD.dll` + `PSUExVRConfig.exe`, 2026-11-07 00:01, built from the current tree incl. the other session's uncommitted work; previous DLL (other session's 23:23 build) = `PSUExD.dll.bak_preB4`; uncommitted):** effect `Step` (2 x 0.7 at 60 Hz, 50 + 40 ms, priority 0) on both hands per footfall, scale `hapticStepStrength` x1.3 when running (speed > 30 units/s, a guess: tune from the log). `VRGameHaptics::UpdateSteps`: off unless `hapticSteps`; nothing in menus (`0x00B9CC80` low word 0x0405), with the palette open, while the VR panel pointer is up, outside stereo scenes, in third person with `hapticStepsThirdPerson` off, below 8 units/s or while attacking (`+0x1E4` != 0). Source a: VRBodyIk planted feet (`NoteFootPlant(landed)` once per foot update, small hunk in the stepping loop) while they update (< 0.3 s ago). Source b (no motion ids found in Ghidra, see ADDRESS_MAP): the motion loop, frame wrap = footfall, half the learned loop = the other. Settings `hapticSteps` (false), `hapticStepStrength` (1.0, 0-1.5), `hapticStepsThirdPerson` (true): Controllers tab, "Footsteps" under "Technique charge and cast" (slider + 3P box shown when on).
+**Pending test (B4):** turn Footsteps on. Walk / run with planted feet off: a soft buzz per footfall, quicker + stronger running; standing / menus / palette: nothing. `tools/lastlog.sh -d 'VRHaptic: footfall'` -> `walk|run, speed S, source motion wrap|motion half, motion X frame F loop L`: report the walk / run speeds (to set the 30 threshold) and whether the buzz lands on the footfall (if off by a phase, shift the footfall frame). Then with "Planted feet that step" on: source `plant left|right`. Third-person box off -> no buzz in third person. **Also still pending from B3:** charge build-up feel (0.1 s pulse / 0.3 s ramp) and the `+230` value in `technique charge` lines (bit 1 set TCSM, clear wand).
+**Game folder (2026-11-07):** `hapticSteps` set true in `psuex_vr.json` and `config.json` (backups `psuex_vr.json.bak15`, `config.json.bak14`); `bodyProceduralLegs` is already true there, so the first test uses source a (planted feet).
+**B4 test 1 (2026-11-07):** user: footsteps a bit too frequent and too strong -> `hapticSteps` set back to false in both files (code default already false). Log (all source `plant`): IK feet land every ~3.5 game frames while running (60 units/s), but the game's run motion (id 2) loops over ~20 frames = 2 real footfalls per loop: the planted feet step ~3x too often for the buzz. Speeds: walk 11..24, run 44..61 units/s (threshold 30 fits). **Ideas (not built):** take the timing from the motion loop even when planted feet are on (2 per loop), or a minimum interval between buzzes; lower the default strength (e.g. 0.7) / one pulse instead of two. Source b (`motion wrap|half`) not tested yet.
+**B4 fix built + deployed (Debug + config exe, 2026-11-07 01:05):** footfalls always from the motion loop (wrap + half way, 2 per loop); the planted feet only stand in until the current motion's loop length is known, at most one buzz per 0.3 s. `hapticStepStrength` default 0.7 (was 1.0; also set 0.7 in both settings files), running boost x1.2 (was x1.3). `hapticSteps` stays false in the game files. **Pending test:** turn Footsteps on: 2 buzzes per run cycle, softer; log source mostly `motion wrap` / `motion half` (a few `plant` at the start of a motion).
+**Standable diagnosis (2026-11-06/07), no PSUEx change:** bad poses come from Standable itself (OpenVR path shows the same as OpenXR;
+the SteamVR skeleton floats with the game closed). Standable 3.0.4 at `D:\SteamLibrary\steamapps\common\Standable Full Body
+Estimation\saves`: `Sync Standable Floor to SteamVR` was on (user turned it off; still floating), `bind_offsets.json` has a ghost
+"Null Serial Number" device bound as Head (role 1) next to the PS VR2 headset. Lay Back / Front poses explain the flipping. HMD is
+PS VR2 (`playstation_vr2` driver). User is rolling Standable back to an older version. After that: check the SteamVR skeleton stands,
+then a game run: `tools/lastlog.sh -d 'VRTrackers:'` floors feet ~0.05 / waist ~1.0, calibration turn ~0 deg.
+**Resolved (2026-11-07):** user rolled Standable back to an older version: "that works". No game log yet after the rollback (last
+session in psuex.log is still the broken one); confirm on the next run with `tools/lastlog.sh -d 'VRTrackers:|whole-frame fit'`
+(feet floor ~0.05, waist ~1.0, fit turn ~0 deg). Keep Standable's auto-update off. Optional guard still unbuilt (refuse calibration
+when all tracker floor heights agree within 0.3 m).
+**Standable fixed for real (2026-11-07):** Steam Cloud kept restoring the 3.0.4 `settings.json`; the SteamVR restart broke the
+rolled-back build again. Fix: rollback beta + empty `saves` (3.0.4 files in `saves_3.0.4_backup` / `saves_cloud_restored`) + the
+old version's own floor calibration. The user has Steam Cloud for Standable off. 3.0.x dropped the separate floor calibration for
+"floor = HMD height - user height" on T-pose (+ optional sync to SteamVR), which went wrong on PS VR2 here.
+
+## Release v0.5.0-vr (2026-11-09)
+Defaults for other users (starter `psuex_vr.json` from `PSUExVRConfig.exe --write-defaults`): VR on, first person, motion input,
+OpenXR, setup wizard on first start; all FBT off (`trackersEnabled`, `bodyIk`, `bodyRestPose`, `bodyProceduralLegs`,
+`bodyIkThirdPerson`); experimental off (`holsterEnabled`, `voiceItems`, `hapticSteps`, `perfOverlay`). Voice changed for the
+release: `speechToText` and `voiceCommands` now default ON (hold left Square to talk, a technique name casts, else chat),
+`speechAlwaysOn` off, `voiceRoute` auto. Package: `tools/package-release.ps1 -Version 0.5.0` -> `dist/PSUEx-VR-v0.5.0.zip`.

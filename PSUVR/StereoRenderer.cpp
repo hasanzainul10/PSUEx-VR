@@ -6,10 +6,12 @@
 #include "VRHud.h"
 #include "VRPerf.h"
 #include "VRPlayerDraw.h"
+#include "VREyeCull.h"
 #include "VRSyntheticPad.h"
 #include "VRSystem.h"
 #include "../Misc/Log.h"
 #include "../PSUExConfig.h"
+#include "../PSUMemory/Memory.hpp"
 #include "../PSUStructs/PSUPlayerData.h"
 
 #include <d3d9.h>
@@ -359,6 +361,11 @@ namespace PSUVR
 	bool StereoRenderer::InEyePass()
 	{
 		return s_inEyePass;
+	}
+
+	int StereoRenderer::PassEyeIndex()
+	{
+		return s_passEyeIndex & 1;
 	}
 
 	bool StereoRenderer::InNameplateDraw()
@@ -804,6 +811,135 @@ namespace PSUVR
 #else
 		( void )startRegister; ( void )data; ( void )vector4Count; ( void )ret;
 #endif
+	}
+
+	namespace
+	{
+		// TPlayerLODModelShader [0x00B91140]: 6 instance buckets at +0x2C, each with its count (int16) at +0x0C.
+		// Layer 0x14's draw (0x00551890) sets every drawn bucket's count to 0; the instances stay in the array.
+		constexpr uintptr_t kLodShaderPtr = 0x00B91140;
+		constexpr int kLodBuckets = 6;
+		const uint8_t *s_crowdShader = nullptr;
+		uint8_t *s_crowdBucket[ kLodBuckets ] = {};
+		int16_t s_crowdCount[ kLodBuckets ] = {};
+	}
+
+	void StereoRenderer::SaveCrowdBatch()
+	{
+		s_crowdShader = nullptr;
+		__try
+		{
+			const uint8_t *shader = *reinterpret_cast< const uint8_t *const * >( kLodShaderPtr );
+			if( !shader )
+			{
+				return;
+			}
+			for( int i = 0; i < kLodBuckets; ++i )
+			{
+				uint8_t *bucket = *reinterpret_cast< uint8_t *const * >( shader + 0x2C + i * 4 );
+				s_crowdBucket[ i ] = bucket;
+				s_crowdCount[ i ] = bucket ? *reinterpret_cast< const int16_t * >( bucket + 0x0C ) : 0;
+			}
+			s_crowdShader = shader;
+		}
+		__except( EXCEPTION_EXECUTE_HANDLER )
+		{
+			s_crowdShader = nullptr;
+		}
+	}
+
+	void StereoRenderer::RestoreCrowdBatch()
+	{
+		if( !s_crowdShader )
+		{
+			return;
+		}
+		int restored = 0;
+		__try
+		{
+			if( *reinterpret_cast< const uint8_t *const * >( kLodShaderPtr ) != s_crowdShader )
+			{
+				s_crowdShader = nullptr;
+				return;
+			}
+			for( int i = 0; i < kLodBuckets; ++i )
+			{
+				uint8_t *bucket = s_crowdBucket[ i ];
+				if( !bucket || *reinterpret_cast< uint8_t *const * >( s_crowdShader + 0x2C + i * 4 ) != bucket )
+				{
+					continue;
+				}
+				int16_t &count = *reinterpret_cast< int16_t * >( bucket + 0x0C );
+				if( count != s_crowdCount[ i ] )
+				{
+					restored += s_crowdCount[ i ] - count;
+					count = s_crowdCount[ i ];
+				}
+			}
+		}
+		__except( EXCEPTION_EXECUTE_HANDLER )
+		{
+			s_crowdShader = nullptr;
+			return;
+		}
+		static int s_logs = 0;
+		if( restored > 0 && s_logs < 8 )
+		{
+			++s_logs;
+			PSU_LOG( "VRCrowd: restored %d LOD crowd instances for eye %d (shader %p)\n", restored, s_passEyeIndex, s_crowdShader );
+		}
+	}
+
+	bool StereoRenderer::EyeShadowReceiverWvp( unsigned startRegister, const float *data, unsigned vector4Count, void *ret, float *out )
+	{
+		// With shadows on, field map nodes get an extra shadow-receive pass with a vertex shader
+		// (PSU_ShadowReceiverConstants 0x0055BB60): c0..c3 = model x light view-projection (same for
+		// both eyes), c12..c15 = the node's world-view-projection (node +0x340, transposed), built
+		// with the flat camera. Rebuild it for the eye: flat WVP x inv(game PROJ) x inv(game VIEW)
+		// x eye VIEW x eye PROJ.
+		constexpr uintptr_t kReceiverWvpRet = 0x0055BB9F;
+		if( !s_inEyePass || startRegister != 12 || vector4Count != 4 || !data || !out ||
+			reinterpret_cast< uintptr_t >( ret ) != kReceiverWvpRet )
+		{
+			return false;
+		}
+		StereoRenderer &self = Get();
+		const int eye = s_passEyeIndex & 1;
+		if( !self.m_haveEyeMatrices || !self.m_haveInvGameView )
+		{
+			return false;
+		}
+		D3DMATRIX flat{};
+		for( int r = 0; r < 4; ++r )
+		{
+			for( int c = 0; c < 4; ++c )
+			{
+				flat.m[ r ][ c ] = data[ c * 4 + r ];
+			}
+		}
+		D3DMATRIX toCamera{}, toEye{}, fix{}, eyeWvp{};
+		MulMatrix( self.m_invGameProj, self.m_invGameView, toCamera );
+		MulMatrix( toCamera, self.m_eyeView[ eye ], toEye );
+		MulMatrix( toEye, self.m_eyeProj[ eye ], fix );
+		MulMatrix( flat, fix, eyeWvp );
+		for( int r = 0; r < 4; ++r )
+		{
+			for( int c = 0; c < 4; ++c )
+			{
+				out[ c * 4 + r ] = eyeWvp.m[ r ][ c ];
+			}
+		}
+		static bool s_logged = false;
+		if( !s_logged )
+		{
+			// If c12 really is model-view x game PROJ, this column is (0, 0, 0, 1).
+			s_logged = true;
+			D3DMATRIX modelView{};
+			MulMatrix( flat, self.m_invGameProj, modelView );
+			PSU_LOG( "ShadowRecv: eye WVP rebuilt for the shadow-receive pass (flat x invProj col4 = %.3f %.3f %.3f %.3f)\n",
+				modelView._14, modelView._24, modelView._34, modelView._44 );
+		}
+		return true;
 	}
 
 	void StereoRenderer::NoteShaderDraw( IDirect3DDevice9 *device, unsigned primitiveCount, void *ret )
@@ -1699,6 +1835,242 @@ namespace PSUVR
 		return onMonitor;
 	}
 
+	namespace
+	{
+		// Game task tree (TTask, base ctor 0x00560970): +0x04 name (char*), +0x08 flags, +0x0C previous sibling
+		// (the first child's points at the last), +0x10 next sibling, +0x14 parent, +0x18 first child.
+		// The root is found by walking +0x14 up from a live task a hook saw (the camera task); the static,
+		// self-linked TTask at 0x009CA8D4 had no children at runtime (2026-10-31), so it isn't the root.
+		const uint8_t *volatile s_seedTask = nullptr;
+		const uint8_t *s_rootTask = nullptr;
+		constexpr int kMaxTasks = 4096;
+		constexpr int kNameLength = 40;
+		char s_taskNames[ kMaxTasks ][ kNameLength ];
+		int s_taskCount = 0;
+
+		void CopyTaskName( const char *name, char *out )
+		{
+			int i = 0;
+			__try
+			{
+				for( ; name && i < kNameLength - 1 && name[ i ] >= 0x20 && name[ i ] < 0x7F; ++i )
+				{
+					out[ i ] = name[ i ];
+				}
+			}
+			__except( EXCEPTION_EXECUTE_HANDLER )
+			{
+			}
+			out[ i ] = 0;
+		}
+
+		// The top of a task's parent chain (levels climbed in depth); null when unreadable or too deep.
+		const uint8_t *TopTask( const uint8_t *task, int &depth )
+		{
+			depth = 0;
+			__try
+			{
+				for( ; task && depth < 32; ++depth )
+				{
+					const uint8_t *parent = *reinterpret_cast< const uint8_t *const * >( task + 0x14 );
+					if( !parent )
+					{
+						return task;
+					}
+					task = parent;
+				}
+			}
+			__except( EXCEPTION_EXECUTE_HANDLER )
+			{
+			}
+			return nullptr;
+		}
+
+		// Every task's name into s_taskNames; false when the tree couldn't be read.
+		bool CollectTaskNames( const uint8_t *root )
+		{
+			s_taskCount = 0;
+			__try
+			{
+				const uint8_t *todo[ 256 ];
+				int top = 0;
+				const uint8_t *first = *reinterpret_cast< const uint8_t *const * >( root + 0x18 );
+				if( first )
+				{
+					todo[ top++ ] = first;
+				}
+				while( top > 0 && s_taskCount < kMaxTasks )
+				{
+					const uint8_t *node = todo[ --top ];
+					CopyTaskName( *reinterpret_cast< const char *const * >( node + 0x04 ), s_taskNames[ s_taskCount++ ] );
+					const uint8_t *next = *reinterpret_cast< const uint8_t *const * >( node + 0x10 );
+					const uint8_t *child = *reinterpret_cast< const uint8_t *const * >( node + 0x18 );
+					if( next && top < 256 )
+					{
+						todo[ top++ ] = next;
+					}
+					if( child && top < 256 )
+					{
+						todo[ top++ ] = child;
+					}
+				}
+				return true;
+			}
+			__except( EXCEPTION_EXECUTE_HANDLER )
+			{
+				return false;
+			}
+		}
+
+#ifdef _DEBUG
+		// Debug: task names that appear / go away, so a menu's task can be found by opening it.
+		void LogTaskChanges()
+		{
+			static std::unordered_set< std::string > s_last;
+			static unsigned s_logs = 0;
+			static bool s_loggedCount = false;
+			std::unordered_set< std::string > now;
+			for( int i = 0; i < s_taskCount; ++i )
+			{
+				now.insert( s_taskNames[ i ] );
+			}
+			if( !s_loggedCount && s_taskCount > 0 )
+			{
+				s_loggedCount = true;
+				PSU_LOG( "VRMenu: task tree has %d tasks (%u names)\n", s_taskCount, static_cast< unsigned >( now.size() ) );
+			}
+			else if( !s_last.empty() )
+			{
+				// An area load swaps most tasks: one summary line, so the cap is kept for menus.
+				size_t changes = 0;
+				for( const auto &name : now )
+				{
+					changes += s_last.count( name ) ? 0 : 1;
+				}
+				for( const auto &name : s_last )
+				{
+					changes += now.count( name ) ? 0 : 1;
+				}
+				if( changes > 16 )
+				{
+					PSU_LOG( "VRMenu: %u task names changed (area load)\n", static_cast< unsigned >( changes ) );
+					s_last.swap( now );
+					return;
+				}
+				for( const auto &name : now )
+				{
+					if( !s_last.count( name ) && s_logs < 600 )
+					{
+						++s_logs;
+						PSU_LOG( "VRMenu: task + %s\n", name.c_str() );
+					}
+				}
+				for( const auto &name : s_last )
+				{
+					if( !now.count( name ) && s_logs < 600 )
+					{
+						++s_logs;
+						PSU_LOG( "VRMenu: task - %s\n", name.c_str() );
+					}
+				}
+			}
+			s_last.swap( now );
+		}
+#endif
+
+		// The first collected task name that is in the comma-separated list; null when none is.
+		const char *FindListedTask( const std::string &list )
+		{
+			for( int i = 0; i < s_taskCount; ++i )
+			{
+				const size_t length = std::strlen( s_taskNames[ i ] );
+				for( size_t start = 0; start < list.size(); )
+				{
+					size_t end = list.find( ',', start );
+					if( end == std::string::npos )
+					{
+						end = list.size();
+					}
+					while( start < end && list[ start ] == ' ' )
+					{
+						++start;
+					}
+					size_t last = end;
+					while( last > start && list[ last - 1 ] == ' ' )
+					{
+						--last;
+					}
+					if( last - start == length && length > 0 && list.compare( start, length, s_taskNames[ i ] ) == 0 )
+					{
+						return s_taskNames[ i ];
+					}
+					start = end + 1;
+				}
+			}
+			return nullptr;
+		}
+
+		// vr.flatMenus: one of the vr.flatMenuTasks tasks is alive (tree read at most every 100 ms).
+		// Once open, a vr.flatMenuHoldTasks task (the menu's backdrop window) keeps it open.
+		bool FlatMenuOpen()
+		{
+			static DWORD s_lastWalk = 0;
+			static bool s_open = false;
+			const DWORD now = GetTickCount();
+			if( s_lastWalk != 0 && now - s_lastWalk < 100 )
+			{
+				return s_open;
+			}
+			s_lastWalk = now ? now : 1;
+			if( const uint8_t *seed = s_seedTask )
+			{
+				int depth = 0;
+				const uint8_t *root = TopTask( seed, depth );
+				if( root && root != s_rootTask )
+				{
+					s_rootTask = root;
+					char rootName[ kNameLength ];
+					char seedName[ kNameLength ];
+					CopyTaskName( *reinterpret_cast< const char *const * >( root + 0x04 ), rootName );
+					CopyTaskName( *reinterpret_cast< const char *const * >( seed + 0x04 ), seedName );
+					PSU_LOG( "VRMenu: task root %p (%s), %d levels above %p (%s)\n", root, rootName, depth, seed, seedName );
+				}
+			}
+			if( !s_rootTask || !CollectTaskNames( s_rootTask ) )
+			{
+				return s_open;
+			}
+#ifdef _DEBUG
+			LogTaskChanges();
+#endif
+			const char *found = FindListedTask( Config::Get().vr.m_flatMenuTasks );
+			if( !found && s_open )
+			{
+				static bool s_loggedHold = false;
+				found = FindListedTask( Config::Get().vr.m_flatMenuHoldTasks );
+				if( found && !s_loggedHold )
+				{
+					s_loggedHold = true;
+					PSU_LOG( "VRMenu: flat menu held open by %s\n", found );
+				}
+				s_loggedHold = found != nullptr && s_loggedHold;
+			}
+			if( ( found != nullptr ) != s_open )
+			{
+				s_open = found != nullptr;
+				if( s_open )
+				{
+					PSU_LOG( "VRMenu: flat menu open (%s): flat picture on the menu panel\n", found );
+				}
+				else
+				{
+					PSU_LOG( "VRMenu: flat menu closed: back to stereo\n" );
+				}
+			}
+			return s_open;
+		}
+	}
+
 	bool StereoRenderer::SceneAllowsStereo()
 	{
 		const auto &vr = Config::Get().vr;
@@ -1707,7 +2079,17 @@ namespace PSUVR
 			return false;
 		}
 		const unsigned sceneMode = *reinterpret_cast< unsigned * >( 0x00B90EA8 );
-		return vr.m_stereoMode == 0 || sceneMode == vr.m_stereoMode;
+		if( vr.m_stereoMode != 0 && sceneMode != vr.m_stereoMode )
+		{
+			return false;
+		}
+		// Shop / mission menus: the flat path, like the other 2D menus.
+		return !( vr.m_flatMenus && FlatMenuOpen() );
+	}
+
+	void StereoRenderer::NoteGameTask( const void *task )
+	{
+		s_seedTask = static_cast< const uint8_t * >( task );
 	}
 
 	bool StereoRenderer::CanRenderEyes( IDirect3DDevice9 *device ) const
@@ -1851,8 +2233,10 @@ namespace PSUVR
 			const float unitsPerMeter = VRCamera::kGameUnitsPerMeter * ( vr.m_worldScale > 0.01f ? vr.m_worldScale : 1.0f );
 			VRCamera::CaptureRenderCamera();
 			const bool firstPerson = VRCamera::FirstPersonActive();
-			// Bracket the local player's draw callback so its head can be cut in the eyes.
-			VRPlayerDraw::Update( firstPerson );
+			VRCamera::NoteHmd( views );
+			// Bracket the local player's draw callback so its head can be cut in the eyes (and the
+			// body posed in third person with vr.bodyIkThirdPerson).
+			VRPlayerDraw::Update( firstPerson, VRCamera::ThirdPersonBodyWanted() );
 			if( firstPerson )
 			{
 				VRCamera::UpdateFirstPersonAnchor( views );
@@ -1894,9 +2278,16 @@ namespace PSUVR
 				device->Clear( 0, nullptr, clearFlags, D3DCOLOR_XRGB( 0, 0, 0 ), 1.0f, 0 );
 				device->SetTransform( D3DTS_VIEW, &eyeView );
 				device->SetTransform( D3DTS_PROJECTION, &eyeProj );
+				VREyeCull::BeginEye( eyeView, eyeProj );
 
 				SetPassEye( views[ eye ] );
 				s_passEyeIndex = eye;
+				// The shadow receivers upload their world-view-projection (c12, rebuilt per eye in
+				// EyeShadowReceiverWvp) once per frame: 0x0055BB60 sets this byte after the upload and
+				// only the node update clears it. Clear it so each eye uploads its own.
+				PSUMemory::WriteAbsoluteMemory< uint8_t >( 0x00B9DB09, 0 );
+				// The crowd batch is emptied by the pass that draws it (the flat pass or the left eye).
+				RestoreCrowdBatch();
 				BeginEyePass( eyeSurface, eyeW, eyeH, targetDesc.Width, targetDesc.Height );
 				pass();
 				EndEyePass();
@@ -1908,6 +2299,7 @@ namespace PSUVR
 				m_poses[ eye ] = views[ eye ];
 				m_viewSpacePoses[ eye ] = viewSpace[ eye ];
 			}
+			VREyeCull::End();
 			VRPlayerDraw::EndEyePasses();
 
 			device->SetRenderTarget( 0, gameTarget );

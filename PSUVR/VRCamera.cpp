@@ -546,6 +546,7 @@ namespace PSUVR
 		}
 
 		float s_hmdTracking[ 3 ]{};
+		float s_hmdOrientation[ 4 ]{ 0.0f, 0.0f, 0.0f, 1.0f };
 
 		bool TrackingToWorld( const float tracking[ 3 ], float world[ 3 ] )
 		{
@@ -572,6 +573,16 @@ namespace PSUVR
 		{
 			// The real head (not the leashed anchor), so crouching and stepping show.
 			return TrackingToWorld( s_hmdTracking, head );
+		}
+
+		bool HeadAxes( float forward[ 3 ], float up[ 3 ] )
+		{
+			const Quat q = ToQuat( s_hmdOrientation );
+			const Vec3 f = Rotate( q, { 0.0f, 0.0f, -1.0f } );
+			const Vec3 u = Rotate( q, { 0.0f, 1.0f, 0.0f } );
+			const float fIn[ 3 ] = { f.x, f.y, f.z };
+			const float uIn[ 3 ] = { u.x, u.y, u.z };
+			return TrackingDirToWorld( fIn, forward ) && TrackingDirToWorld( uIn, up );
 		}
 
 		bool WorldToTracking( const float world[ 3 ], float tracking[ 3 ] )
@@ -996,9 +1007,6 @@ namespace PSUVR
 				( views[ 0 ].position[ 0 ] + views[ 1 ].position[ 0 ] ) * 0.5f,
 				( views[ 0 ].position[ 1 ] + views[ 1 ].position[ 1 ] ) * 0.5f,
 				( views[ 0 ].position[ 2 ] + views[ 1 ].position[ 2 ] ) * 0.5f };
-			s_hmdTracking[ 0 ] = head.x;
-			s_hmdTracking[ 1 ] = head.y;
-			s_hmdTracking[ 2 ] = head.z;
 			const bool roomWalk = RoomWalkOn();
 			if( roomWalk )
 			{
@@ -1152,6 +1160,162 @@ namespace PSUVR
 			orientation[ 1 ] = yaw.y;
 			orientation[ 2 ] = yaw.z;
 			orientation[ 3 ] = yaw.w;
+		}
+		namespace
+		{
+			// Third-person body (vr.bodyIkThirdPerson): where the standing head sits on the character
+			// (game world), the character's facing, and game units per real meter for its size.
+			Vec3 s_tpBodyEye{};
+			float s_tpBodyYaw = 0.0f;
+			float s_tpBodyUnits = kGameUnitsPerMeter;
+			DWORD s_tpBodyTick = 0;
+			// The head moves at most this far sideways from the anchor (you may walk around the room).
+			constexpr float kTpBodyLeanMeters = 0.35f;
+
+			bool ThirdPersonBodyActive()
+			{
+				return ThirdPersonBodyWanted() && s_tpBodyTick != 0 && GetTickCount() - s_tpBodyTick < 500;
+			}
+
+			// A tracking-space direction in the character's frame: your recenter yaw = its facing.
+			Vec3 TpDirToWorld( const Vec3 &t )
+			{
+				const Vec3 local = Rotate( YawQuat( -s_refYaw ), t );
+				const float fx = std::sin( s_tpBodyYaw );
+				const float fz = std::cos( s_tpBodyYaw );
+				return { -fz * local.x - fx * local.z, local.y, fx * local.x - fz * local.z };
+			}
+
+			Vec3 TpHeadWorld()
+			{
+				Vec3 off = TpDirToWorld( { s_hmdTracking[ 0 ] - s_refPosition.x, s_hmdTracking[ 1 ] - s_refPosition.y,
+					s_hmdTracking[ 2 ] - s_refPosition.z } );
+				// Height from the floor when the headset knows it: standing straight (at fpEyeHeight) is the
+				// character's eye, wherever you recentered. A recenter while crouched or seated put the head
+				// 55 cm above the eye (2026-11-06), and floor-placed trackers then left the body far below it.
+				float aboveFloor = 0.0f;
+				if( System::Get().HeadHeightAboveFloor( aboveFloor ) && aboveFloor > 0.3f )
+				{
+					off.y = ( std::min )( aboveFloor - Config::Get().vr.m_fpEyeHeight, 0.3f );
+				}
+				const float level = std::sqrt( off.x * off.x + off.z * off.z );
+				if( level > kTpBodyLeanMeters )
+				{
+					off.x *= kTpBodyLeanMeters / level;
+					off.z *= kTpBodyLeanMeters / level;
+				}
+				return Add( s_tpBodyEye, Scale( off, s_tpBodyUnits ) );
+			}
+		}
+
+		void NoteHmd( const EyePose views[ 2 ] )
+		{
+			for( int i = 0; i < 3; ++i )
+			{
+				s_hmdTracking[ i ] = ( views[ 0 ].position[ i ] + views[ 1 ].position[ i ] ) * 0.5f;
+			}
+			memcpy( s_hmdOrientation, views[ 0 ].orientation, sizeof( s_hmdOrientation ) );
+		}
+
+		bool ThirdPersonBodyWanted()
+		{
+			return Config::Get().vr.m_bodyIkThirdPerson && !FirstPersonActive() && s_tpActive && s_haveReference &&
+				ThirdPersonMode() && !DressingRoom();
+		}
+
+		void SetThirdPersonBody( const float eyeWorld[ 3 ], float facingYaw, float unitsPerMeter )
+		{
+			s_tpBodyEye = { eyeWorld[ 0 ], eyeWorld[ 1 ], eyeWorld[ 2 ] };
+			s_tpBodyYaw = facingYaw;
+			s_tpBodyUnits = unitsPerMeter;
+			s_tpBodyTick = GetTickCount();
+		}
+
+		bool BodyTrackingToWorld( const float tracking[ 3 ], float world[ 3 ] )
+		{
+			if( FirstPersonActive() )
+			{
+				return TrackingToWorld( tracking, world );
+			}
+			if( !ThirdPersonBodyActive() )
+			{
+				return false;
+			}
+			// Relative to the headset, so the hands stay with the head when it is clamped.
+			const Vec3 head = TpHeadWorld();
+			const Vec3 w = Add( head, Scale( TpDirToWorld( { tracking[ 0 ] - s_hmdTracking[ 0 ], tracking[ 1 ] - s_hmdTracking[ 1 ],
+				tracking[ 2 ] - s_hmdTracking[ 2 ] } ), s_tpBodyUnits ) );
+			world[ 0 ] = w.x;
+			world[ 1 ] = w.y;
+			world[ 2 ] = w.z;
+			return true;
+		}
+
+		bool BodyTrackingDirToWorld( const float tracking[ 3 ], float world[ 3 ] )
+		{
+			if( FirstPersonActive() )
+			{
+				return TrackingDirToWorld( tracking, world );
+			}
+			if( !ThirdPersonBodyActive() )
+			{
+				return false;
+			}
+			const Vec3 w = TpDirToWorld( { tracking[ 0 ], tracking[ 1 ], tracking[ 2 ] } );
+			world[ 0 ] = w.x;
+			world[ 1 ] = w.y;
+			world[ 2 ] = w.z;
+			return true;
+		}
+
+		bool BodyHeadWorld( float head[ 3 ] )
+		{
+			return BodyTrackingToWorld( s_hmdTracking, head );
+		}
+
+		bool BodyHeadAxes( float forward[ 3 ], float up[ 3 ] )
+		{
+			const Quat q = ToQuat( s_hmdOrientation );
+			const Vec3 f = Rotate( q, { 0.0f, 0.0f, -1.0f } );
+			const Vec3 u = Rotate( q, { 0.0f, 1.0f, 0.0f } );
+			const float fIn[ 3 ] = { f.x, f.y, f.z };
+			const float uIn[ 3 ] = { u.x, u.y, u.z };
+			return BodyTrackingDirToWorld( fIn, forward ) && BodyTrackingDirToWorld( uIn, up );
+		}
+
+		bool BodyFrameAxes( float forward[ 3 ], float right[ 3 ] )
+		{
+			if( FirstPersonActive() )
+			{
+				return BodyAxes( forward, right );
+			}
+			if( !ThirdPersonBodyActive() )
+			{
+				return false;
+			}
+			const float fx = std::sin( s_tpBodyYaw );
+			const float fz = std::cos( s_tpBodyYaw );
+			forward[ 0 ] = fx;
+			forward[ 1 ] = 0.0f;
+			forward[ 2 ] = fz;
+			right[ 0 ] = -fz;
+			right[ 1 ] = 0.0f;
+			right[ 2 ] = fx;
+			return true;
+		}
+
+		bool BodyLookYaw( float &yaw )
+		{
+			if( FirstPersonActive() )
+			{
+				return LookYaw( yaw );
+			}
+			if( !ThirdPersonBodyActive() )
+			{
+				return false;
+			}
+			yaw = WrapAngle( s_tpBodyYaw + WrapAngle( PoseYaw( s_hmdOrientation ) - s_refYaw ) );
+			return true;
 		}
 	}
 }

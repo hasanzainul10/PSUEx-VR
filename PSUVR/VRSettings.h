@@ -31,6 +31,18 @@ enum VRKeyMod : uint8_t
 	kVRModAlt = 4,
 };
 
+// bodyAnimKeep bits: bone groups that keep the game's animation in the rest pose (each on
+// top of its parent's pose).
+enum VRBodyAnimKeep : unsigned
+{
+	kVRKeepLegs = 1,    // pelvis, hips, legs (1-8)
+	kVRKeepSpine = 2,   // waist, chest, shoulder level (9-11)
+	kVRKeepHead = 4,    // neck, head (12-13)
+	kVRKeepArms = 8,    // shoulders to hands (14-17, 19-22)
+	kVRKeepWeapons = 16, // weapon bones in the hands (18, 23)
+	kVRKeepExtras = 32, // chest, belly, body extras (24-27)
+};
+
 struct VRBinding
 {
 	int key = 0;
@@ -78,9 +90,23 @@ struct VRSettings
 	// Menus / 2D scenes: a dark backdrop behind the panel instead of the runtime's own
 	// environment (which also shows the play-area boundary).
 	bool m_menuBackdrop = true;
+	// Mission counter, clothing shop and beauty parlor menus: the flat game picture on the menu panel
+	// (mono) instead of the stereo eyes. Detected by their game tasks (names in flatMenuTasks).
+	bool m_flatMenus = true;
+	// Comma-separated game task names (TTask +4) that turn the flat menu view on while alive. TBeautyParlor /
+	// TDressShop already live during the NPC talk; TCharaMakeDoll (salon) / TDressShopList (clothes) come with the menu.
+	// TLobbyCounterCamera: the spaceport planet selector, whose planets ignore the eye VIEW and would stick to the head.
+	std::string m_flatMenuTasks = "TCounterSequence,TCharaMakeDoll,TDressShopList,TLobbyCounterCamera";
+	// Tasks that keep an open flat menu flat after its flatMenuTasks task is gone (they never open it): the salon /
+	// clothes shop backdrop window outlives the menu and would otherwise animate in VR space while it fades out.
+	std::string m_flatMenuHoldTasks = "TWindowCharaMakeBack";
 	// Menu overlays bigger than the screen (mission menu scanlines) go on the menu panel in their
 	// draw order instead of being dropped as a background.
 	bool m_hudOverlays = true;
+	// Pass-B layers >= 0x30 (map frame, arrow, HP/MP/name/EXP block) always go on the HUD panel. Their fixed HUD z
+	// decodes to 14-15 units, which the third-person depth rule (> 12 = world) sent to the eyes. Nameplates (0x2B)
+	// keep the depth routing. Off: the depth rule decides for every layer.
+	bool m_hudLayersByLayer = true;
 	// Rogue's Toolkit panels and menu (drawn inside its Present hook) go on the HUD panel in the headset
 	// instead of only the monitor's back buffer. They then no longer show on the flat monitor.
 	bool m_toolkitOnHud = true;
@@ -99,11 +125,55 @@ struct VRSettings
 	// With the rest pose: scale the whole body so its eyes sit at fpEyeHeight (your real height).
 	bool m_bodyFitHeight = false;
 	// With the rest pose, first person: hips follow the head (crouch), the spine leans to it.
-	// With the rest pose: leave the pelvis and legs on the game's own animation (walk, idle).
-	bool m_bodyKeepLegAnim = false;
+	// With the rest pose: VRBodyAnimKeep groups that keep the game's animation (walk, idle, attacks).
+	// Replaces bodyKeepLegAnim (true = kVRKeepLegs).
+	unsigned m_bodyAnimKeep = 0;
 	bool m_bodyIk = false;
+	// bodyIk: how far below the eye the neck sits, and how far behind the eye the body stands (meters).
+	float m_bodyNeckDrop = 0.22f;
+	float m_bodyBack = 0.20f;
 	// With the rest pose: feet stay planted in the world and step when the hips move away (replaces the strafe legs).
 	bool m_bodyProceduralLegs = false;
+	// bodyIk: the head (neck 30%) turns with the HMD.
+	bool m_bodyHeadFollowsHmd = true;
+	// Third person: the arms follow the controllers and (with bodyIk) the body follows the headset, mapped
+	// from your head onto the character (rest pose, its facing).
+	bool m_bodyIkThirdPerson = false;
+	// Body trackers through OpenXR (XR_HTCX_vive_tracker_interaction; roles set in SteamVR > Manage
+	// Trackers). Read at VR start: changing it needs a game restart.
+	bool m_trackersEnabled = false;
+	// Where tracker poses come from: "auto" (OpenXR; OpenVR when OpenXR lists none after ~2 s),
+	// "openxr" (HTCX only), "openvr" (OpenVR side connection for every role HTCX doesn't have).
+	std::string m_trackerSource = "auto";
+	// A disc at each tracker in the headset (debug).
+	bool m_trackerShowDiscs = false;
+	// Tracker calibration (VRTrackers::Calibrate), STAGE space: "g px py pz qx qy qz qw s;r<role> x y z qx qy qz qw;..."
+	// (whole-frame fit, then each tracker's offset to its joint). Empty = not calibrated.
+	std::string m_trackerCal;
+	// Both grips + left stick down (measure eye height) also calibrates the trackers when any is tracked.
+	bool m_trackerCalibWithEyeHeight = true;
+	// Runtime only (not saved): bumped by the panel's Calibrate trackers button.
+	int m_trackerCalibRequest = 0;
+	// Smoothing of the tracker positions, 0 = raw, 1 = heavy (one-euro filter).
+	float m_trackerSmoothing = 0.3f;
+	// A lost tracker keeps its last pose this long (seconds) before it counts as gone.
+	float m_trackerLostHold = 0.3f;
+	// Calibrated trackers drive the body (VRBodyIk, rest pose + bodyIk): each role eases in / out over
+	// 0.3 s, the estimate (head-derived hips, planted feet, body-derived poles) fills in for missing ones.
+	bool m_trackerDriveBody = true;
+	bool m_trackerDriveWaist = true;  // hips position + yaw
+	bool m_trackerDriveChest = true;  // chest turn and lean
+	bool m_trackerDriveFeet = true;   // feet position + orientation (kept above the ground)
+	bool m_trackerDriveKnees = true;  // which way the knees bend
+	bool m_trackerDriveElbows = true; // which way the elbows bend
+	// A tracked foot that barely moves stays pinned to the ground (no sliding while stick walking, no jitter);
+	// it steps to the tracker when it drifts too far behind.
+	bool m_trackerFootLock = true;
+	// Arms on the controllers: the shoulders lift toward far / high hands (0 = off, 0.5 = up to 20 deg).
+	float m_bodyShoulderShrug = 0.5f;
+	// Arms on the controllers: how much the elbow follows the controller's angle (0 = hangs by the
+	// body only, 1 = the controller's forearm line only).
+	float m_bodyElbowFromHand = 0.5f;
 	// Right-stick snap turn step in degrees (snapTurn = true).
 	float m_snapTurnDegrees = 30.0f;
 	// Right-stick smooth turn speed in degrees per second (snapTurn = false).
@@ -148,6 +218,10 @@ struct VRSettings
 	bool m_showControllers = true;
 	// Motion controllers: point the right controller at PSUEx windows (VR settings) in the
 	// headset; the trigger clicks, the right stick scrolls, Circle closes.
+	// Text size of the VR settings window (1 = the old small text) and the page it was left on
+	// ("presets" / "simple" / "advanced").
+	float m_panelTextScale = 1.5f;
+	std::string m_settingsPage = "presets";
 	bool m_uiPointer = true;
 	// Controller label cards (what each button does) floating at the controllers: when you look
 	// down at a controller (toggle: both grips + right stick click), and while a grip is held
@@ -165,6 +239,9 @@ struct VRSettings
 	std::string m_simScript = "psuex_vr_script.txt";
 	// First person: the character's arms reach for the controllers (two-bone IK).
 	bool m_handsFollow = true;
+	// Measure the player's model -> world once per frame instead of on every player draw (each
+	// measurement re-runs the pose build).
+	bool m_handsWorldOncePerFrame = true;
 	bool m_armStretch = true; // visible arms stretch to reach the controllers when yours are longer
 	// Arms while attacking: "controller" (your swing) or "animation" (the game's). Photon
 	// Arts always play the game's animation.
@@ -187,6 +264,24 @@ struct VRSettings
 	std::string m_motionProfile = "psvr2";
 	// Buzz the right controller when the game's combo window opens (melee).
 	bool m_comboHaptic = true;
+	// Scales every controller vibration (0 = none, 1 = as designed, up to 1.5).
+	float m_hapticStrength = 1.0f;
+	// Vibrations for the UI pointer and panel dragging.
+	bool m_hapticUi = true;
+	// Buzz the hand that attacked when our attack lands (stronger for a Just Attack / Photon Art).
+	bool m_hapticHits = true;
+	// Buzz both hands when we lose HP (stronger for a bigger share of max HP).
+	bool m_hapticHurt = true;
+	// Recoil buzz on the shooting hand for each shot fired (stronger for rifles, shotguns, laser cannons).
+	bool m_hapticRecoil = true;
+	// Rising buzz on the casting hand while a technique charges, a strong one when it is cast.
+	bool m_hapticTechs = true;
+	// A soft buzz on both hands at each footfall while walking / running (faster and stronger running).
+	bool m_hapticSteps = false;
+	// Scale of the footfall buzz (0..1.5; 1.0 felt too strong).
+	float m_hapticStepStrength = 0.7f;
+	// Footfall buzz in third person too (off = first person only).
+	bool m_hapticStepsThirdPerson = true;
 	// Motion mode: the left stick works the D-pad while a menu has the input.
 	bool m_autoDpad = true;
 	// Motion mode combat: swing a melee hand to attack (X), pull a gun hand's trigger to
@@ -198,6 +293,15 @@ struct VRSettings
 	// slot 2 (the right grip sends no R1 while the right weapon has controls). Off: the old
 	// scheme, melee swings only, swing with the trigger held = Photon Art.
 	bool m_gripPhotonArt = true;
+	// Holster gestures (motion input): a grip press with the hand in a body zone switches the
+	// weapon up (back of the head) or down (back of the waist), or uses an item (mouth). Radii in
+	// meters at 1.7 m head height (scaled by the real head height); the mouth zone runs holsterItemScript (pad script: Circle held + D-pad left = use the current item)
+	bool m_holsterEnabled = false;
+	float m_holsterHeadRadius = 0.22f;
+	float m_holsterWaistRadius = 0.22f;
+	float m_holsterMouthRadius = 0.13f;
+	std::string m_holsterItemScript = "hold:cancel wait:0.12 tap:left wait:0.15";
+	bool m_holsterShowZones = false;
 	// Left Triangle in the field: the game's R2 (opens the chat log). Off: the
 	// PSUEx chat log window. Y in menus either way.
 	bool m_triangleChatL2 = true;  // (name kept for old settings files; it now sends R2)
@@ -249,10 +353,10 @@ struct VRSettings
 	// PSUExSpeech helper (Moonshine, English); speechModel tiny / small / medium picks the model
 	// in PSUExSpeech\models. The text goes to the game chat (speechChat) or, with voiceCommands,
 	// casts a technique on the equipped weapon when it names one ("Barta").
-	bool m_speechToText = false;
+	bool m_speechToText = true;
 	std::string m_speechModel = "small";
 	bool m_speechChat = true;
-	bool m_voiceCommands = false;
+	bool m_voiceCommands = true;
 	// Voice item use ("item two"): drives the weapon / item palette through the virtual pad. The
 	// script is space separated steps: hold:<button> (kept until the end), wait:open (palette up),
 	// tap:<button> or tap:slot, wait:<seconds>. voiceItemButtons = the buttons of items one..four.
@@ -296,6 +400,9 @@ struct VRSettings
 	// flat camera's view; in VR their unfinished sides show (galaxy panels, rectangles). Off hides
 	// the sky in the headset only.
 	bool m_eyeSky = true;
+	// The eye passes cull meshes and terrain against the eye's own frustum instead of the flat
+	// camera's (narrower, and pointing elsewhere when the head turns): no pop-in at the edges.
+	bool m_eyeFrustumCull = true;
 	// When stereo is on, also submit the flat game frame as a world-locked quad (HUD stand-in).
 	// Default off — the panel reads as a dark PiP sliding over the stereo floor.
 	bool m_stereoPanel = false;
@@ -318,6 +425,9 @@ struct VRSettings
 	bool m_perfLogBatching = true;
 	// Stereo: the monitor shows the left eye instead of a separate flat 3D pass (the HUD still draws on top).
 	bool m_flatMirrorEye = true;
+	// Stereo with the game's shadows on: the right eye reuses the left eye's shadow map (the light camera follows
+	// the game camera, not the eye) instead of drawing the shadow casters again.
+	bool m_perfShadowOnce = true;
 	// Stereo projection layer space: "local" (the rendered head poses, so the runtime's reprojection corrects
 	// head turns when the game is slower than the headset; less judder) or "view" (head-locked, the old behaviour).
 	std::string m_stereoLayerSpace = "local";

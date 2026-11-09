@@ -1805,29 +1805,55 @@ namespace PSUVR
 			constexpr float kOwnBand = 8.0f;        // game units around the head
 			constexpr float kHudDepthThird = 12.0f; // third person: nearer = HUD
 			const float headDepth = firstPerson ? VRCamera::FirstPersonCameraDistance() : 0.0f;
-			if( hasDepth && firstPerson && std::fabs( depth - headDepth ) < kOwnBand )
-			{
-				LogLayerRoute( layer, "skip-own", verts, vertCount, stride );
-				NoteMapDraw( device, layer, "DP-UP", "skip-own", primitiveCount, verts, stride, ret );
-				if( m_inUiDraw )
-				{
-					++m_uiPassBCaptures;
-				}
-				return;
-			}
 			const float worldDepth = firstPerson ? headDepth + kOwnBand : kHudDepthThird;
-			if( hasDepth && depth > worldDepth )
+			// HUD layers (map frame 0x30, arrow 0x33, 0x38, 0x39, status block 0x3A / 0x3B) sit at a fixed
+			// HUD z (0.85-0.9375 seen) that decodes past the third-person line; they belong on the panel.
+			// 0x3A / 0x3B also carry players' nameplates, whose z follows their distance (0.95-0.995,
+			// own plate 0.95-0.96), so the raw z (not the camera-dependent decoded depth) splits them.
+			// Nameplates (0x2B) and other world layers below 0x30 keep the depth routing.
+			constexpr int kFirstHudLayer = 0x30;
+			constexpr float kHudMaxZ = 0.94f;
+			if( layer >= kFirstHudLayer && ( !hasDepth || z < kHudMaxZ ) && Config::Get().vr.m_hudLayersByLayer )
 			{
-				LogLayerRoute( layer, "eyes", verts, vertCount, stride );
-				NoteMapDraw( device, layer, "DP-UP", "eyes", primitiveCount, verts, stride, ret );
-				m_nameplateOnMonitor = stereo.DrawNameplateToEyes( device, primitiveType, primitiveCount, verts, stride );
-				if( m_inUiDraw )
+#ifdef _DEBUG
+				if( hasDepth && depth > worldDepth )
 				{
-					++m_uiPassBCaptures;
+					static bool s_overrideLogged[ 256 ]{};
+					if( layer < 256 && !s_overrideLogged[ layer ] )
+					{
+						s_overrideLogged[ layer ] = true;
+						PSU_LOG( "VRHud: layer 0x%02X depth %.1f > %.1f would go to the eyes, kept on the panel (hudLayersByLayer)\n",
+							layer, depth, worldDepth );
+					}
 				}
-				return;
+#endif
+				LogLayerRoute( layer, "visor", verts, vertCount, stride );
 			}
-			LogLayerRoute( layer, "visor", verts, vertCount, stride );
+			else
+			{
+				if( hasDepth && firstPerson && std::fabs( depth - headDepth ) < kOwnBand )
+				{
+					LogLayerRoute( layer, "skip-own", verts, vertCount, stride );
+					NoteMapDraw( device, layer, "DP-UP", "skip-own", primitiveCount, verts, stride, ret );
+					if( m_inUiDraw )
+					{
+						++m_uiPassBCaptures;
+					}
+					return;
+				}
+				if( hasDepth && depth > worldDepth )
+				{
+					LogLayerRoute( layer, "eyes", verts, vertCount, stride );
+					NoteMapDraw( device, layer, "DP-UP", "eyes", primitiveCount, verts, stride, ret );
+					m_nameplateOnMonitor = stereo.DrawNameplateToEyes( device, primitiveType, primitiveCount, verts, stride );
+					if( m_inUiDraw )
+					{
+						++m_uiPassBCaptures;
+					}
+					return;
+				}
+				LogLayerRoute( layer, "visor", verts, vertCount, stride );
+			}
 		}
 		if( !mapFit && IsAvatarAnchoredPassB( verts, primitiveType, primitiveCount, stride, m_w, m_h ) )
 		{

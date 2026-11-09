@@ -1,9 +1,11 @@
 #include "VRControllers.h"
 
 #include "VRCamera.h"
+#include "VRHolster.h"
 #include "../PSUStructs/PSUCombat.h"
 #include "VRControllerSim.h"
 #include "VRSyntheticPad.h"
+#include "VRTrackers.h"
 #include "VRUiPointer.h"
 
 #include "../Misc/Log.h"
@@ -379,7 +381,7 @@ namespace PSUVR
 			return s_released[ hand & 1 ];
 		}
 
-		void Haptic( int hand, float amplitude, float seconds )
+		void Haptic( int hand, float amplitude, float seconds, float frequency )
 		{
 			if( VRControllerSim::Active() )
 			{
@@ -388,13 +390,15 @@ namespace PSUVR
 			}
 			if( s_runtime )
 			{
-				s_runtime->Haptic( hand, amplitude, seconds );
+				s_runtime->Haptic( hand, amplitude, seconds, frequency );
 			}
 		}
 
 		void DrawMarkers( IDirect3DDevice9 *device, const EyePose &eye, unsigned width, unsigned height )
 		{
-			if( !device || !Config::Get().vr.m_showControllers || !AnyActive() || width < 1 || height < 1 )
+			const bool showControllers = Config::Get().vr.m_showControllers && AnyActive();
+			const bool showTrackers = Config::Get().vr.m_trackerShowDiscs && VRTrackers::Any();
+			if( !device || !( showControllers || showTrackers ) || width < 1 || height < 1 )
 			{
 				return;
 			}
@@ -435,7 +439,7 @@ namespace PSUVR
 			// Pointing at the PSUEx overlay: a beam from the right controller to the panel.
 			float beamFrom[ 3 ], beamTo[ 3 ];
 			bool beamHit = false;
-			if( VRUiPointer::Beam( beamFrom, beamTo, beamHit ) )
+			if( showControllers && VRUiPointer::Beam( beamFrom, beamTo, beamHit ) )
 			{
 				const V3 a{ beamFrom[ 0 ], beamFrom[ 1 ], beamFrom[ 2 ] };
 				V3 b{ beamTo[ 0 ], beamTo[ 1 ], beamTo[ 2 ] };
@@ -455,7 +459,7 @@ namespace PSUVR
 			for( int hand = 0; hand < 2; ++hand )
 			{
 				const ControllerState &c = s_state[ hand ];
-				if( !c.active )
+				if( !c.active || !showControllers )
 				{
 					continue;
 				}
@@ -517,6 +521,72 @@ namespace PSUVR
 						float radius = 0.03f * proj.Scale( depth );
 						radius = radius < 3.0f ? 3.0f : radius;
 						DrawDisc( device, sx, sy, radius, color );
+					}
+				}
+			}
+			// Body trackers (debug): a 4 cm disc per role, dimmed while a lost tracker is held.
+			if( showTrackers )
+			{
+				// waist, chest, feet, knees, elbows
+				const DWORD rgb[ kTrackerRoleCount ] = { 0xFFFFFF, 0xFF80FF, 0x4080FF, 0xFF9040, 0x40C0FF, 0xFFB070, 0x80E0FF,
+					0xFFD0A0 };
+				for( int role = 0; role < kTrackerRoleCount; ++role )
+				{
+					VRTrackers::Pose pose;
+					if( !VRTrackers::Get( static_cast< TrackerRole >( role ), pose ) )
+					{
+						continue;
+					}
+					// Calibrated: the joint bright, the raw tracker small and dim.
+					float sx, sy, depth;
+					const V3 point{ pose.position[ 0 ], pose.position[ 1 ], pose.position[ 2 ] };
+					if( proj.Project( point, sx, sy, depth ) )
+					{
+						float radius = ( pose.jointValid ? 0.025f : 0.04f ) * proj.Scale( depth );
+						radius = radius < 3.0f ? 3.0f : radius;
+						DrawDisc( device, sx, sy, radius, ( pose.held || pose.jointValid ? 0x50000000u : 0xC0000000u ) | rgb[ role ] );
+					}
+					const V3 joint{ pose.joint[ 0 ], pose.joint[ 1 ], pose.joint[ 2 ] };
+					if( pose.jointValid && proj.Project( joint, sx, sy, depth ) )
+					{
+						float radius = 0.04f * proj.Scale( depth );
+						radius = radius < 3.0f ? 3.0f : radius;
+						DrawDisc( device, sx, sy, radius, ( pose.held ? 0x60000000u : 0xE0000000u ) | rgb[ role ] );
+					}
+				}
+			}
+			// Holster zones (debug): translucent discs at the zone centres, brighter with a hand in.
+			if( showControllers && Config::Get().vr.m_holsterEnabled && Config::Get().vr.m_holsterShowZones )
+			{
+				const VRHolster::Zone zones[ 3 ] = { VRHolster::Zone::Head, VRHolster::Zone::Waist, VRHolster::Zone::Mouth };
+				const DWORD rgb[ 3 ] = { 0x40E040, 0xE0E040, 0xE04040 };
+				const VRHolster::Zone inside[ 2 ] = { VRHolster::ZoneAtHand( 0 ), VRHolster::ZoneAtHand( 1 ) };
+				for( int i = 0; i < 3; ++i )
+				{
+					float center[ 3 ], axes[ 3 ][ 3 ], half[ 3 ];
+					if( !VRHolster::ZoneShape( zones[ i ], center, axes, half ) )
+					{
+						continue;
+					}
+					const bool active = inside[ 0 ] == zones[ i ] || inside[ 1 ] == zones[ i ];
+					const DWORD color = ( active ? 0xA0000000u : 0x40000000u ) | rgb[ i ];
+					// The ellipsoid's six extreme points as discs, plus a bigger one in the middle.
+					for( int p = 0; p < 7; ++p )
+					{
+						V3 point{ center[ 0 ], center[ 1 ], center[ 2 ] };
+						if( p < 6 )
+						{
+							const int axis = p / 2;
+							const float sign = ( p & 1 ) ? -1.0f : 1.0f;
+							point.x += axes[ axis ][ 0 ] * half[ axis ] * sign;
+							point.y += axes[ axis ][ 1 ] * half[ axis ] * sign;
+							point.z += axes[ axis ][ 2 ] * half[ axis ] * sign;
+						}
+						float sx, sy, depth;
+						if( proj.Project( point, sx, sy, depth ) )
+						{
+							DrawDisc( device, sx, sy, ( p < 6 ? 0.025f : 0.05f ) * proj.Scale( depth ), color );
+						}
 					}
 				}
 			}

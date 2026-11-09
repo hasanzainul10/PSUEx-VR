@@ -201,8 +201,8 @@ namespace PSUVR
 
 	// The panel is split into tabs (one screen each in the headset, no long scroll); sections
 	// keep their order in the code and say which tab they belong to.
-	enum class Tab : int { General, Camera, Hud, Controllers, Combat, Voice, Performance, Keys, Count };
-	const char *const kTabNames[] = { "General", "Camera", "HUD", "Controllers", "Combat", "Voice", "Performance", "Keys" };
+	enum class Tab : int { General, Camera, Body, Hud, Controllers, Combat, Voice, Performance, Keys, Count };
+	const char *const kTabNames[] = { "General", "Camera", "Body", "HUD", "Controllers", "Combat", "Voice", "Performance", "Keys" };
 	static Tab s_tab = Tab::General;
 
 	// A section of the selected tab: a heading, then its widgets.
@@ -214,6 +214,120 @@ namespace PSUVR
 		}
 		ImGui::SeparatorText( title );
 		return true;
+	}
+
+	// Presets page: one choice each, written to the same settings the other pages edit. A choice whose
+	// values don't all match reads as Custom.
+	static void DrawPresetsPage( VRSettings &s )
+	{
+		struct Quality { float scale; bool blur, glare, sprites; };
+		static const Quality quality[] = { { 0.7f, false, false, false }, { 0.85f, false, false, true }, { 1.0f, true, false, true } };
+		int q = 3;
+		for( int i = 0; i < 3; ++i )
+		{
+			if( std::fabs( s.m_eyeResolutionScale - quality[ i ].scale ) < 0.005f && s.m_eyeBlur == quality[ i ].blur &&
+				s.m_eyeGlare == quality[ i ].glare && s.m_reprojectSprites == quality[ i ].sprites )
+			{
+				q = i;
+			}
+		}
+		static const char *const qualityNames[] = { "Fast (lower sharpness)", "Balanced", "Best looking", "Custom" };
+		if( ImGui::Combo( "Picture quality", &q, qualityNames, 4 ) && q < 3 )
+		{
+			s.m_eyeResolutionScale = quality[ q ].scale;
+			s.m_eyeBlur = quality[ q ].blur;
+			s.m_eyeGlare = quality[ q ].glare;
+			s.m_reprojectSprites = quality[ q ].sprites;
+		}
+		Help( "Fast: eye resolution 70%, no screen glow / glare. Balanced: 85%. Best looking: full resolution. Pick Fast if the game stutters." );
+
+		// Comfort: 0 comfortable, 1 standard, 2 immersive.
+		int c = 3;
+		if( s.m_snapTurn && s.m_comfortVignette && s.m_hudFollow )
+		{
+			c = 0;
+		}
+		else if( s.m_snapTurn && !s.m_comfortVignette && s.m_hudFollow )
+		{
+			c = 1;
+		}
+		else if( !s.m_snapTurn && !s.m_comfortVignette )
+		{
+			c = 2;
+		}
+		static const char *const comfortNames[] = { "Comfortable (snap turn, vignette)", "Standard (snap turn)", "Immersive (smooth turn)", "Custom" };
+		if( ImGui::Combo( "Comfort", &c, comfortNames, 4 ) && c < 3 )
+		{
+			s.m_snapTurn = c != 2;
+			s.m_comfortVignette = c == 0;
+			s.m_hudFollow = c != 2 ? true : s.m_hudFollow;
+		}
+		Help( "Comfortable suits new VR players. Immersive turns smoothly and shows no vignette; it can cause motion sickness." );
+
+		static const char *const cameraIds[] = { "firstPerson", "thirdPerson" };
+		static const char *const cameraNames[] = { "First person", "Third person" };
+		Combo( "Camera", s.m_cameraMode, cameraIds, cameraNames, 2 );
+
+		bool motion = s.m_inputMode == "motion";
+		static const char *const inputNames[] = { "Gamepad", "Motion controllers" };
+		int input = motion ? 1 : 0;
+		if( ImGui::Combo( "Controls (next launch)", &input, inputNames, 2 ) )
+		{
+			s.m_inputMode = input == 1 ? "motion" : "gamepad";
+		}
+
+		ImGui::SliderFloat( "Text size", &s.m_panelTextScale, 1.0f, 2.5f, "%.1f" );
+		Help( "Size of the text in this window. Applies at once." );
+	}
+
+	// Simple page: the few settings a normal player needs; all of them are safe to change.
+	static void DrawSimplePage( VRSettings &s, VRPanelContext &context )
+	{
+		if( context.inGame )
+		{
+			ImGui::Checkbox( "Pause VR", &s.m_paused );
+		}
+		static const char *const cameraIds[] = { "firstPerson", "thirdPerson" };
+		static const char *const cameraNames[] = { "First person", "Third person" };
+		Combo( "Camera", s.m_cameraMode, cameraIds, cameraNames, 2 );
+		ImGui::Checkbox( "Snap turn", &s.m_snapTurn );
+		if( s.m_snapTurn )
+		{
+			ImGui::SliderFloat( "Snap step (deg)", &s.m_snapTurnDegrees, 15.0f, 90.0f, "%.0f" );
+		}
+		ImGui::Checkbox( "Vignette while moving / smooth turning", &s.m_comfortVignette );
+		ImGui::Checkbox( "Body-locked HUD panel", &s.m_hudFollow );
+		ImGui::SliderFloat( "HUD distance (m)", &s.m_hudDistance, 0.6f, 4.0f, "%.2f" );
+		ImGui::SliderFloat( "HUD size", &s.m_hudSize, 0.5f, 2.0f, "%.2f" );
+		ImGui::SliderFloat( "HUD below eye level (m)", &s.m_hudDrop, -0.3f, 0.6f, "%.2f" );
+		ImGui::SliderFloat( "Eye height (m)", &s.m_fpEyeHeight, 1.2f, 2.0f, "%.2f" );
+		if( context.inGame && context.headHeight && ImGui::Button( "Measure my eye height" ) )
+		{
+			float head = 0.0f;
+			if( context.headHeight( head ) && head > 0.8f )
+			{
+				s.m_fpEyeHeight = head < 1.2f ? 1.2f : ( head > 2.0f ? 2.0f : head );
+				context.message = "Eye height set from your head height (stand straight). Not saved yet.";
+			}
+			else
+			{
+				context.message = "The headset reports no floor.";
+			}
+		}
+		Help( "Stand straight, then press: sets the eye height from your head above the floor. "
+			"In the game: both grips + left stick down." );
+		ImGui::Checkbox( "Controller labels when you look down", &s.m_controllerLabels );
+		ImGui::SliderFloat( "Vibration strength", &s.m_hapticStrength, 0.0f, 1.5f, "%.2f" );
+		ImGui::Checkbox( "Speech to text (hold left Square)", &s.m_speechToText );
+		ImGui::SliderFloat( "Text size", &s.m_panelTextScale, 1.0f, 2.5f, "%.1f" );
+		if( context.inGame && context.runSetup && ImGui::Button( "Run VR setup again" ) )
+		{
+			context.runSetup();
+		}
+		if( context.inGame && context.openToolkit && ImGui::Button( "Open Rogue's Toolkit menu" ) )
+		{
+			context.openToolkit();
+		}
 	}
 
 	void DrawVRSettingsPanel( VRSettings &s, VRPanelContext &context )
@@ -229,7 +343,41 @@ namespace PSUVR
 			ImGui::Separator();
 		}
 
-		if( ImGui::BeginTabBar( "vr_settings_tabs", ImGuiTabBarFlags_FittingPolicyResizeDown ) )
+		// Three pages: Presets (a few choices), Simple (safe settings), Advanced (every setting, in tabs).
+		static const char *const pageIds[] = { "presets", "simple", "advanced" };
+		static const char *const pageNames[] = { "Presets", "Simple", "Advanced" };
+		int page = 0;
+		for( int i = 0; i < 3; ++i )
+		{
+			if( s.m_settingsPage == pageIds[ i ] )
+			{
+				page = i;
+			}
+		}
+		const float pageWidth = ( ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 2.0f ) / 3.0f;
+		for( int i = 0; i < 3; ++i )
+		{
+			if( i > 0 )
+			{
+				ImGui::SameLine();
+			}
+			const bool selected = i == page;
+			if( selected )
+			{
+				ImGui::PushStyleColor( ImGuiCol_Button, ImGui::GetStyleColorVec4( ImGuiCol_ButtonActive ) );
+			}
+			if( ImGui::Button( pageNames[ i ], ImVec2( pageWidth, ImGui::GetFrameHeight() * 1.4f ) ) )
+			{
+				page = i;
+				s.m_settingsPage = pageIds[ i ];
+			}
+			if( selected )
+			{
+				ImGui::PopStyleColor();
+			}
+		}
+		const bool advanced = page == 2;
+		if( advanced && ImGui::BeginTabBar( "vr_settings_tabs", ImGuiTabBarFlags_FittingPolicyResizeDown ) )
 		{
 			for( int i = 0; i < static_cast< int >( Tab::Count ); ++i )
 			{
@@ -244,6 +392,19 @@ namespace PSUVR
 		// The tab scrolls on its own; Save / Reload stay in view below it.
 		const float footer = ImGui::GetFrameHeightWithSpacing() * 2.0f + ImGui::GetStyle().ItemSpacing.y * 2.0f;
 		ImGui::BeginChild( "vr_settings_tab", ImVec2( 0.0f, -footer ) );
+		if( !advanced )
+		{
+			// No section of the Advanced tabs matches while another page shows.
+			s_tab = Tab::Count;
+			if( page == 0 )
+			{
+				DrawPresetsPage( s );
+			}
+			else
+			{
+				DrawSimplePage( s, context );
+			}
+		}
 
 		if( Section( Tab::General, "General" ) )
 		{
@@ -296,32 +457,11 @@ namespace PSUVR
 			Combo( "Own body", s.m_fpBody, bodyIds, bodyNames, 4 );
 			Help( "Hands only: just the hands and weapons, right on the controllers (no reach limit), while the arms "
 				"follow the controllers (otherwise like Headless)." );
-			ImGui::Checkbox( "Body faces my head, legs strafe", &s.m_strafeBody );
-			Help( "Needs the arms to follow the controllers and a body that shows legs (not Hands only). The body "
-				"trails where you look; moving left, right or back turns the legs against the body." );
-			if( s.m_strafeBody )
-			{
-				ImGui::SliderFloat( "Legs toward the body", &s.m_strafeBodyBlend, 0.0f, 1.0f, "%.2f" );
-			}
 			ImGui::SliderFloat( "Eye height (m)", &s.m_fpEyeHeight, 1.2f, 2.0f, "%.2f" );
 			ImGui::SliderFloat( "Eye forward (m)", &s.m_fpEyeForward, 0.0f, 0.3f, "%.2f" );
 			ImGui::Checkbox( "Eye follows the walking lean", &s.m_fpEyeFollowsNeck );
 			Help( "The eye moves with the animated neck while you walk, so the camera isn't behind the shoulders. "
 				"Needs the arms to follow the controllers (first person)." );
-			ImGui::Checkbox( "Body in rest pose (no animations)", &s.m_bodyRestPose );
-			Help( "Replaces the game's idle, walk and attack animations with the plain skeleton; the arms, torso and legs "
-				"are then posed only by VR." );
-			if( s.m_bodyRestPose )
-			{
-				ImGui::Checkbox( "Scale body to my height", &s.m_bodyFitHeight );
-				Help( "Scales the model so its eyes are at the Eye height above. Set Eye height to your real eye height." );
-				ImGui::Checkbox( "Keep the game's leg animation", &s.m_bodyKeepLegAnim );
-				Help( "The pelvis and legs keep the walk / idle animation (the strafe legs turn them); the rest of the body is the plain skeleton." );
-				ImGui::Checkbox( "Body follows my head (hips, spine)", &s.m_bodyIk );
-				Help( "First person. The hips drop when you crouch and the spine leans toward your head." );
-				ImGui::Checkbox( "Planted feet that step", &s.m_bodyProceduralLegs );
-				Help( "The feet stay where they are in the world and step to a new spot when the hips move away. Replaces the strafe legs." );
-			}
 			ImGui::SliderFloat( "Neck cut below eyes (m)", &s.m_fpNeckDrop, 0.05f, 0.5f, "%.2f" );
 			ImGui::SliderFloat( "Lean limit (m)", &s.m_fpLeanLimit, 0.0f, 0.5f, "%.2f" );
 			ImGui::SliderFloat( "Crouch limit (m)", &s.m_fpCrouchLimit, 0.0f, 0.5f, "%.2f" );
@@ -364,6 +504,178 @@ namespace PSUVR
 			ImGui::SliderFloat( "Farthest (m)", &s.m_tpMaxDistance, 3.0f, 20.0f, "%.1f" );
 		}
 
+		if( Section( Tab::Body, "Body pose (first person)" ) )
+		{
+			ImGui::Checkbox( "Body in rest pose (no animations)", &s.m_bodyRestPose );
+			Help( "Replaces the game's idle, walk and attack animations with the plain skeleton; the arms, torso and legs "
+				"are then posed only by VR." );
+			if( s.m_bodyRestPose )
+			{
+				ImGui::Checkbox( "Scale body to my height", &s.m_bodyFitHeight );
+				Help( "Scales the model so its eyes are at the Eye height (Camera tab). Set Eye height to your real eye height." );
+				ImGui::TextUnformatted( "Keep the game's animation on:" );
+				ImGui::CheckboxFlags( "Legs", &s.m_bodyAnimKeep, kVRKeepLegs );
+				Help( "The pelvis and legs keep the walk / idle animation (the strafe legs turn them)." );
+				ImGui::SameLine();
+				ImGui::CheckboxFlags( "Spine", &s.m_bodyAnimKeep, kVRKeepSpine );
+				ImGui::SameLine();
+				ImGui::CheckboxFlags( "Head", &s.m_bodyAnimKeep, kVRKeepHead );
+				ImGui::CheckboxFlags( "Arms", &s.m_bodyAnimKeep, kVRKeepArms );
+				Help( "Only shows where the arms don't follow the controllers (third person, or that option off)." );
+				ImGui::SameLine();
+				ImGui::CheckboxFlags( "Weapons", &s.m_bodyAnimKeep, kVRKeepWeapons );
+				Help( "The weapon turns in the hand as in the attack animations." );
+				ImGui::SameLine();
+				ImGui::CheckboxFlags( "Extras", &s.m_bodyAnimKeep, kVRKeepExtras );
+				Help( "Unticked parts are the plain skeleton; ticked parts move as the game animates them, on top of the "
+					"parts they hang from. All unticked = a skeleton for VR and body tracking." );
+				ImGui::Checkbox( "Body follows my head (hips, spine)", &s.m_bodyIk );
+				if( s.m_bodyIk )
+				{
+					ImGui::SliderFloat( "Neck below eyes (m)", &s.m_bodyNeckDrop, 0.05f, 0.35f, "%.2f" );
+					Help( "Higher keeps the camera out of the shoulders; lower straightens the legs (the hips follow the neck)." );
+					ImGui::SliderFloat( "Body behind eyes (m)", &s.m_bodyBack, 0.0f, 0.4f, "%.2f" );
+					ImGui::Checkbox( "Head turns with the headset", &s.m_bodyHeadFollowsHmd );
+					Help( "The neck and head turn and tilt with your head (shadow, mirrors, the \"full\" body). "
+						"Crouching pushes the hips back; the spine bends over the waist, chest and shoulders." );
+				}
+				Help( "First person. The hips drop when you crouch and the spine leans toward your head." );
+				ImGui::Checkbox( "Planted feet that step", &s.m_bodyProceduralLegs );
+				Help( "The feet stay where they are in the world and step to a new spot when the hips move away. Replaces the strafe legs." );
+			}
+			ImGui::Checkbox( "Body faces my head, legs strafe", &s.m_strafeBody );
+			Help( "Needs the arms to follow the controllers and a body that shows legs (not Hands only). The body "
+				"trails where you look; moving left, right or back turns the legs against the body." );
+			if( s.m_strafeBody )
+			{
+				ImGui::SliderFloat( "Legs toward the body", &s.m_strafeBodyBlend, 0.0f, 1.0f, "%.2f" );
+			}
+		}
+
+		if( Section( Tab::Body, "Arms" ) )
+		{
+			ImGui::Checkbox( "Arms follow the controllers (first person)", &s.m_handsFollow );
+			Help( "The character's arms reach for where you hold the controllers." );
+			if( s.m_handsFollow )
+			{
+				ImGui::Checkbox( "Find the body once per frame (faster)", &s.m_handsWorldOncePerFrame );
+				Help( "The arms need to know where the body is. The game is asked once per frame instead of every time the "
+					"body is drawn (about 9 times). Untick if the arms lag behind or jitter." );
+				ImGui::Checkbox( "Stretch arms to reach my hands", &s.m_armStretch );
+				Help( "The character's arms are shorter than most players'. On: they stretch (up to half again) so the "
+					"hands sit on the controllers. Off: the arm stops at its own length." );
+					ImGui::SliderFloat( "Shoulder lift", &s.m_bodyShoulderShrug, 0.0f, 1.0f, "%.2f" );
+					Help( "The shoulders rise and reach forward when your hand is far out or above the shoulder. 0 = off." );
+					ImGui::SliderFloat( "Elbow follows the controller", &s.m_bodyElbowFromHand, 0.0f, 1.0f, "%.2f" );
+					Help( "0: the elbows hang down and out. Higher: they follow how you turn the controller (wrist up, elbow out)." );
+				bool attackAnimation = s.m_handsAttack == "animation";
+				if( ImGui::Checkbox( "Play the game's attack animation", &attackAnimation ) )
+				{
+					s.m_handsAttack = attackAnimation ? "animation" : "controller";
+				}
+				Help( "Off: your arms stay on the controllers while attacking (your swing is the swing). "
+					"On: the arms hand over to the game's attack animation." );
+				ImGui::Checkbox( "Play the game's Photon Art / technique animation", &s.m_handsPhotonArtAnimation );
+				Help( "The same for grip + swing / trigger (Photon Arts, technique slot 2). Off: your arms stay on "
+					"the controllers." );
+				ImGui::Checkbox( "Staff / rod stays in the hand while casting", &s.m_techWeaponStill );
+				Help( "The staff or rod keeps the hold it had before the cast instead of moving with the casting "
+					"animation. The technique itself is unchanged. The TCSM keeps its animation." );
+				if( context.inGame )
+				{
+					if( ImGui::Button( "Calibrate hand angles" ) )
+					{
+						++s.m_handCalibRequest;
+					}
+					ImGui::SameLine();
+					ImGui::TextDisabled( s.m_handCalibrated ? "(calibrated)" : "(automatic)" );
+					Help( "After the click, hold both arms straight out in front, hands in fists around the controllers, "
+						"palms facing each other (knuckles forward), and keep still: the angle is taken after 5 seconds "
+						"(a buzz each second, a long buzz when done); it is saved. Also on both grips + both triggers. "
+						"Without it the angle is estimated, which suits most controllers." );
+					if( s.m_handCalibrated && ImGui::Button( "Back to automatic" ) )
+					{
+						s.m_handCalibrated = false;
+					}
+				}
+				{
+					ImGui::SliderFloat( "Hand pitch (deg)", &s.m_handPitch, -90.0f, 90.0f, "%.0f" );
+					ImGui::SliderFloat( "Hand roll (deg)", &s.m_handRoll, -180.0f, 180.0f, "%.0f" );
+					Help( "Fine tune the hand angle on top of the calibration (tip up / down, twist)." );
+				}
+			}
+		}
+
+		if( Section( Tab::Body, "Third person body" ) )
+		{
+			ImGui::Checkbox( "Body follows me (arms, head, crouch)", &s.m_bodyIkThirdPerson );
+			Help( "The character's arms follow the controllers. With \"Body in rest pose\" and \"Body follows my head\" "
+				"(Body pose above) its head, hips and spine also follow your headset, relative to where you stood "
+				"at the last recenter." );
+		}
+
+		if( Section( Tab::Body, "Full-body trackers" ) )
+		{
+			ImGui::Checkbox( "Body trackers (restart the game)", &s.m_trackersEnabled );
+			Help( "Reads SteamVR trackers (Vive, Tundra, SlimeVR, Standable) through OpenXR, or OpenVR when OpenXR "
+				"doesn't list them. Roles come from SteamVR > Manage Trackers or the tracker's name. Calibrate them, then "
+				"\"Trackers move the body\" puts your hips, chest, knees, feet and elbows on the character." );
+			if( s.m_trackersEnabled )
+			{
+				static const char *const sourceIds[] = { "auto", "openxr", "openvr" };
+				static const char *const sourceNames[] = { "Auto", "OpenXR only", "OpenVR" };
+				Combo( "Tracker source", s.m_trackerSource, sourceIds, sourceNames, 3 );
+				Help( "Auto: OpenXR's trackers, or OpenVR's when OpenXR lists none (Standable). OpenVR also finds trackers "
+					"by name (Hips, Foot Left, ...) when they have no role." );
+				ImGui::Checkbox( "Show tracker discs", &s.m_trackerShowDiscs );
+				if( context.inGame )
+				{
+					if( ImGui::Button( "Calibrate trackers" ) )
+					{
+						++s.m_trackerCalibRequest;
+					}
+					ImGui::SameLine();
+					ImGui::TextDisabled( s.m_trackerCal.empty() ? "(not calibrated)" : "(calibrated)" );
+					Help( "After the click, stand straight, arms hanging, look ahead and keep still: taken after 5 seconds "
+						"(a buzz each second, a long buzz when done), saved. It lines the trackers up with your body, also "
+						"when the tracking app's space is turned (Standable). Redo it after moving a tracker." );
+					if( !s.m_trackerCal.empty() && ImGui::Button( "Reset tracker calibration" ) )
+					{
+						s.m_trackerCal.clear();
+					}
+				}
+				ImGui::Checkbox( "Measuring eye height also calibrates trackers", &s.m_trackerCalibWithEyeHeight );
+				Help( "Both grips + left stick down sets the eye height; with this on and a tracker tracked it also starts the "
+					"tracker calibration: let the arms hang and keep still for 5 seconds (a buzz each second)." );
+				ImGui::SliderFloat( "Tracker smoothing", &s.m_trackerSmoothing, 0.0f, 1.0f, "%.2f" );
+				ImGui::SliderFloat( "Hold a lost tracker (s)", &s.m_trackerLostHold, 0.0f, 1.0f, "%.2f" );
+				ImGui::Checkbox( "Trackers move the body", &s.m_trackerDriveBody );
+				Help( "Needs a tracker calibration, the rest pose and \"Body follows my head\". Each tracker takes over its part of "
+					"the body; a lost one eases back to the estimate (from the head and hands) in 0.3 s." );
+				if( s.m_trackerDriveBody )
+				{
+					ImGui::Indent();
+					ImGui::Checkbox( "Hips", &s.m_trackerDriveWaist );
+					ImGui::SameLine();
+					ImGui::Checkbox( "Chest", &s.m_trackerDriveChest );
+					ImGui::SameLine();
+					ImGui::Checkbox( "Feet", &s.m_trackerDriveFeet );
+					ImGui::Checkbox( "Knees", &s.m_trackerDriveKnees );
+					ImGui::SameLine();
+					ImGui::Checkbox( "Elbows", &s.m_trackerDriveElbows );
+					ImGui::Checkbox( "Foot lock", &s.m_trackerFootLock );
+					Help( "A tracked foot that stays still on the floor is pinned where it is: no sliding while you walk with "
+						"the stick, no jitter. It steps to the tracker once it falls behind, or as soon as you move the foot." );
+					ImGui::Unindent();
+				}
+				if( context.trackerStatus )
+				{
+					const std::string status = context.trackerStatus();
+					ImGui::TextWrapped( "Trackers: %s", status.c_str() );
+				}
+			}
+		}
+
 		if( Section( Tab::General, "Turning" ) )
 		{
 			ImGui::Checkbox( "Snap turn", &s.m_snapTurn );
@@ -387,6 +699,13 @@ namespace PSUVR
 				"the menu panel over the menu, as on a flat screen." );
 			Help( "Menus and 2D screens float on a dark background. Off: SteamVR's own space shows "
 				"around them, and with it the play-area boundary." );
+			ImGui::Checkbox( "HUD pieces always on the panel (third person)", &s.m_hudLayersByLayer );
+			Help( "The minimap frame and arrow and the HP / MP / name / EXP block stay on the HUD panel with the rest "
+				"of the HUD. Off: they are placed by their depth, which in third person puts them in the world. "
+				"Nameplates over players and NPCs float over their heads either way." );
+			ImGui::Checkbox( "Shop and mission menus on a flat screen", &s.m_flatMenus );
+			Help( "The mission counter, clothing shop and beauty parlor menus show the plain game picture on "
+				"the menu panel, like the other 2D menus, instead of in 3D." );
 			ImGui::SliderFloat( "Follow angle (deg)", &s.m_hudFollowAngle, 10.0f, 90.0f, "%.0f" );
 			ImGui::SliderFloat( "Distance (m)", &s.m_hudDistance, 0.6f, 4.0f, "%.2f" );
 			Help( "In the headset: hold the right grip while pointing at this panel and move the hand forward / back." );
@@ -413,6 +732,9 @@ namespace PSUVR
 			ImGui::Checkbox( "Sky in the headset", &s.m_eyeSky );
 			Help( "Off hides the area's sky in the headset (the flat window keeps it). Some missions' skies are "
 				"partial boxes made for the flat camera, and in VR their unfinished sides show." );
+			ImGui::Checkbox( "Cull for the headset's view", &s.m_eyeFrustumCull );
+			Help( "The game skips what its flat camera can't see. The headset sees wider and turns with your head, so "
+				"things popped in at the edges. On: the headset decides what is drawn in its eyes." );
 			ImGui::Checkbox( "Screen glow (VR)", &s.m_eyeBlur );
 			Help( "The game's full-screen glow. It is laid over the whole picture, so in VR an enemy's glow "
 				"shows through your weapon. Off by default (the flat window keeps it)." );
@@ -458,54 +780,49 @@ namespace PSUVR
 			Help( "For testing without the headset on: Ctrl+Shift+F9 toggles. Ctrl+numpad: 7/8/9 left/both/right, 1-5 rest/forward/gun/"
 				"raised/calib, 0 trigger, . grip, / Cross (A), + Circle (B), - stick click, 6 swing, * both grips. Ctrl+T/G/F/H "
 				"stick. A command file (psuex_vr_script.txt) runs whenever it changes; see VR_GUIDE.md." );
-			ImGui::Checkbox( "Arms follow the controllers (first person)", &s.m_handsFollow );
-			Help( "The character's arms reach for where you hold the controllers." );
-			if( s.m_handsFollow )
-			{
-				ImGui::Checkbox( "Stretch arms to reach my hands", &s.m_armStretch );
-				Help( "The character's arms are shorter than most players'. On: they stretch (up to half again) so the "
-					"hands sit on the controllers. Off: the arm stops at its own length." );
-				bool attackAnimation = s.m_handsAttack == "animation";
-				if( ImGui::Checkbox( "Play the game's attack animation", &attackAnimation ) )
-				{
-					s.m_handsAttack = attackAnimation ? "animation" : "controller";
-				}
-				Help( "Off: your arms stay on the controllers while attacking (your swing is the swing). "
-					"On: the arms hand over to the game's attack animation." );
-				ImGui::Checkbox( "Play the game's Photon Art / technique animation", &s.m_handsPhotonArtAnimation );
-				Help( "The same for grip + swing / trigger (Photon Arts, technique slot 2). Off: your arms stay on "
-					"the controllers." );
-				ImGui::Checkbox( "Staff / rod stays in the hand while casting", &s.m_techWeaponStill );
-				Help( "The staff or rod keeps the hold it had before the cast instead of moving with the casting "
-					"animation. The technique itself is unchanged. The TCSM keeps its animation." );
-				if( context.inGame )
-				{
-					if( ImGui::Button( "Calibrate hand angles" ) )
-					{
-						++s.m_handCalibRequest;
-					}
-					ImGui::SameLine();
-					ImGui::TextDisabled( s.m_handCalibrated ? "(calibrated)" : "(automatic)" );
-					Help( "After the click, hold both arms straight out in front, hands in fists around the controllers, "
-						"palms facing each other (knuckles forward), and keep still: the angle is taken after 5 seconds "
-						"(a buzz each second, a long buzz when done); it is saved. Also on both grips + both triggers. "
-						"Without it the angle is estimated, which suits most controllers." );
-					if( s.m_handCalibrated && ImGui::Button( "Back to automatic" ) )
-					{
-						s.m_handCalibrated = false;
-					}
-				}
-				{
-					ImGui::SliderFloat( "Hand pitch (deg)", &s.m_handPitch, -90.0f, 90.0f, "%.0f" );
-					ImGui::SliderFloat( "Hand roll (deg)", &s.m_handRoll, -180.0f, 180.0f, "%.0f" );
-					Help( "Fine tune the hand angle on top of the calibration (tip up / down, twist)." );
-				}
-			}
 			ImGui::Checkbox( "Left stick works menus (D-pad) automatically", &s.m_autoDpad );
 			Help( "In menus, shops, the mission counter, login screens and the weapon / item palette the left stick sends the D-pad. "
 				"Both grips + left stick click still flips it by hand." );
 			ImGui::Checkbox( "Buzz when the next combo hit can be pressed", &s.m_comboHaptic );
 			Help( "A short buzz in the right hand the moment the game accepts the next attack of a melee combo." );
+			ImGui::Checkbox( "Buzz when my attack hits", &s.m_hapticHits );
+			Help( "The hand that attacked buzzes when the hit lands on an enemy; a Just Attack or Photon Art hit buzzes harder." );
+			ImGui::Checkbox( "Buzz when I get hit", &s.m_hapticHurt );
+			Help( "Both hands buzz when you lose HP; the more HP a hit takes, the stronger." );
+			ImGui::Checkbox( "Gun recoil", &s.m_hapticRecoil );
+			Help( "The shooting hand buzzes for each shot the gun fires (twin handguns: the hands take turns); rifles, "
+				"shotguns, grenade launchers and laser cannons kick harder." );
+			ImGui::Checkbox( "Technique charge and cast", &s.m_hapticTechs );
+			Help( "A light buzz that builds up in the casting hand while a technique charges, then a strong one when it is cast." );
+			ImGui::Checkbox( "Footsteps", &s.m_hapticSteps );
+			Help( "A soft buzz in both hands at each footfall while your character walks or runs (quicker and stronger when "
+				"running). Nothing while standing, in menus or with the palette open." );
+			if( s.m_hapticSteps )
+			{
+				ImGui::Indent();
+				ImGui::SliderFloat( "Footstep strength", &s.m_hapticStepStrength, 0.0f, 1.5f, "%.2f" );
+				ImGui::Checkbox( "Footsteps in third person", &s.m_hapticStepsThirdPerson );
+				Help( "Off: footsteps buzz in first person only." );
+				ImGui::Unindent();
+			}
+			ImGui::SliderFloat( "Vibration strength", &s.m_hapticStrength, 0.0f, 1.5f, "%.2f" );
+			Help( "Scales every controller vibration. 0 turns them all off." );
+			if( context.inGame && context.testVibration )
+			{
+				if( ImGui::Button( "Test: strength steps" ) )
+				{
+					context.testVibration( 0 );
+				}
+				ImGui::SameLine();
+				if( ImGui::Button( "Test: length steps" ) )
+				{
+					context.testVibration( 1 );
+				}
+				Help( "Strength steps: 5 buzzes from weak to full. Length steps: 4 buzzes from 10 to 80 ms. "
+					"Count how many you feel." );
+			}
+			ImGui::Checkbox( "Vibrate for the UI pointer", &s.m_hapticUi );
+			Help( "Ticks when clicking with the laser pointer and while dragging the panel." );
 		}
 
 		if( Section( Tab::Combat, "Motion combat" ) )
@@ -515,6 +832,16 @@ namespace PSUVR
 				"attack or cast, pull the trigger of the hand holding a gun to shoot. Two-handed and twin "
 				"weapons swing with either hand; with a rod the left hand casts slots 3 / 4. "
 				"Needs 'Play with motion controllers'." );
+			ImGui::Checkbox( "Holster gestures", &s.m_holsterEnabled );
+			Help( "Press a grip with that hand at the back of your head: weapon up (Circle + D-pad up). At the back of your waist: weapon down. At your mouth: use the current item (Circle + D-pad left). "
+				"Outside these zones the grip works as before." );
+			if( s.m_holsterEnabled )
+			{
+				ImGui::SliderFloat( "Head zone radius (m)", &s.m_holsterHeadRadius, 0.08f, 0.40f, "%.2f" );
+				ImGui::SliderFloat( "Waist zone radius (m)", &s.m_holsterWaistRadius, 0.08f, 0.40f, "%.2f" );
+				ImGui::SliderFloat( "Mouth zone radius (m)", &s.m_holsterMouthRadius, 0.06f, 0.25f, "%.2f" );
+								ImGui::Checkbox( "Show zones (needs Show controllers)", &s.m_holsterShowZones );
+			}
 			if( s.m_swingAttack )
 			{
 				ImGui::Checkbox( "Photon Art gestures", &s.m_paGesture );
@@ -638,10 +965,10 @@ namespace PSUVR
 				"Needs speech to text. A noisy room or loud game audio can set it off: it then only acts when the words "
 				"match a command." );
 			static const char *const routeIds[] = { "auto", "command", "chat" };
-			static const char *const routeNames[] = { "Auto (command in battle)", "Command", "Chat" };
+			static const char *const routeNames[] = { "Auto (command, else chat)", "Command", "Chat" };
 			Combo( "Always-on speech goes to", s.m_voiceRoute, routeIds, routeNames, 3 );
-			Help( "Auto: with a weapon out in the field it is matched to a technique, anything else is ignored. "
-				"Command: a technique, nothing else. Chat: everything you say goes to the game chat. "
+			Help( "Auto: like the held button: a command if it matches, otherwise it goes to the chat. "
+				"Command: a command only (sounds-alike matching), anything else is dropped. Chat: everything goes to the game chat. "
 				"Tap left Square (a short press) to cycle these in the game. The held button always falls back to the chat." );
 		}
 
@@ -698,6 +1025,9 @@ namespace PSUVR
 			Help( "In stereo the monitor shows the left eye's picture (cropped to the window) with the HUD on top, "
 				"instead of drawing the whole 3D scene a third time for the monitor. Menus and 2D screens are unchanged. "
 				"Turn off to get the normal flat camera on the monitor." );
+			ImGui::Checkbox( "Draw shadows once for both eyes", &s.m_perfShadowOnce );
+			Help( "With the game's shadows on: the right eye reuses the left eye's shadow map instead of drawing "
+				"everything that casts a shadow again. The shadows come from the game camera, so both eyes get the same map." );
 			ImGui::Checkbox( "Batch log writes", &s.m_perfLogBatching );
 			Help( "Writes psuex.log to disk about once a second instead of after every line. A crash still writes "
 				"what was logged. Turn off when chasing a crash that kills the game outright." );

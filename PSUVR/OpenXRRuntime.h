@@ -20,9 +20,12 @@ namespace PSUVR
 		bool GetEyePose( int eye, EyePose &out ) override;
 		const char *Name() const override { return "OpenXR"; }
 		bool GetControllerState( int hand, ControllerState &out ) override;
-		void Haptic( int hand, float amplitude, float seconds ) override;
+		void Haptic( int hand, float amplitude, float seconds, float frequency ) override;
 		bool GetUiQuad( UiQuad &out ) override;
 		bool GetHeadHeightAboveFloor( float &meters ) override;
+		bool GetTrackerState( TrackerRole role, TrackerState &out ) override;
+		bool GetHeadPose( float position[ 3 ], float orientation[ 4 ] ) override;
+		bool GetStagePose( float position[ 3 ], float orientation[ 4 ] ) override;
 
 		// Sync controller actions and locate the controllers for the next views' display
 		// time (after BeginFrame, with LocateNextViews).
@@ -198,6 +201,29 @@ namespace PSUVR
 		uint64_t m_gripSpace[ 2 ]{};
 		uint64_t m_aimSpace[ 2 ]{};
 		ControllerState m_controllers[ 2 ]{};
+
+		// Body trackers (XR_HTCX_vive_tracker_interaction, vr.trackersEnabled).
+		bool m_trackerExt = false;           // extension enabled on the instance
+		uint64_t m_actTrackerPose = 0;
+		uint64_t m_trackerRolePath[ kTrackerRoleCount ]{};
+		uint64_t m_trackerSpace[ kTrackerRoleCount ]{};
+		TrackerState m_trackers[ kTrackerRoleCount ]{};
+		void LogTrackers();
+		// OpenVR tracker source (vr.trackerSource): roles HTCX doesn't give, from OpenVR's STANDING
+		// universe, aligned to LOCAL through STAGE (or the HMD when STAGE disagrees).
+		void UpdateOpenVRTrackers();
+		bool m_headValid = false, m_stageValid = false; // GetHeadPose / GetStagePose, from UpdateInput
+		float m_headPos[ 3 ]{}, m_headRot[ 4 ]{ 0.0f, 0.0f, 0.0f, 1.0f };
+		float m_stagePos[ 3 ]{}, m_stageRot[ 4 ]{ 0.0f, 0.0f, 0.0f, 1.0f };
+		bool m_htcxSeen = false;             // an HTCX tracker was active this session (auto: no OpenVR)
+		int m_openvrWaitFrames = 0;
+		bool m_openvrHmdAlign = false;       // aligning by the HMD instead of STAGE
+		int m_openvrBadFrames = 0;           // STAGE alignment off by > 10 cm, frames in a row
+		int m_openvrAlignAge = 0;            // frames since the HMD alignment was taken
+		float m_openvrAlignPos[ 3 ]{};       // STANDING -> LOCAL: rotate, then add
+		float m_openvrAlignRot[ 4 ]{ 0.0f, 0.0f, 0.0f, 1.0f };
+		float m_openvrHmdError = -1.0f;      // last |aligned OpenVR HMD - OpenXR head|, meters
+		DWORD m_openvrLastLog = 0;
 
 		// The layer that carried the overlay in the last EndFrame (user HUD in stereo, the
 		// back-buffer panel otherwise), in LOCAL space.

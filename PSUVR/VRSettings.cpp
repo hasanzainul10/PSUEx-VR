@@ -32,7 +32,11 @@ namespace
 	X( m_hudMapFitScale, "hudMapFitScale" ) \
 	X( m_hudFollow, "hudFollow" ) \
 	X( m_menuBackdrop, "menuBackdrop" ) \
+	X( m_flatMenus, "flatMenus" ) \
+	X( m_flatMenuTasks, "flatMenuTasks" ) \
+	X( m_flatMenuHoldTasks, "flatMenuHoldTasks" ) \
 	X( m_hudOverlays, "hudOverlays" ) \
+	X( m_hudLayersByLayer, "hudLayersByLayer" ) \
 	X( m_toolkitOnHud, "toolkitOnHud" ) \
 	X( m_toolkitPointer, "toolkitPointer" ) \
 	X( m_hudFollowAngle, "hudFollowAngle" ) \
@@ -42,9 +46,11 @@ namespace
 	X( m_fpEyeFollowsNeck, "fpEyeFollowsNeck" ) \
 	X( m_bodyRestPose, "bodyRestPose" ) \
 	X( m_bodyFitHeight, "bodyFitHeight" ) \
-	X( m_bodyKeepLegAnim, "bodyKeepLegAnim" ) \
+	X( m_bodyAnimKeep, "bodyAnimKeep" ) \
 	X( m_bodyIk, "bodyIk" ) \
-	X( m_bodyProceduralLegs, "bodyProceduralLegs" ) \
+	X( m_bodyNeckDrop, "bodyNeckDrop" ) \
+	X( m_bodyBack, "bodyBack" ) \
+	X( m_bodyProceduralLegs, "bodyProceduralLegs" ) 	X( m_bodyHeadFollowsHmd, "bodyHeadFollowsHmd" ) 	X( m_bodyIkThirdPerson, "bodyIkThirdPerson" ) 	X( m_bodyShoulderShrug, "bodyShoulderShrug" ) 	X( m_bodyElbowFromHand, "bodyElbowFromHand" ) \
 	X( m_snapTurnDegrees, "snapTurnDegrees" ) \
 	X( m_fpTurnSpeed, "fpTurnSpeed" ) \
 	X( m_fpMoveDirection, "fpMoveDirection" ) \
@@ -68,6 +74,8 @@ namespace
 	X( m_snapTurn, "snapTurn" ) \
 	X( m_comfortVignette, "comfortVignette" ) \
 	X( m_showControllers, "showControllers" ) \
+	X( m_panelTextScale, "panelTextScale" ) \
+	X( m_settingsPage, "settingsPage" ) \
 	X( m_uiPointer, "uiPointer" ) \
 	X( m_controllerLabels, "controllerLabels" ) \
 	X( m_controllerLabelsGrip, "controllerLabelsGrip" ) \
@@ -78,6 +86,7 @@ namespace
 	X( m_emulateControllers, "emulateControllers" ) \
 	X( m_simScript, "simScript" ) \
 	X( m_handsFollow, "handsFollow" ) \
+	X( m_handsWorldOncePerFrame, "handsWorldOncePerFrame" ) \
 	X( m_armStretch, "armStretch" ) \
 	X( m_handsAttack, "handsAttack" ) \
 	X( m_handsPhotonArtAnimation, "handsPhotonArtAnimation" ) \
@@ -94,10 +103,39 @@ namespace
 	X( m_handRoll, "handRoll" ) \
 	X( m_motionProfile, "motionProfile" ) \
 	X( m_comboHaptic, "comboHaptic" ) \
+	X( m_hapticStrength, "hapticStrength" ) \
+	X( m_hapticUi, "hapticUi" ) \
+	X( m_hapticHits, "hapticHits" ) \
+	X( m_hapticHurt, "hapticHurt" ) \
+	X( m_hapticRecoil, "hapticRecoil" ) \
+	X( m_hapticTechs, "hapticTechs" ) \
+	X( m_hapticSteps, "hapticSteps" ) \
+	X( m_hapticStepStrength, "hapticStepStrength" ) \
+	X( m_hapticStepsThirdPerson, "hapticStepsThirdPerson" ) \
 	X( m_autoDpad, "autoDpad" ) \
 	X( m_swingAttack, "swingAttack" ) \
 	X( m_paGesture, "paGesture" ) \
 	X( m_gripPhotonArt, "gripPhotonArt" ) \
+	X( m_holsterEnabled, "holsterEnabled" ) \
+	X( m_holsterHeadRadius, "holsterHeadRadius" ) \
+	X( m_holsterWaistRadius, "holsterWaistRadius" ) \
+	X( m_holsterMouthRadius, "holsterMouthRadius" ) \
+	X( m_holsterItemScript, "holsterItemScript" ) \
+	X( m_holsterShowZones, "holsterShowZones" ) \
+	X( m_trackersEnabled, "trackersEnabled" ) \
+	X( m_trackerSource, "trackerSource" ) \
+	X( m_trackerShowDiscs, "trackerShowDiscs" ) \
+	X( m_trackerCal, "trackerCal" ) \
+	X( m_trackerSmoothing, "trackerSmoothing" ) \
+	X( m_trackerLostHold, "trackerLostHold" ) \
+	X( m_trackerCalibWithEyeHeight, "trackerCalibWithEyeHeight" ) \
+	X( m_trackerDriveBody, "trackerDriveBody" ) \
+	X( m_trackerDriveWaist, "trackerDriveWaist" ) \
+	X( m_trackerDriveChest, "trackerDriveChest" ) \
+	X( m_trackerDriveFeet, "trackerDriveFeet" ) \
+	X( m_trackerDriveKnees, "trackerDriveKnees" ) \
+	X( m_trackerDriveElbows, "trackerDriveElbows" ) \
+	X( m_trackerFootLock, "trackerFootLock" ) \
 	X( m_triangleChatL2, "triangleChatL2" ) \
 	X( m_strafeBody, "strafeBody" ) \
 	X( m_strafeBodyBlend, "strafeBodyBlend" ) \
@@ -142,6 +180,7 @@ namespace
 	X( m_eyeBlur, "eyeBlur" ) \
 	X( m_eyeGlare, "eyeGlare" ) \
 	X( m_eyeSky, "eyeSky" ) \
+	X( m_eyeFrustumCull, "eyeFrustumCull" ) \
 	X( m_stereoPanel, "stereoPanel" ) \
 	X( m_debugEyeShift, "debugEyeShift" ) \
 	X( m_debugDoublePass, "debugDoublePass" ) \
@@ -152,6 +191,7 @@ namespace
 	X( m_perfHudLockRanges, "perfHudLockRanges" ) \
 	X( m_perfLogBatching, "perfLogBatching" ) \
 	X( m_flatMirrorEye, "flatMirrorEye" ) \
+	X( m_perfShadowOnce, "perfShadowOnce" ) \
 	X( m_stereoLayerSpace, "stereoLayerSpace" ) \
 	X( m_eyeResolutionScale, "eyeResolutionScale" )
 
@@ -222,6 +262,12 @@ bool LoadVRSettingsJson( VRSettings &settings, const std::string &jsonText )
 #define PSUEX_VR_READ( member, key ) Read( node, key, settings.member );
 	PSUEX_VR_FIELDS( PSUEX_VR_READ )
 #undef PSUEX_VR_READ
+	// Older files: bodyKeepLegAnim became the legs bit of bodyAnimKeep.
+	if( !node.contains( "bodyAnimKeep" ) && node.contains( "bodyKeepLegAnim" ) && node[ "bodyKeepLegAnim" ].is_boolean() &&
+		node[ "bodyKeepLegAnim" ].get< bool >() )
+	{
+		settings.m_bodyAnimKeep |= kVRKeepLegs;
+	}
 
 	if( node.contains( "bindings" ) && node[ "bindings" ].is_object() )
 	{

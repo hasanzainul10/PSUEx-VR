@@ -29,7 +29,8 @@ namespace PSUVR
 		uint32_t Pressed( int hand );
 		uint32_t Released( int hand );
 
-		void Haptic( int hand, float amplitude, float seconds );
+		// Raw vibration; gameplay and UI use VRHaptics (named effects, strength setting).
+		void Haptic( int hand, float amplitude, float seconds, float frequency = 0.0f );
 
 		// Hand markers and pointer rays over the bound eye RT (after the eye pass).
 		// eye: the pose and FOV the eye was rendered with.

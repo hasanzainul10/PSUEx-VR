@@ -229,6 +229,8 @@ namespace
 		ImGui::SetNextWindowSize( viewport->WorkSize );
 		ImGui::Begin( "PSUEx VR configurator", nullptr,
 			ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings );
+		// Same text size setting as the in-game window (a desktop window reads fine a little smaller).
+		ImGui::SetWindowFontScale( g_settings.m_panelTextScale < 1.0f ? 1.0f : ( g_settings.m_panelTextScale > 2.5f ? 2.5f : g_settings.m_panelTextScale ) );
 
 		ImGui::TextUnformatted( "Game folder" );
 		ImGui::SetNextItemWidth( -170.0f );
@@ -306,8 +308,9 @@ int WINAPI wWinMain( HINSTANCE instance, HINSTANCE, PWSTR, int )
 		return SaveSettings();
 	};
 
-	WNDCLASSEXW wc{ sizeof( wc ), CS_CLASSDC, WndProc, 0, 0, instance, nullptr, nullptr, nullptr, nullptr,
-		L"PSUExVRConfig", nullptr };
+	HICON icon = LoadIconW( instance, MAKEINTRESOURCEW( 1 ) );
+	WNDCLASSEXW wc{ sizeof( wc ), CS_CLASSDC, WndProc, 0, 0, instance, icon, nullptr, nullptr, nullptr,
+		L"PSUExVRConfig", icon };
 	RegisterClassExW( &wc );
 	HWND hwnd = CreateWindowW( wc.lpszClassName, L"PSUEx VR Settings", WS_OVERLAPPEDWINDOW,
 		100, 100, 720, 900, nullptr, nullptr, wc.hInstance, nullptr );

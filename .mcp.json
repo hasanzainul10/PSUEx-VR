@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "ghidra": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/LaurieWired/GhidraMCP@2.0",
+        "ghidra-mcp",
+        "--ghidra-server",
+        "http://127.0.0.1:8080/"
+      ]
+    }
+  }
+}

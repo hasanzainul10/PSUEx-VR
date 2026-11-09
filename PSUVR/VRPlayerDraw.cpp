@@ -11,6 +11,8 @@
 #include <d3d9.h>
 
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 
 namespace PSUVR
 {
@@ -101,12 +103,43 @@ namespace PSUVR
 			{
 				return;
 			}
+#ifdef _DEBUG
+			// How often the player is drawn: per patched node, in / outside the eye passes.
+			{
+				static unsigned s_calls[ kMaxPatches ][ 2 ]{};
+				static unsigned s_firstFrame = 0;
+				static DWORD s_lastCallLog = 0;
+				for( unsigned i = 0; i < s_patchCount; ++i )
+				{
+					if( *reinterpret_cast< void ** >( s_patches[ i ].node + kNodeObject ) == object &&
+						s_patches[ i ].original == original )
+					{
+						++s_calls[ i ][ StereoRenderer::InEyePass() ? 1 : 0 ];
+						break;
+					}
+				}
+				if( GetTickCount() - s_lastCallLog >= 3000 )
+				{
+					s_lastCallLog = GetTickCount();
+					char line[ 512 ];
+					int len = 0;
+					for( unsigned i = 0; i < s_patchCount && len < 440; ++i )
+					{
+						len += sprintf_s( line + len, sizeof( line ) - len, " node%u=%p flat %u eye %u", i, s_patches[ i ].node,
+							s_calls[ i ][ 0 ], s_calls[ i ][ 1 ] );
+					}
+					PSU_LOG( "VRPlayerDraw: player draws over %u frames:%s\n", s_frame - s_firstFrame, line );
+					memset( s_calls, 0, sizeof( s_calls ) );
+					s_firstFrame = s_frame;
+				}
+			}
+#endif
 			NotePlayerModel( object );
 			// Free aim (arms following): the layer draw already reaches this node (BeginEyePasses);
 			// the game still culls the player against its aim camera (see IgnoreNearHide /
 			// IgnorePartCull).
 			const auto &vr = Config::Get().vr;
-			const bool forceShow = VRCamera::CameraState() == 4 && vr.m_handsFollow;
+			const bool forceShow = VRCamera::CameraState() == 4 && vr.m_handsFollow && VRCamera::FirstPersonActive();
 			s_drawingLocalPlayer = true;
 			s_forcingVisible = forceShow;
 			original( object );
@@ -265,10 +298,11 @@ namespace PSUVR
 
 	namespace VRPlayerDraw
 	{
-		void Update( bool enable )
+		void Update( bool firstPerson, bool thirdPersonBody )
 		{
 			++s_frame;
-			if( !enable || Config::Get().vr.m_fpBody == "full" )
+			// First person "full" needs no head cut; third-person body IK needs the model whatever fpBody says.
+			if( !thirdPersonBody && ( !firstPerson || Config::Get().vr.m_fpBody == "full" ) )
 			{
 				RestoreAll();
 				return;
@@ -422,6 +456,16 @@ namespace PSUVR
 			return s_drawingLocalPlayer;
 		}
 
+		const void *PlayerModel()
+		{
+			return s_divModel;
+		}
+
+		unsigned Frame()
+		{
+			return s_frame;
+		}
+
 		namespace
 		{
 			constexpr uint16_t kNodeSkipBits = 0x223;
@@ -432,7 +476,7 @@ namespace PSUVR
 		void BeginEyePasses()
 		{
 			s_forcedFlags = nullptr;
-			if( VRCamera::CameraState() != 4 || !Config::Get().vr.m_handsFollow || s_patchCount == 0 )
+			if( VRCamera::CameraState() != 4 || !Config::Get().vr.m_handsFollow || s_patchCount == 0 || !VRCamera::FirstPersonActive() )
 			{
 				return;
 			}

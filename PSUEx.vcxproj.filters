@@ -228,6 +228,15 @@
     <ClInclude Include="PSUDetour\Hook_0074B760_BonePose.hpp">
       <Filter>Header Files\PSUFunction</Filter>
     </ClInclude>
+    <ClInclude Include="PSUDetour\Hook_004FFFA0_BoneQuery.hpp">
+      <Filter>Header Files\PSUFunction</Filter>
+    </ClInclude>
+    <ClInclude Include="PSUDetour\Hook_0074DA40_CullSphere.hpp">
+      <Filter>Header Files\PSUFunction</Filter>
+    </ClInclude>
+    <ClInclude Include="PSUDetour\Hook_0074D5B0_CullBox.hpp">
+      <Filter>Header Files\PSUFunction</Filter>
+    </ClInclude>
     <ClInclude Include="PSUDetour\Hook_005089C0_NearCull.hpp">
       <Filter>Header Files\PSUFunction</Filter>
     </ClInclude>
@@ -235,6 +244,15 @@
       <Filter>Header Files\PSUFunction</Filter>
     </ClInclude>
     <ClInclude Include="PSUDetour\Hook_004F9F50_AimShot.hpp">
+      <Filter>Header Files\PSUFunction</Filter>
+    </ClInclude>
+    <ClInclude Include="PSUDetour\Hook_0047AD30_ActorHit.hpp">
+      <Filter>Header Files\PSUFunction</Filter>
+    </ClInclude>
+    <ClInclude Include="PSUDetour\Hook_004CACB0_WeaponFire.hpp">
+      <Filter>Header Files\PSUFunction</Filter>
+    </ClInclude>
+    <ClInclude Include="PSUDetour\Hook_004D3510_TechSpawn.hpp">
       <Filter>Header Files\PSUFunction</Filter>
     </ClInclude>
     <ClInclude Include="PSUDetour\Hook_004D50B0_TechAim.hpp">
@@ -340,6 +358,30 @@
       <Filter>Header Files\PSUVR</Filter>
     </ClInclude>
     <ClInclude Include="PSUVR\VRHands.h">
+      <Filter>Header Files\PSUVR</Filter>
+    </ClInclude>
+    <ClInclude Include="PSUVR\VRBodyIk.h">
+      <Filter>Header Files\PSUVR</Filter>
+    </ClInclude>
+    <ClInclude Include="PSUVR\VRSkeletonMath.h">
+      <Filter>Header Files\PSUVR</Filter>
+    </ClInclude>
+    <ClInclude Include="PSUVR\VRHaptics.h">
+      <Filter>Header Files\PSUVR</Filter>
+    </ClInclude>
+    <ClInclude Include="PSUVR\VRGameHaptics.h">
+      <Filter>Header Files\PSUVR</Filter>
+    </ClInclude>
+    <ClInclude Include="PSUVR\VRHolster.h">
+      <Filter>Header Files\PSUVR</Filter>
+    </ClInclude>
+    <ClInclude Include="PSUVR\VRTrackers.h">
+      <Filter>Header Files\PSUVR</Filter>
+    </ClInclude>
+    <ClInclude Include="PSUVR\OpenVRRuntime.h">
+      <Filter>Header Files\PSUVR</Filter>
+    </ClInclude>
+    <ClInclude Include="PSUVR\VREyeCull.h">
       <Filter>Header Files\PSUVR</Filter>
     </ClInclude>
     <ClInclude Include="PSUVR\VRControllerSim.h">
@@ -525,6 +567,27 @@
       <Filter>Source Files\PSUVR</Filter>
     </ClCompile>
     <ClCompile Include="PSUVR\VRHands.cpp">
+      <Filter>Source Files\PSUVR</Filter>
+    </ClCompile>
+    <ClCompile Include="PSUVR\VRBodyIk.cpp">
+      <Filter>Source Files\PSUVR</Filter>
+    </ClCompile>
+    <ClCompile Include="PSUVR\VRHaptics.cpp">
+      <Filter>Source Files\PSUVR</Filter>
+    </ClCompile>
+    <ClCompile Include="PSUVR\VRGameHaptics.cpp">
+      <Filter>Source Files\PSUVR</Filter>
+    </ClCompile>
+    <ClCompile Include="PSUVR\VRHolster.cpp">
+      <Filter>Source Files\PSUVR</Filter>
+    </ClCompile>
+    <ClCompile Include="PSUVR\VRTrackers.cpp">
+      <Filter>Source Files\PSUVR</Filter>
+    </ClCompile>
+    <ClCompile Include="PSUVR\OpenVRRuntime.cpp">
+      <Filter>Source Files\PSUVR</Filter>
+    </ClCompile>
+    <ClCompile Include="PSUVR\VREyeCull.cpp">
       <Filter>Source Files\PSUVR</Filter>
     </ClCompile>
     <ClCompile Include="PSUVR\VRControllerSim.cpp">

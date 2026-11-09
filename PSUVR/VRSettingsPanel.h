@@ -17,7 +17,10 @@ namespace PSUVR
 		std::function< bool() > reload;      // re-read from file
 		std::function< void() > runSetup;    // opens the setup wizard (in-game)
 	std::function< void() > openToolkit; // opens the Rogue's Toolkit menu (in-game)
-		std::string message;                 // last save/reload result, shown in the footer
+		std::function< bool( float & ) > headHeight; // head height above the floor in metres (in-game)
+		std::function< void( int ) > testVibration;  // 0 = strength ladder, 1 = length ladder (in-game)
+		std::function< std::string() > trackerStatus; // body trackers by role, "waist ok, ..." (in-game)
+		std::string message;                // last save/reload result, shown in the footer
 	};
 
 	// Draws the VR settings into the current ImGui window and edits settings live.

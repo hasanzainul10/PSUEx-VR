@@ -16,6 +16,8 @@ namespace PSUVR
 		// After the local player's draw callback: measures the model's world matrix through
 		// the game's bone query (which re-runs the pose build, so not from inside Apply).
 		void AfterPlayerDraw( void *model );
+		// Inside AfterPlayerDraw's bone query.
+		bool InWorldQuery();
 		// The pose has the head folded away (vr.fpBody "headless"): no neck clip plane needed.
 		bool HeadHidden();
 		// How far the animated neck leans from rest while walking (game world units, horizontal),

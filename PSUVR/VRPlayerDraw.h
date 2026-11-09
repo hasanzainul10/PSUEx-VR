@@ -12,12 +12,17 @@ namespace PSUVR
 	// player's node gets a thunk that brackets the original callback.
 	namespace VRPlayerDraw
 	{
-		// Once per stereo frame before the eye passes. enable = first person is active;
-		// false restores every patched callback.
-		void Update( bool enable );
+		// Once per stereo frame before the eye passes. firstPerson = first person is active;
+		// thirdPersonBody = third-person body IK wants the model; neither restores every patched callback.
+		void Update( bool firstPerson, bool thirdPersonBody );
 
 		// Inside the local player's draw callback.
 		bool DrawingLocalPlayer();
+		// The local player's TDivModel, seen at its last draw; null when not tracked
+		// (neither mode, first-person vr.fpBody "full", no player).
+		const void *PlayerModel();
+		// Counts Update calls (one per stereo frame).
+		unsigned Frame();
 		// Around the eye passes. PSU_DrawLayer only calls a node whose object has none of the
 		// bits 0x223 in its 16-bit flags at +8; free aim sets one on the local player, so the
 		// character, hands and weapons vanish. With the arms on the controllers the bits are

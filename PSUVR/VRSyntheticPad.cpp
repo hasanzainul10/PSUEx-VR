@@ -3,8 +3,11 @@
 #include "VRBindings.h"
 #include "VRCamera.h"
 #include "VRControllers.h"
+#include "VRHaptics.h"
+#include "VRHolster.h"
 #include "VRSystem.h"
 #include "VRMotionLayout.h"
+#include "VRTrackers.h"
 #include "VRPerf.h"
 #include "VRSpeech.h"
 #include "VRUiPointer.h"
@@ -67,6 +70,7 @@ namespace PSUVR
 		DWORD s_iniCheckTick = 0;
 		unsigned s_actions = 0;
 		bool s_loggedMerge = false;
+		bool s_chordStick = false;   // both grips + left stick up / down: the stick stays out of the pad
 
 		LARGE_INTEGER s_lastTime{};
 
@@ -85,6 +89,8 @@ namespace PSUVR
 		bool s_combatValid = false;
 		PSUCombat::State s_combat;
 		int s_lastAttackHand = 1;     // the combo buzz goes to the hand that attacked
+		bool s_lastAttackJust = false;      // that press went in during the Just Attack window
+		bool s_lastAttackPhotonArt = false; // that press was Y
 
 		bool s_aimModeOn = false;         // free aim mode (left stick click)
 		bool s_gunInView = false;         // the gun hand is raised into view
@@ -220,7 +226,7 @@ namespace PSUVR
 
 		void Buzz( int hand )
 		{
-			VRControllers::Haptic( hand, 0.5f, 0.04f );
+			VRHaptics::Play( hand, VRHaptics::Effect::Confirm );
 		}
 
 		// Just Attack window from the weapon type's motion table: a tick in the hand that attacked
@@ -240,7 +246,7 @@ namespace PSUVR
 			const int buzzHand = VRControllers::Active( s_lastAttackHand ) ? s_lastAttackHand : 1;
 			if( open && !s_comboWindow && !s_comboBuzzed && Config::Get().vr.m_comboHaptic && VRControllers::Active( buzzHand ) )
 			{
-				VRControllers::Haptic( buzzHand, combat.comboStep >= 2 ? 0.8f : 0.5f, 0.03f );
+				VRHaptics::Play( buzzHand, VRHaptics::Effect::ComboWindow, combat.comboStep >= 2 ? 1.6f : 1.0f );
 				s_comboBuzzed = true;
 			}
 #ifdef _DEBUG
@@ -355,6 +361,11 @@ namespace PSUVR
 			{
 				direct( 1 );  // melee, rod, staff
 			}
+			else if( rightCat == 2 && PSUCombat::TwinGuns( s_combat.weaponClass ) )
+			{
+				shoot( 0, false );  // twin handguns: either trigger fires them (the active weapon: no R1)
+				shoot( 1, false );
+			}
 			else if( rightCat == 2 )
 			{
 				shoot( PSUCombat::GunHand( s_combat.weaponClass ), false );  // two-handed gun, the active weapon: no R1
@@ -392,7 +403,11 @@ namespace PSUVR
 			{
 				shoot( 0, false );
 			}
-			// 0xC RCSM fires by itself: nothing.
+			else if( leftCat == 0xC )
+			{
+				// RCSM: user-reported to fire with R1 held + the attack button, like a left-hand gun.
+				shoot( 0, false );
+			}
 			return roles;
 		}
 
@@ -435,6 +450,9 @@ namespace PSUVR
 		void StartAttack( int button, int hand )
 		{
 			s_lastAttackHand = hand;
+			s_lastAttackPhotonArt = button == kPadY;
+			s_lastAttackJust = s_combatValid && s_combat.comboStep > 0 && PSUCombat::HasJustAttackWindow( s_combat ) &&
+				PSUCombat::JustAttackWindowOpen( s_combat );
 			s_pulseButton = button;
 			s_pulseTime = kAttackPulseSeconds;
 			// PSU aims an attack along the stick held when it starts, so the stick stays toward
@@ -473,7 +491,9 @@ namespace PSUVR
 		// PumpRequest once that weapon is active and the combo allows it.
 		void RequestAttack( int button, int hand, uint32_t weapon, const char *what )
 		{
-			VRControllers::Haptic( hand, 0.25f, 0.02f );
+			VRHaptics::Play( hand, VRHaptics::Effect::AttackSent );
+			// Claim the attack now: Gun() must not keep R1 down for the other hand's earlier combo.
+			s_lastAttackHand = hand;
 			s_pendingButton = button;
 			s_pendingHand = hand;
 			s_pendingWeapon = weapon;
@@ -566,6 +586,7 @@ namespace PSUVR
 		bool s_gunPhotonArt = false;     // left grip held with the trigger: Y (Photon Art) instead of X
 		float s_gunShotTime = 0.0f;
 		float s_gunTail = 0.0f;          // keep R1 held a little after the last shot
+		bool s_mgFaced = false;          // machinegun burst: the turn toward the look direction was decided
 		float s_gunGap = 0.0f;           // after an X press, wait before judging the state
 		float s_gunUpTime = 0.0f;        // how long the left gun has been the active weapon
 		constexpr float kGunSettleSeconds = 0.1f;
@@ -573,13 +594,21 @@ namespace PSUVR
 		// the rod has no left class): wait this long with R1 held instead.
 		constexpr float kCastSettleSeconds = 0.25f;
 		constexpr float kGunShotWaitSeconds = 0.8f;
+		// A voice cast has no held trigger to retry with, so it waits longer for the left weapon to
+		// take over (the log showed X landing on the right staff's technique after 0.25 s).
+		constexpr float kVoiceCastSettleSeconds = 0.7f;
+		constexpr float kVoiceShotWaitSeconds = 1.6f;
+		float s_castSettle = kCastSettleSeconds;
 		constexpr float kGunTailSeconds = 0.2f;
 		constexpr float kGunGapSeconds = 0.15f;
 
 		void Gun( float dt, const HandRoles &roles, PadState &pad )
 		{
 			// The left hand's gun (with R1) or a two-handed gun (the right trigger).
-			const int hand = roles.shoot[ 0 ] ? 0 : ( roles.shoot[ 1 ] ? 1 : -1 );
+			// Twin handguns (both hands shoot): the hand whose trigger is down, else the last one that fired.
+			const bool twinGuns = roles.shoot[ 0 ] && roles.shoot[ 1 ];
+			const int hand = twinGuns ? ( s_triggerDown[ 1 ] ? 1 : ( s_triggerDown[ 0 ] ? 0 : ( s_lastAttackHand == 0 ? 0 : 1 ) ) )
+				: roles.shoot[ 0 ] ? 0 : ( roles.shoot[ 1 ] ? 1 : -1 );
 			if( hand < 0 )
 			{
 				s_gunShot = false;
@@ -599,7 +628,16 @@ namespace PSUVR
 				PSU_LOG( "VRGun: shot dropped (gun didn't come up)\n" );
 #endif
 			}
-			const bool shooting = held || s_gunShot || ( s_lastAttackHand == hand && s_combat.comboStep > 0 );
+			if( !held )
+			{
+				s_mgFaced = false;
+			}
+			// A click (voice cast) must keep R1 down while the turn toward the look direction runs and
+			// through the X / Y pulse, or the press lands on the right-hand weapon (Zonde cast Foie).
+			// The turn and the X / Y pulse count only when this hand started them: a right-hand swing with
+			// a TCSM on the left must not get R1 (the press would land on the sub weapon).
+			const bool ownAttack = s_lastAttackHand == hand;
+			const bool shooting = held || s_gunShot || ( ownAttack && ( s_turning || ( s_pulseTime > 0.0f && s_pulseButton >= 0 ) || s_combat.comboStep > 0 ) );
 			if( shooting )
 			{
 				s_gunTail = kGunTailSeconds;
@@ -611,6 +649,7 @@ namespace PSUVR
 			if( s_gunTail <= 0.0f )
 			{
 				s_gunUpTime = 0.0f;
+				s_castSettle = kCastSettleSeconds;
 				return;
 			}
 			// Free aim: the gun is already up and R1 would start scan mode; only press X. A
@@ -627,7 +666,9 @@ namespace PSUVR
 			}
 			// +0x710 stays 0x..06 (gun stance) the whole time R1 is held: only the active weapon
 			// tells that the gun is up; give it a moment to settle.
-			const bool byClass = !leftGun || ( s_combat.leftClass != 0xFFFFFFFFu && s_combat.leftClass != s_combat.weaponClass );
+			// The RCSM (left category C) is timed, not read from the active class (unverified there).
+			const bool byClass = !leftGun || ( s_combat.leftCategory != 0xC && s_combat.leftCategory != 0xA && s_combat.leftClass != 0xFFFFFFFFu &&
+				s_combat.leftClass != s_combat.weaponClass );
 			if( !byClass || s_combat.activeClass == ( leftGun ? s_combat.leftClass : s_combat.weaponClass ) )
 			{
 				s_gunUpTime += dt;
@@ -636,8 +677,28 @@ namespace PSUVR
 			{
 				s_gunUpTime = 0.0f;
 			}
-			const bool gunUp = freeAim || s_gunUpTime >= ( byClass ? kGunSettleSeconds : kCastSettleSeconds );
+			const bool gunUp = freeAim || s_gunUpTime >= ( byClass ? kGunSettleSeconds : s_castSettle );
 			const bool ready = !PSUCombat::Swinging( s_combat );
+			// Machinegun (left category A): it fires for as long as X is held, a tap gives nothing.
+			if( leftGun && s_combat.leftCategory == 0xA && held && gunUp )
+			{
+				// Like any attack, turn toward where you look first (the stick pushed back while
+				// walking back would otherwise aim the burst behind you).
+				if( !s_mgFaced )
+				{
+					s_mgFaced = true;
+					s_turning = NeedsFacing();
+					s_turnTime = 0.0f;
+					s_faceHold = 0.0f;
+				}
+				if( s_turning )
+				{
+					return;
+				}
+				pad.buttons |= Bit( kPadX );
+				s_gunShot = false;
+				return;
+			}
 			if( ( held || s_gunShot ) && gunUp && ready && s_pulseButton < 0 )
 			{
 				// Same as a swing: the first shot of a chain turns toward where you look. A held
@@ -919,7 +980,7 @@ namespace PSUVR
 						s_gunShot = true;
 						s_gunShotTime = kGunShotWaitSeconds;
 						s_gunPhotonArt = pa;
-						VRControllers::Haptic( hand, 0.25f, 0.02f );
+						VRHaptics::Play( hand, VRHaptics::Effect::AttackSent );
 					}
 					else
 					{
@@ -1029,6 +1090,37 @@ namespace PSUVR
 				case Output::ToggleSettings: return static_cast< int >( VRAction::ToggleSettings );
 				case Output::TogglePause: return static_cast< int >( VRAction::TogglePause );
 				default: return -1;
+			}
+		}
+
+		// Both grips + left stick pushed down: the head's height above the floor becomes the first person
+		// eye height (the setup wizard's Measure step).
+		void MeasureEyeHeight()
+		{
+			static char s_text[ 64 ];
+			float head = 0.0f;
+			if( !System::Get().HeadHeightAboveFloor( head ) || head < 0.8f )
+			{
+				VRBindings::ShowToast( "Eye height: the headset reports no floor" );
+				return;
+			}
+			const float clamped = head < 1.2f ? 1.2f : ( head > 2.0f ? 2.0f : head );
+			auto &vr = Config::Get().vr;
+			vr.m_fpEyeHeight = clamped;
+			Config::Get().SaveToFile();
+			sprintf_s( s_text, "Eye height set to %.2f m", clamped );
+			VRBindings::ShowToast( s_text );
+			PSU_LOG( "VRSyntheticPad: eye height measured %.2f m, set %.2f m\n", head, clamped );
+			Buzz( 0 );
+			Buzz( 1 );
+			// With trackers in use, the same standing-straight moment calibrates them (VRTrackers counts
+			// 5 s down with a buzz each second, then captures).
+			if( vr.m_trackersEnabled && vr.m_trackerCalibWithEyeHeight && VRTrackers::Any() )
+			{
+				++vr.m_trackerCalibRequest;
+				sprintf_s( s_text, "Eye height %.2f m. Trackers: arms down, keep still 5 s", clamped );
+				VRBindings::ShowToast( s_text );
+				PSU_LOG( "VRSyntheticPad: tracker calibration requested with the eye height\n" );
 			}
 		}
 
@@ -1159,10 +1251,20 @@ namespace PSUVR
 		// wait:<seconds>. Runs on the virtual pad, so the game sees plain presses.
 		struct ScriptStep
 		{
-			enum Kind { Hold, WaitOpen, Tap, Wait } kind = Wait;
+			// ItemRow / Seek read the palette (PSUCombat::ReadItemPalette) and press until it matches.
+			enum Kind { Hold, WaitOpen, Tap, Wait, ItemRow, Seek } kind = Wait;
 			int button = -1;
 			float time = 0.0f;
+			int target = -1;  // Seek: the item cursor to reach
 		};
+		// A palette press (ItemRow / Seek): down for the first 0.12 s, then a gap to see the result.
+		constexpr float kPaletteTapSeconds = 0.30f;
+		float s_tapLeft = 0.0f;
+		int s_tapButton = -1;
+		int s_tapTries = 0;
+		int s_seekLastButton = -1;
+		int s_seekLastCursor = -1;
+		bool s_seekDownAdds = true;  // Down moves the cursor +1 (learned from the first press)
 		std::vector< ScriptStep > s_script;
 		size_t s_scriptIndex = 0;
 		float s_scriptTimer = 0.0f;
@@ -1175,6 +1277,19 @@ namespace PSUVR
 			for( char &c : name )
 			{
 				c = static_cast< char >( std::tolower( static_cast< unsigned char >( c ) ) );
+			}
+			// "cancel": the pad button the layout gives the cancel control (right Secondary), not a
+			// fixed letter, so a changed layout is followed.
+			if( name == "cancel" )
+			{
+				for( const VRMotionLayout::Entry &entry : VRMotionLayout::kLayout )
+				{
+					if( entry.hand == 1 && entry.control == Control::Secondary )
+					{
+						return PadButtonFor( entry.plain );
+					}
+				}
+				return kPadA;
 			}
 			static const char *const names[ kPadButtonCount ] = {
 				"a", "b", "x", "y", "l1", "r1", "l2", "r2", "l3", "r3", "select", "start", "up", "right", "down", "left" };
@@ -1205,7 +1320,7 @@ namespace PSUVR
 				return;
 			}
 			s_scriptTotal += dt;
-			if( s_scriptTotal > 6.0f )
+			if( s_scriptTotal > 8.0f )
 			{
 				ScriptFinish( "timed out" );
 				return;
@@ -1226,19 +1341,89 @@ namespace PSUVR
 				bool done = false;
 				switch( step.kind )
 				{
+					case ScriptStep::ItemRow:
+					case ScriptStep::Seek:
+					{
+						if( s_tapLeft > 0.0f )
+						{
+							// Mid-press: finish it before judging the result.
+							s_tapLeft -= dt;
+							if( s_tapLeft > kPaletteTapSeconds - 0.12f )
+							{
+								pad.buttons |= Bit( s_tapButton );
+							}
+							break;
+						}
+						PSUCombat::ItemPalette palette;
+						const bool valid = PSUCombat::ReadItemPalette( palette );
+						if( step.kind == ScriptStep::ItemRow )
+						{
+							if( valid && palette.itemRow )
+							{
+								done = true;
+								break;
+							}
+							// Unreadable palette: one blind press, as done by hand.
+							if( s_tapTries >= ( valid ? 3 : 1 ) )
+							{
+								if( !valid )
+								{
+									done = true;
+									break;
+								}
+								ScriptFinish( "aborted: the item row never came up" );
+								return;
+							}
+							++s_tapTries;
+							s_tapButton = kPadLeft;
+							s_tapLeft = kPaletteTapSeconds;
+							pad.buttons |= Bit( s_tapButton );
+							break;
+						}
+						if( !valid )
+						{
+							ScriptFinish( "aborted: palette unreadable" );
+							return;
+						}
+						if( palette.cursor == step.target )
+						{
+							done = true;
+							break;
+						}
+						// Learn which way Down moves the cursor from the last press, then take the short way.
+						if( s_seekLastButton >= 0 && s_seekLastCursor >= 0 && palette.cursor != s_seekLastCursor )
+						{
+							const bool plusOne = ( palette.cursor - s_seekLastCursor + palette.count ) % palette.count == 1;
+							s_seekDownAdds = ( s_seekLastButton == kPadDown ) == plusOne;
+						}
+						const int forward = ( step.target - palette.cursor + palette.count ) % palette.count;
+						const bool add = forward <= palette.count - forward;
+						s_tapButton = add == s_seekDownAdds ? kPadDown : kPadUp;
+						s_seekLastButton = s_tapButton;
+						s_seekLastCursor = palette.cursor;
+						s_tapLeft = kPaletteTapSeconds;
+						pad.buttons |= Bit( s_tapButton );
+						break;
+					}
 					case ScriptStep::Hold:
 						done = true;
 						break;
 					case ScriptStep::WaitOpen:
 						s_scriptTimer -= dt;
-						if( s_combatValid && s_combat.paletteOpen )
 						{
-							done = true;
-						}
-						else if( s_scriptTimer <= 0.0f )
-						{
-							ScriptFinish( "aborted: the palette never opened" );
-							return;
+							PSUCombat::ItemPalette open;
+							const bool read = PSUCombat::ReadItemPalette( open );
+							if( ( s_combatValid && s_combat.paletteOpen ) || ( read && open.state == 1 ) )
+							{
+								done = true;
+							}
+							else if( s_scriptTimer <= 0.0f )
+							{
+								PSU_LOG( "VRVoice: palette state %d (read %d), player flag %d\n", open.state, read ? 1 : 0,
+									s_combatValid && s_combat.paletteOpen ? 1 : 0 );
+								ScriptFinish( "aborted: the palette never opened" );
+								return;
+							}
 						}
 						break;
 					case ScriptStep::Tap:
@@ -1318,6 +1503,64 @@ namespace PSUVR
 				out.push_back( step );
 			}
 			return !out.empty();
+		}
+
+		bool StartScriptText( const std::string &text )
+		{
+			std::vector< ScriptStep > steps;
+			if( !s_script.empty() || !ScriptParse( text, -1, steps ) )
+			{
+				return false;
+			}
+			s_script = std::move( steps );
+			s_scriptIndex = 0;
+			s_scriptStepStarted = false;
+			s_scriptHeld = 0;
+			s_scriptTotal = 0.0f;
+			return true;
+		}
+
+		// Holster gestures: a grip press (the grip is still Pending) with the hand in a body zone
+		// fires the zone's action once and keeps the grip from also sending L1 / R1.
+		void Holster()
+		{
+			const auto &vr = Config::Get().vr;
+			if( !vr.m_holsterEnabled || s_ui || !s_script.empty() || ( s_combatValid && s_combat.paletteOpen ) )
+			{
+				return;
+			}
+			for( int hand = 0; hand < 2; ++hand )
+			{
+				if( !( VRControllers::Pressed( hand ) & kControllerGrip ) || s_grip[ hand ] != Grip::Pending )
+				{
+					continue;
+				}
+				const VRHolster::Zone zone = VRHolster::ZoneAtHand( hand );
+				if( zone == VRHolster::Zone::None )
+				{
+					continue;
+				}
+				bool started = false;
+				if( zone == VRHolster::Zone::Head || zone == VRHolster::Zone::Waist )
+				{
+					// Cancel held (the layout's right Secondary), D-pad tapped: the weapon palette steps up / down.
+					started = StartScriptText( zone == VRHolster::Zone::Head ? "hold:cancel wait:0.12 tap:up wait:0.15"
+						: "hold:cancel wait:0.12 tap:down wait:0.15" );
+				}
+				else
+				{
+					started = StartScriptText( vr.m_holsterItemScript );
+				}
+				PSU_LOG( "VRHolster: %s hand in %s zone -> %s\n", hand == 0 ? "left" : "right", VRHolster::Name( zone ),
+					started ? "started" : "not started (busy or script invalid)" );
+				if( started )
+				{
+					s_grip[ hand ] = Grip::Consumed;
+					s_pulse[ hand ] = 0.0f;
+					VRHaptics::Play( hand, VRHaptics::Effect::Holster );
+				}
+				break;
+			}
 		}
 
 		void Update()
@@ -1418,6 +1661,10 @@ namespace PSUVR
 			// The right controller points at a PSUEx window (VR settings): the game gets nothing but
 			// the both-grip chords (to close it, recenter, ...).
 			const bool uiOwns = VRUiPointer::Wanted();
+			if( !uiOwns )
+			{
+				Holster();
+			}
 
 			PadState pad;
 			const HandRoles roles = Roles();
@@ -1433,14 +1680,24 @@ namespace PSUVR
 			// Both grips + left stick pushed up (once per push): the Rogue's Toolkit menu.
 			{
 				static bool s_toolkitStickUp = false;
-				const bool up = modifier && hands[ 0 ]->stick[ 1 ] > 0.8f;
+				static bool s_eyeStickDown = false;
+				const float stickY = hands[ 0 ]->stick[ 1 ];
+				const bool up = modifier && stickY > ( s_toolkitStickUp ? 0.3f : 0.8f );
+				const bool down = modifier && stickY < ( s_eyeStickDown ? -0.3f : -0.8f );
 				if( up && !s_toolkitStickUp )
 				{
 					s_actions |= 1u << static_cast< int >( VRAction::ToggleToolkitMenu );
 					Buzz( 0 );
 					Buzz( 1 );
 				}
+				if( down && !s_eyeStickDown )
+				{
+					MeasureEyeHeight();
+				}
 				s_toolkitStickUp = up;
+				s_eyeStickDown = down;
+				// The chord push is not movement: keep it from the game (it opened the partner card).
+				s_chordStick = up || down;
 			}
 			for( const VRMotionLayout::Entry &entry : VRMotionLayout::kLayout )
 			{
@@ -1552,7 +1809,11 @@ namespace PSUVR
 					Buzz( 1 );
 				}
 			}
-			if( DpadActive() )
+			if( s_chordStick )
+			{
+				// Both grips + stick up / down: sends nothing to the game.
+			}
+			else if( DpadActive() )
 			{
 				pad.buttons |= DpadButtons( left.stick[ 0 ], left.stick[ 1 ] );
 			}
@@ -1693,6 +1954,8 @@ namespace PSUVR
 				}
 				set( 0, Control::Trigger, "Both triggers: calibrate hands" );
 				set( 1, Control::Trigger, "Both triggers: calibrate hands" );
+				set( 0, Control::Stick, vr.m_trackersEnabled && vr.m_trackerCalibWithEyeHeight && VRTrackers::Any()
+					? "Up: Rogue's Toolkit menu / Down: eye height + calibrate trackers" : "Up: Rogue's Toolkit menu / Down: measure eye height" );
 				int aimHand = 0;
 				if( vr.m_aimLeash && GunAiming( aimHand ) )
 				{
@@ -1797,34 +2060,62 @@ namespace PSUVR
 
 		bool UseItemSlot( int slot )
 		{
-			if( slot < 0 || slot > 3 || !s_active || !s_script.empty() || !s_combatValid || s_combat.paletteOpen || s_ui )
+			if( slot < -1 || slot > 6 || !s_active || !s_script.empty() || !s_combatValid || s_combat.paletteOpen || s_ui )
 			{
 				return false;
 			}
-			const auto &vr = Config::Get().vr;
-			// voiceItemButtons: "Up,Right,Down,Left" = the pad button of items one..four.
-			const std::string &list = vr.m_voiceItemButtons;
-			std::string button;
-			size_t pos = 0;
-			for( int i = 0; i <= slot; ++i )
+			// The game's own controls: hold Cancel to open the palette, Left picks the item row,
+			// Up / Down move the cursor, releasing Cancel uses the item under it.
+			PSUCombat::ItemPalette palette;
+			const bool readable = PSUCombat::ReadItemPalette( palette );
+			if( slot >= 0 && ( !readable || slot >= palette.count || !( palette.entry[ slot ] & 0xFF ) ) )
 			{
-				const size_t end = list.find( ',', pos );
-				button = pos <= list.size() ? list.substr( pos, end == std::string::npos ? std::string::npos : end - pos ) : std::string();
-				pos = end == std::string::npos ? list.size() + 1 : end + 1;
+				PSU_LOG( "VRVoice: item %d not in the palette (%s)\n", slot + 1, readable ? "empty slot" : "palette unreadable" );
+				return false;
 			}
 			std::vector< ScriptStep > steps;
-			if( !ScriptParse( vr.m_voiceItemScript, ScriptButtonId( button ), steps ) )
+			ScriptStep step;
+			step.kind = ScriptStep::Hold;
+			step.button = ScriptButtonId( "cancel" );  // the layout's Cancel (the game's A), not B (confirm)
+			steps.push_back( step );
+			step = ScriptStep();
+			step.kind = ScriptStep::WaitOpen;
+			step.time = 1.5f;
+			steps.push_back( step );
+			step = ScriptStep();
+			step.kind = ScriptStep::ItemRow;
+			steps.push_back( step );
+			if( slot >= 0 )
 			{
-				PSU_LOG( "VRVoice: bad voiceItemScript \"%s\" / button \"%s\"\n", vr.m_voiceItemScript.c_str(), button.c_str() );
-				return false;
+				step = ScriptStep();
+				step.kind = ScriptStep::Seek;
+				step.target = slot;
+				steps.push_back( step );
 			}
+			step = ScriptStep();
+			step.kind = ScriptStep::Wait;
+			step.time = 0.2f;
+			steps.push_back( step );
 			s_script = std::move( steps );
 			s_scriptIndex = 0;
 			s_scriptStepStarted = false;
 			s_scriptHeld = 0;
 			s_scriptTotal = 0.0f;
-			PSU_LOG( "VRVoice: pad script \"%s\" (item %d = %s)\n", vr.m_voiceItemScript.c_str(), slot + 1, button.c_str() );
+			s_tapLeft = 0.0f;
+			s_tapTries = 0;
+			s_seekLastButton = -1;
+			s_seekLastCursor = -1;
+			PSU_LOG( "VRVoice: item script, %s (palette %s: row %d cursor %d of %d)\n",
+				slot < 0 ? "current item" : "item by position", readable ? "read" : "unreadable",
+				palette.itemRow ? 1 : 0, palette.cursor, palette.count );
 			return true;
+		}
+
+		void LastAttack( int &hand, bool &justAttack, bool &photonArt )
+		{
+			hand = s_lastAttackHand;
+			justAttack = s_lastAttackJust;
+			photonArt = s_lastAttackPhotonArt;
 		}
 
 		bool CastTechSlot( int slot )
@@ -1845,15 +2136,23 @@ namespace PSUVR
 				RequestAttack( slot == 0 ? kPadX : kPadY, 1, 0, "voice" );
 				return true;
 			}
-			// Rod slots 3 / 4 and the TCSM: R1 held, then X / Y, through the left-hand cast.
-			if( !roles.shoot[ 0 ] )
+			// Rod slots 3 / 4 and the TCSM: R1 held, then X / Y, through the left-hand cast (not twin
+			// handguns, where the left hand shoots the right-hand weapon).
+			if( !roles.shoot[ 0 ] || roles.shoot[ 1 ] )
 			{
 				return false;
 			}
+			// Free aim sends no R1 (it would start scan mode), so X / Y would hit the right weapon.
+			if( VRCamera::CameraState() == 4 )
+			{
+				PSU_LOG( "VRVoice: slot %d needs R1, not possible in free aim\n", slot + 1 );
+				return false;
+			}
 			s_gunShot = true;
-			s_gunShotTime = kGunShotWaitSeconds;
+			s_gunShotTime = kVoiceShotWaitSeconds;
+			s_castSettle = kVoiceCastSettleSeconds;
 			s_gunPhotonArt = slot == 3;
-			VRControllers::Haptic( 0, 0.25f, 0.02f );
+			VRHaptics::Play( 0, VRHaptics::Effect::AttackSent );
 			return true;
 		}
 

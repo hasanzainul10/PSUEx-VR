@@ -70,9 +70,29 @@ namespace PSUVR
 		bool TrackingDirToWorld( const float tracking[ 3 ], float world[ 3 ] );
 		// First-person head (eye anchor) in game world. False outside first person.
 		bool HeadWorld( float head[ 3 ] );
+		// First-person HMD forward and up in game world (unit). False outside first person.
+		bool HeadAxes( float forward[ 3 ], float up[ 3 ] );
 		// First-person body forward and right in game world (unit, level). False outside it.
 		bool BodyAxes( float forward[ 3 ], float right[ 3 ] );
 		void ClearFirstPerson();
+
+		// Body IK (VRHands / VRBodyIk). First person: the plain functions above. Third person with
+		// vr.bodyIkThirdPerson: the headset's offset from the recenter reference (sideways clamped) on
+		// the eye anchor VRHands sets each pose, in the character's facing; tracked points are placed
+		// relative to the headset. All false when neither applies.
+		// The headset's tracking pose, every frame before the eye passes.
+		void NoteHmd( const EyePose views[ 2 ] );
+		// Third person, setting on, our orbit camera, a reference, not the dressing room.
+		bool ThirdPersonBodyWanted();
+		// eyeWorld = where the head is when you stand at the reference; facingYaw in the game's
+		// convention; unitsPerMeter = the character's size over yours.
+		void SetThirdPersonBody( const float eyeWorld[ 3 ], float facingYaw, float unitsPerMeter );
+		bool BodyTrackingToWorld( const float tracking[ 3 ], float world[ 3 ] );
+		bool BodyTrackingDirToWorld( const float tracking[ 3 ], float world[ 3 ] );
+		bool BodyHeadWorld( float head[ 3 ] );
+		bool BodyHeadAxes( float forward[ 3 ], float up[ 3 ] );
+		bool BodyFrameAxes( float forward[ 3 ], float right[ 3 ] );
+		bool BodyLookYaw( float &yaw );
 		// The right stick is read through XInput (false = turning falls back to the game's orbit).
 		bool TurnFromStick();
 		// Game units from the steered first-person camera to the head.

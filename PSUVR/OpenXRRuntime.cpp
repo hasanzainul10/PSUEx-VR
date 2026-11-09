@@ -1,6 +1,7 @@
 ﻿#include "OpenXRRuntime.h"
 
 #include "VRPerf.h"
+#include "OpenVRRuntime.h"
 
 #include "../Misc/Log.h"
 #include "../PSUExConfig.h"
@@ -48,7 +49,28 @@ namespace PSUVR
 
 	bool OpenXRRuntime::CreateInstance()
 	{
-		const char *exts[] = { XR_KHR_D3D11_ENABLE_EXTENSION_NAME };
+		// Body trackers: only with vr.trackersEnabled and when the runtime has the extension.
+		bool haveTrackerExt = false;
+		uint32_t extCount = 0;
+		if( XR_SUCCEEDED( xrEnumerateInstanceExtensionProperties( nullptr, 0, &extCount, nullptr ) ) && extCount > 0 )
+		{
+			std::vector< XrExtensionProperties > props( extCount, { XR_TYPE_EXTENSION_PROPERTIES } );
+			if( XR_SUCCEEDED( xrEnumerateInstanceExtensionProperties( nullptr, extCount, &extCount, props.data() ) ) )
+			{
+				for( uint32_t i = 0; i < extCount; ++i )
+				{
+					if( std::strcmp( props[ i ].extensionName, XR_HTCX_VIVE_TRACKER_INTERACTION_EXTENSION_NAME ) == 0 )
+					{
+						haveTrackerExt = true;
+					}
+				}
+			}
+		}
+		m_trackerExt = haveTrackerExt && Config::Get().vr.m_trackersEnabled;
+		PSU_LOG( "OpenXR: %s %s, %s\n", XR_HTCX_VIVE_TRACKER_INTERACTION_EXTENSION_NAME, haveTrackerExt ? "available" : "missing",
+			m_trackerExt ? "enabled" : "off (vr.trackersEnabled)" );
+
+		const char *exts[] = { XR_KHR_D3D11_ENABLE_EXTENSION_NAME, XR_HTCX_VIVE_TRACKER_INTERACTION_EXTENSION_NAME };
 
 		XrInstanceCreateInfo ci{ XR_TYPE_INSTANCE_CREATE_INFO };
 		std::strncpy( ci.applicationInfo.applicationName, "PSUEx", XR_MAX_APPLICATION_NAME_SIZE );
@@ -57,7 +79,7 @@ namespace PSUVR
 		ci.applicationInfo.engineVersion = 1;
 		// Headers are 1.1.x; older loaders (and many runtimes) only accept 1.0.
 		ci.applicationInfo.apiVersion = XR_API_VERSION_1_0;
-		ci.enabledExtensionCount = 1;
+		ci.enabledExtensionCount = m_trackerExt ? 2 : 1;
 		ci.enabledExtensionNames = exts;
 
 		XrInstance instance = XR_NULL_HANDLE;
@@ -186,14 +208,14 @@ namespace PSUVR
 
 	static XrAction
 	MakeAction( XrActionSet set, XrActionType type, const char *name, const char *localized,
-		const XrPath hands[ 2 ] )
+		const XrPath *subactions, uint32_t subactionCount = 2 )
 	{
 		XrActionCreateInfo info{ XR_TYPE_ACTION_CREATE_INFO };
 		info.actionType = type;
 		strcpy_s( info.actionName, name );
 		strcpy_s( info.localizedActionName, localized );
-		info.countSubactionPaths = 2;
-		info.subactionPaths = hands;
+		info.countSubactionPaths = subactionCount;
+		info.subactionPaths = subactions;
 		XrAction action = XR_NULL_HANDLE;
 		const XrResult r = xrCreateAction( set, &info, &action );
 		if( XR_FAILED( r ) )
@@ -310,6 +332,53 @@ namespace PSUVR
 			{ menu, "/user/hand/left/input/menu/click" }, { menu, "/user/hand/right/input/menu/click" },
 			{ haptic, "/user/hand/left/output/haptic" }, { haptic, "/user/hand/right/output/haptic" } } );
 
+		// Body trackers: one pose action, a subaction path per role, one space per role. Any failure
+		// here only loses the trackers.
+		if( m_trackerExt )
+		{
+			static const char *const kRoleNames[ kTrackerRoleCount ] = { "waist", "chest", "left_foot", "right_foot",
+				"left_knee", "right_knee", "left_elbow", "right_elbow" };
+			XrPath roles[ kTrackerRoleCount ];
+			for( int role = 0; role < kTrackerRoleCount; ++role )
+			{
+				char path[ 96 ];
+				sprintf_s( path, "/user/vive_tracker_htcx/role/%s", kRoleNames[ role ] );
+				roles[ role ] = ToPath( instance, path );
+				m_trackerRolePath[ role ] = static_cast< uint64_t >( roles[ role ] );
+			}
+			const XrAction trackerPose = MakeAction( set, XR_ACTION_TYPE_POSE_INPUT, "tracker_pose", "Body tracker pose", roles,
+				kTrackerRoleCount );
+			if( trackerPose )
+			{
+				m_actTrackerPose = static_cast< uint64_t >( trackerPose );
+				std::vector< XrActionSuggestedBinding > bindings;
+				for( int role = 0; role < kTrackerRoleCount; ++role )
+				{
+					char path[ 128 ];
+					sprintf_s( path, "/user/vive_tracker_htcx/role/%s/input/grip/pose", kRoleNames[ role ] );
+					bindings.push_back( { trackerPose, ToPath( instance, path ) } );
+				}
+				XrInteractionProfileSuggestedBinding suggested{ XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING };
+				suggested.interactionProfile = ToPath( instance, "/interaction_profiles/htc/vive_tracker_htcx" );
+				suggested.suggestedBindings = bindings.data();
+				suggested.countSuggestedBindings = static_cast< uint32_t >( bindings.size() );
+				const XrResult hr = xrSuggestInteractionProfileBindings( instance, &suggested );
+				PSU_LOG( "OpenXR: tracker bindings %s (0x%08X)\n", XR_FAILED( hr ) ? "rejected" : "ok", ( unsigned )hr );
+				for( int role = 0; role < kTrackerRoleCount && XR_SUCCEEDED( hr ); ++role )
+				{
+					XrActionSpaceCreateInfo spaceInfo{ XR_TYPE_ACTION_SPACE_CREATE_INFO };
+					spaceInfo.action = trackerPose;
+					spaceInfo.subactionPath = roles[ role ];
+					spaceInfo.poseInActionSpace.orientation.w = 1.0f;
+					XrSpace space = XR_NULL_HANDLE;
+					if( XR_SUCCEEDED( xrCreateActionSpace( session, &spaceInfo, &space ) ) )
+					{
+						m_trackerSpace[ role ] = static_cast< uint64_t >( space );
+					}
+				}
+			}
+		}
+
 		for( int hand = 0; hand < 2; ++hand )
 		{
 			XrActionSpaceCreateInfo spaceInfo{ XR_TYPE_ACTION_SPACE_CREATE_INFO };
@@ -339,7 +408,55 @@ namespace PSUVR
 			return false;
 		}
 		PSU_LOG( "OpenXR: controller actions ready\n" );
+		LogTrackers();
 		return true;
+	}
+
+	// Trackers the runtime knows (persistent path + role), via xrEnumerateViveTrackerPathsHTCX.
+	void OpenXRRuntime::LogTrackers()
+	{
+		if( !m_trackerExt || !m_instance )
+		{
+			return;
+		}
+		const XrInstance instance = static_cast< XrInstance >( m_instance );
+		PFN_xrEnumerateViveTrackerPathsHTCX enumerate = nullptr;
+		xrGetInstanceProcAddr( instance, "xrEnumerateViveTrackerPathsHTCX", reinterpret_cast< PFN_xrVoidFunction * >( &enumerate ) );
+		uint32_t count = 0;
+		if( !enumerate || XR_FAILED( enumerate( instance, 0, &count, nullptr ) ) )
+		{
+			PSU_LOG( "OpenXR: trackers: can't enumerate\n" );
+			return;
+		}
+		std::vector< XrViveTrackerPathsHTCX > paths( count, { XR_TYPE_VIVE_TRACKER_PATHS_HTCX } );
+		if( count > 0 && XR_FAILED( enumerate( instance, count, &count, paths.data() ) ) )
+		{
+			return;
+		}
+		PSU_LOG( "OpenXR: trackers: %u connected\n", count );
+		for( const XrViveTrackerPathsHTCX &p : paths )
+		{
+			char persistent[ XR_MAX_PATH_LENGTH ] = "?", role[ XR_MAX_PATH_LENGTH ] = "(no role: set one in SteamVR > Manage Trackers)";
+			uint32_t length = 0;
+			xrPathToString( instance, p.persistentPath, sizeof( persistent ), &length, persistent );
+			if( p.rolePath != XR_NULL_PATH )
+			{
+				xrPathToString( instance, p.rolePath, sizeof( role ), &length, role );
+			}
+			PSU_LOG( "OpenXR: tracker %s role %s\n", persistent, role );
+		}
+	}
+
+	bool OpenXRRuntime::GetTrackerState( TrackerRole role, TrackerState &out )
+	{
+		const int index = static_cast< int >( role );
+		if( index < 0 || index >= kTrackerRoleCount )
+		{
+			out = {};
+			return false;
+		}
+		out = m_trackers[ index ];
+		return out.active;
 	}
 
 	void OpenXRRuntime::DestroyActions()
@@ -350,6 +467,12 @@ namespace PSUVR
 			if( m_aimSpace[ hand ] ) { xrDestroySpace( static_cast< XrSpace >( m_aimSpace[ hand ] ) ); m_aimSpace[ hand ] = 0; }
 			m_controllers[ hand ] = {};
 		}
+		for( int role = 0; role < kTrackerRoleCount; ++role )
+		{
+			if( m_trackerSpace[ role ] ) { xrDestroySpace( static_cast< XrSpace >( m_trackerSpace[ role ] ) ); m_trackerSpace[ role ] = 0; }
+			m_trackers[ role ] = {};
+		}
+		m_actTrackerPose = 0;
 		// Destroying the set destroys its actions.
 		if( m_actionSet )
 		{
@@ -415,6 +538,10 @@ namespace PSUVR
 			// Not focused (SteamVR dashboard open): no controller input.
 			m_controllers[ 0 ] = {};
 			m_controllers[ 1 ] = {};
+			for( TrackerState &t : m_trackers )
+			{
+				t = {};
+			}
 			return;
 		}
 
@@ -502,6 +629,249 @@ namespace PSUVR
 			if( readBool( m_actSecondary ) ) c.buttons |= kControllerSecondary;
 			if( readBool( m_actMenu ) ) c.buttons |= kControllerMenu;
 		}
+
+		// Body trackers, same display time and space as the hands (plus the height above the floor).
+		for( int role = 0; m_actTrackerPose && role < kTrackerRoleCount; ++role )
+		{
+			TrackerState &t = m_trackers[ role ];
+			t = {};
+			XrActionStateGetInfo get{ XR_TYPE_ACTION_STATE_GET_INFO };
+			get.action = static_cast< XrAction >( m_actTrackerPose );
+			get.subactionPath = static_cast< XrPath >( m_trackerRolePath[ role ] );
+			XrActionStatePose poseState{ XR_TYPE_ACTION_STATE_POSE };
+			t.active = XR_SUCCEEDED( xrGetActionStatePose( session, &get, &poseState ) ) && poseState.isActive;
+			if( !t.active || !m_trackerSpace[ role ] )
+			{
+				continue;
+			}
+			const XrSpace space = static_cast< XrSpace >( m_trackerSpace[ role ] );
+			XrSpaceLocation location{ XR_TYPE_SPACE_LOCATION };
+			if( XR_SUCCEEDED( xrLocateSpace( space, base, time, &location ) ) )
+			{
+				constexpr XrSpaceLocationFlags kTracked = XR_SPACE_LOCATION_POSITION_TRACKED_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
+				t.valid = ( location.locationFlags & kPoseValid ) == kPoseValid;
+				t.tracked = ( location.locationFlags & kTracked ) == kTracked;
+				if( t.valid )
+				{
+					CopyPose( location.pose, t.position, t.orientation );
+				}
+			}
+			XrSpaceLocation floor{ XR_TYPE_SPACE_LOCATION };
+			if( t.valid && m_stageSpace &&
+				XR_SUCCEEDED( xrLocateSpace( space, static_cast< XrSpace >( m_stageSpace ), time, &floor ) ) &&
+				( floor.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT ) )
+			{
+				t.floorValid = true;
+				t.floorHeight = floor.pose.position.y;
+			}
+		}
+		// Head and floor for the tracker calibration (same time as the trackers).
+		{
+			XrSpaceLocation loc{ XR_TYPE_SPACE_LOCATION };
+			m_headValid = m_viewSpace && XR_SUCCEEDED( xrLocateSpace( static_cast< XrSpace >( m_viewSpace ), base, time, &loc ) ) &&
+				( loc.locationFlags & kPoseValid ) == kPoseValid;
+			if( m_headValid )
+			{
+				CopyPose( loc.pose, m_headPos, m_headRot );
+			}
+			XrSpaceLocation stage{ XR_TYPE_SPACE_LOCATION };
+			m_stageValid = m_stageSpace && XR_SUCCEEDED( xrLocateSpace( static_cast< XrSpace >( m_stageSpace ), base, time, &stage ) ) &&
+				( stage.locationFlags & kPoseValid ) == kPoseValid;
+			if( m_stageValid )
+			{
+				CopyPose( stage.pose, m_stagePos, m_stageRot );
+			}
+		}
+		UpdateOpenVRTrackers();
+	}
+
+	bool OpenXRRuntime::GetHeadPose( float position[ 3 ], float orientation[ 4 ] )
+	{
+		std::copy( m_headPos, m_headPos + 3, position );
+		std::copy( m_headRot, m_headRot + 4, orientation );
+		return m_headValid;
+	}
+
+	bool OpenXRRuntime::GetStagePose( float position[ 3 ], float orientation[ 4 ] )
+	{
+		std::copy( m_stagePos, m_stagePos + 3, position );
+		std::copy( m_stageRot, m_stageRot + 4, orientation );
+		return m_stageValid;
+	}
+
+	namespace
+	{
+		void QuatMul( const float a[ 4 ], const float b[ 4 ], float out[ 4 ] )
+		{
+			const float r[ 4 ] = {
+				a[ 3 ] * b[ 0 ] + a[ 0 ] * b[ 3 ] + a[ 1 ] * b[ 2 ] - a[ 2 ] * b[ 1 ],
+				a[ 3 ] * b[ 1 ] - a[ 0 ] * b[ 2 ] + a[ 1 ] * b[ 3 ] + a[ 2 ] * b[ 0 ],
+				a[ 3 ] * b[ 2 ] + a[ 0 ] * b[ 1 ] - a[ 1 ] * b[ 0 ] + a[ 2 ] * b[ 3 ],
+				a[ 3 ] * b[ 3 ] - a[ 0 ] * b[ 0 ] - a[ 1 ] * b[ 1 ] - a[ 2 ] * b[ 2 ] };
+			std::copy( r, r + 4, out );
+		}
+
+		void QuatRotate( const float q[ 4 ], const float v[ 3 ], float out[ 3 ] )
+		{
+			// v + 2w (u x v) + 2 u x (u x v)
+			const float u[ 3 ] = { q[ 0 ], q[ 1 ], q[ 2 ] };
+			const float t[ 3 ] = { 2.0f * ( u[ 1 ] * v[ 2 ] - u[ 2 ] * v[ 1 ] ), 2.0f * ( u[ 2 ] * v[ 0 ] - u[ 0 ] * v[ 2 ] ),
+				2.0f * ( u[ 0 ] * v[ 1 ] - u[ 1 ] * v[ 0 ] ) };
+			const float r[ 3 ] = {
+				v[ 0 ] + q[ 3 ] * t[ 0 ] + u[ 1 ] * t[ 2 ] - u[ 2 ] * t[ 1 ],
+				v[ 1 ] + q[ 3 ] * t[ 1 ] + u[ 2 ] * t[ 0 ] - u[ 0 ] * t[ 2 ],
+				v[ 2 ] + q[ 3 ] * t[ 2 ] + u[ 0 ] * t[ 1 ] - u[ 1 ] * t[ 0 ] };
+			std::copy( r, r + 3, out );
+		}
+
+		// Turn about +Y only (the heading of q's -Z forward).
+		void YawOnly( const float q[ 4 ], float out[ 4 ] )
+		{
+			const float back[ 3 ] = { 0.0f, 0.0f, -1.0f };
+			float f[ 3 ];
+			QuatRotate( q, back, f );
+			const float yaw = std::atan2( -f[ 0 ], -f[ 2 ] );
+			out[ 0 ] = 0.0f;
+			out[ 1 ] = std::sin( yaw * 0.5f );
+			out[ 2 ] = 0.0f;
+			out[ 3 ] = std::cos( yaw * 0.5f );
+		}
+	}
+
+	void OpenXRRuntime::UpdateOpenVRTrackers()
+	{
+		// Clear last frame's OpenVR roles (HTCX roles are refilled by the loop above when it runs).
+		for( TrackerState &t : m_trackers )
+		{
+			if( t.fromOpenVR )
+			{
+				t = {};
+			}
+		}
+		const auto &vr = Config::Get().vr;
+		if( !vr.m_trackersEnabled || vr.m_trackerSource == "openxr" )
+		{
+			return;
+		}
+		for( const TrackerState &t : m_trackers )
+		{
+			m_htcxSeen = m_htcxSeen || t.active;
+		}
+		const bool forced = vr.m_trackerSource == "openvr";
+		if( !forced && m_htcxSeen )
+		{
+			return; // auto: OpenXR has trackers
+		}
+		if( !OpenVRTrackerSource::Connected() )
+		{
+			// auto: give HTCX ~2 s to report its trackers first.
+			if( !forced && ++m_openvrWaitFrames < 180 )
+			{
+				return;
+			}
+			if( !OpenVRTrackerSource::Connect() )
+			{
+				return; // logged once
+			}
+		}
+		OpenVRTrackerSource::Poll( static_cast< float >( m_displayPeriod ) * 1.0e-9f );
+
+		const XrTime time = m_displayTime + m_displayPeriod;
+		const XrSpace base = static_cast< XrSpace >( m_space );
+		constexpr XrSpaceLocationFlags kPoseValid = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+
+		// Head from both sides, to check / build the alignment.
+		float vrHead[ 3 ], vrHeadQ[ 4 ], xrHead[ 3 ] = {}, xrHeadQ[ 4 ] = { 0.0f, 0.0f, 0.0f, 1.0f };
+		const bool haveVrHead = OpenVRTrackerSource::GetHmd( vrHead, vrHeadQ );
+		XrSpaceLocation head{ XR_TYPE_SPACE_LOCATION };
+		const bool haveXrHead = m_viewSpace && XR_SUCCEEDED( xrLocateSpace( static_cast< XrSpace >( m_viewSpace ), base, time, &head ) ) &&
+			( head.locationFlags & kPoseValid ) == kPoseValid;
+		if( haveXrHead )
+		{
+			CopyPose( head.pose, xrHead, xrHeadQ );
+		}
+
+		// STAGE (SteamVR: the STANDING universe) located in LOCAL.
+		float stagePos[ 3 ] = {}, stageRot[ 4 ] = { 0.0f, 0.0f, 0.0f, 1.0f };
+		XrSpaceLocation stage{ XR_TYPE_SPACE_LOCATION };
+		const bool haveStage = m_stageSpace && XR_SUCCEEDED( xrLocateSpace( static_cast< XrSpace >( m_stageSpace ), base, time, &stage ) ) &&
+			( stage.locationFlags & kPoseValid ) == kPoseValid;
+		if( haveStage )
+		{
+			CopyPose( stage.pose, stagePos, stageRot );
+		}
+
+		m_openvrHmdError = -1.0f;
+		if( haveStage && haveVrHead && haveXrHead )
+		{
+			float p[ 3 ];
+			QuatRotate( stageRot, vrHead, p );
+			const float d[ 3 ] = { p[ 0 ] + stagePos[ 0 ] - xrHead[ 0 ], p[ 1 ] + stagePos[ 1 ] - xrHead[ 1 ], p[ 2 ] + stagePos[ 2 ] - xrHead[ 2 ] };
+			m_openvrHmdError = std::sqrt( d[ 0 ] * d[ 0 ] + d[ 1 ] * d[ 1 ] + d[ 2 ] * d[ 2 ] );
+			m_openvrBadFrames = m_openvrHmdError > 0.10f ? m_openvrBadFrames + 1 : 0;
+		}
+		// STAGE unless it is missing or keeps disagreeing with the head (1.5 s), then the HMD.
+		const bool hmdAlign = !haveStage || m_openvrBadFrames > 135;
+		if( hmdAlign != m_openvrHmdAlign )
+		{
+			m_openvrHmdAlign = hmdAlign;
+			m_openvrAlignAge = 1000000;
+			PSU_LOG( "OpenVR: trackers aligned by %s (head check %.1f cm)\n", hmdAlign ? "the HMD" : "STAGE", m_openvrHmdError * 100.0f );
+		}
+		if( !hmdAlign )
+		{
+			std::copy( stagePos, stagePos + 3, m_openvrAlignPos );
+			std::copy( stageRot, stageRot + 4, m_openvrAlignRot );
+		}
+		else if( haveVrHead && haveXrHead && ++m_openvrAlignAge >= 120 )
+		{
+			// Yaw-only turn + offset that puts the OpenVR head on the OpenXR head; refreshed every
+			// ~1.3 s, not per frame, so head jitter doesn't shake the trackers.
+			m_openvrAlignAge = 0;
+			float inv[ 4 ] = { -vrHeadQ[ 0 ], -vrHeadQ[ 1 ], -vrHeadQ[ 2 ], vrHeadQ[ 3 ] };
+			float delta[ 4 ];
+			QuatMul( xrHeadQ, inv, delta );
+			YawOnly( delta, m_openvrAlignRot );
+			float p[ 3 ];
+			QuatRotate( m_openvrAlignRot, vrHead, p );
+			for( int i = 0; i < 3; ++i )
+			{
+				m_openvrAlignPos[ i ] = xrHead[ i ] - p[ i ];
+			}
+		}
+
+		int count = 0;
+		for( int role = 0; role < kTrackerRoleCount; ++role )
+		{
+			TrackerState &t = m_trackers[ role ];
+			if( t.active )
+			{
+				continue; // HTCX has this role
+			}
+			TrackerState s;
+			if( !OpenVRTrackerSource::Get( static_cast< TrackerRole >( role ), s ) )
+			{
+				continue;
+			}
+			++count;
+			if( s.valid )
+			{
+				float p[ 3 ];
+				QuatRotate( m_openvrAlignRot, s.position, p );
+				for( int i = 0; i < 3; ++i )
+				{
+					s.position[ i ] = p[ i ] + m_openvrAlignPos[ i ];
+				}
+				QuatMul( m_openvrAlignRot, s.orientation, s.orientation );
+			}
+			t = s;
+		}
+		if( GetTickCount() - m_openvrLastLog >= 5000 )
+		{
+			m_openvrLastLog = GetTickCount();
+			PSU_LOG( "OpenVR: %d trackers, %d with a role; align %s, head check %.1f cm\n", OpenVRTrackerSource::TrackerCount(), count,
+				m_openvrHmdAlign ? "HMD" : "STAGE", m_openvrHmdError * 100.0f );
+		}
 	}
 
 	bool OpenXRRuntime::GetControllerState( int hand, ControllerState &out )
@@ -515,7 +885,7 @@ namespace PSUVR
 		return out.active;
 	}
 
-	void OpenXRRuntime::Haptic( int hand, float amplitude, float seconds )
+	void OpenXRRuntime::Haptic( int hand, float amplitude, float seconds, float frequency )
 	{
 		if( !m_actHaptic || hand < 0 || hand > 1 || !m_sessionRunning )
 		{
@@ -524,12 +894,19 @@ namespace PSUVR
 		XrHapticVibration vibration{ XR_TYPE_HAPTIC_VIBRATION };
 		vibration.amplitude = amplitude < 0.0f ? 0.0f : ( amplitude > 1.0f ? 1.0f : amplitude );
 		vibration.duration = static_cast< XrDuration >( ( seconds > 0.0f ? seconds : 0.0f ) * 1.0e9 );
-		vibration.frequency = XR_FREQUENCY_UNSPECIFIED;
+		vibration.frequency = frequency > 0.0f ? frequency : XR_FREQUENCY_UNSPECIFIED;
 		XrHapticActionInfo info{ XR_TYPE_HAPTIC_ACTION_INFO };
 		info.action = static_cast< XrAction >( m_actHaptic );
 		info.subactionPath = static_cast< XrPath >( m_handPath[ hand ] );
-		xrApplyHapticFeedback( static_cast< XrSession >( m_session ), &info,
+		const XrResult result = xrApplyHapticFeedback( static_cast< XrSession >( m_session ), &info,
 			reinterpret_cast< const XrHapticBaseHeader * >( &vibration ) );
+		static int s_failures = 0;
+		if( XR_FAILED( result ) && s_failures < 8 )
+		{
+			++s_failures;
+			PSU_LOG( "OpenXR: xrApplyHapticFeedback failed (%d) hand %d amplitude %.2f %.0f ms\n", static_cast< int >( result ),
+				hand, vibration.amplitude, seconds * 1000.0f );
+		}
 	}
 
 	int64_t OpenXRRuntime::PickSwapchainFormat( uint64_t sessionHandle )
@@ -886,6 +1263,7 @@ namespace PSUVR
 		if( m_blitVS ) { m_blitVS->Release(); m_blitVS = nullptr; }
 		m_loggedBlitRtv = false;
 		DestroyActions();
+		OpenVRTrackerSource::Disconnect();
 		if( m_stageSpace )
 		{
 			xrDestroySpace( static_cast< XrSpace >( m_stageSpace ) );
@@ -935,6 +1313,21 @@ namespace PSUVR
 			if( ev.type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED )
 			{
 				LogInteractionProfiles();
+			}
+			else if( ev.type == XR_TYPE_EVENT_DATA_VIVE_TRACKER_CONNECTED_HTCX )
+			{
+				const auto *connected = reinterpret_cast< const XrEventDataViveTrackerConnectedHTCX * >( &ev );
+				char persistent[ XR_MAX_PATH_LENGTH ] = "?", role[ XR_MAX_PATH_LENGTH ] = "(no role)";
+				uint32_t length = 0;
+				if( connected->paths )
+				{
+					xrPathToString( instance, connected->paths->persistentPath, sizeof( persistent ), &length, persistent );
+					if( connected->paths->rolePath != XR_NULL_PATH )
+					{
+						xrPathToString( instance, connected->paths->rolePath, sizeof( role ), &length, role );
+					}
+				}
+				PSU_LOG( "OpenXR: tracker connected %s role %s\n", persistent, role );
 			}
 			else if( ev.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED )
 			{
