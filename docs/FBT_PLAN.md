@@ -202,7 +202,7 @@ knees / elbows:
 - **Test 4:** stand / squat / kick / step sideways / sit: character's hips, knees, feet follow; cover a tracker: that limb eases
   back to the estimate; stick walking still works.
 
-6. **Polish:** filter tuning, foot lock, `XR_MNDX_xdev_space`; ADDRESS_MAP, VR_HANDOFF, VR_ROADMAP.
+6. **Polish:** (built 2026-11-06, see VR_HANDOFF "Phase 6 polish": stricter whole-frame acceptance, residual-jump toast, foot lock `trackerFootLock`, adaptive orientation smoothing) still open: `XR_MNDX_xdev_space`, position filter tuning from logs; ADDRESS_MAP, VR_HANDOFF, VR_ROADMAP.
 
 Files: `PSUVR/VRHands.cpp`, new `PSUVR/VRBodyIk.*`, `PSUVR/VRSkeletonMath.h`, `PSUDetour/Hook_0074B760_BonePose.hpp`,
 `PSUVR/VRPlayerDraw.cpp`, `PSUVR/OpenXRRuntime.cpp`, `PSUVR/VRRuntime.h`, new `PSUVR/VRTrackers.*`, `PSUVR/VRSettings.*`,

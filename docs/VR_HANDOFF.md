@@ -747,7 +747,43 @@ Follow-up (voice-session review): RequestAttack now sets s_lastAttackHand = hand
 **User (2026-11-01): works** (right swing casts the wand, TCSM only from the left; committed in `6e596e6`).
 **Holster zones enlarged (2026-10-31, built Debug, NOT deployed: PSUC was running).** Zones are now ellipsoids (`VRHolster::ZoneShape`, half extents right/up/forward at 1.7 m, x radius setting / default): head-back centre (0, +0.12, -0.20) half (0.28, 0.30, 0.30) (up and back, forward to the shoulders); waist centre (0, -0.72, -0.28) half (0.34, 0.28, 0.30); mouth centre (0, -0.20, +0.14) in head axes, half (0.20, 0.25, 0.20) (face to chest, out front). The radius sliders now scale the whole zone (defaults unchanged). Debug discs mark the centre and six extreme points. Deploy `Debug\PSUExD.dll` + `PSUExVRConfig.exe` when the game is closed.
 
-## Full-body tracking (Phase 1 `a63ec2b`, 2a `eaff1fd`, 2b + fixes `d0f5ba2`, all user-tested OK; Phase 3 HTCX `32b9986`; OpenVR source `d733d7e`; 5a calibration `bfecafa`; Phase 4 built 2026-11-06, uncommitted, untested)
+## Full-body tracking (Phase 1 `a63ec2b`, 2a `eaff1fd`, 2b + fixes `d0f5ba2`, all user-tested OK; Phase 3 HTCX `32b9986`; OpenVR source `d733d7e`; 5a calibration `bfecafa`; Phase 4 `c2cb274` user-tested OK; Phase 6 polish built 2026-11-06 01:00, user-tested OK ("looks good"), uncommitted)
+**Phase 6 polish (built Debug + Release 2026-11-06 ~00:57 in a clean worktree off `c2cb274`, Debug DLL + config exe deployed
+00:58, previous game DLL `PSUExD.dll.bak_prefbt6`; uncommitted, untested):** Phase 4 + Body tab + shortcut + TpHeadWorld committed `c2cb274`.
+- **Heads-up, parallel session:** while this ran, another session was adding haptics B3 (gun recoil `Hook_004CACB0_WeaponFire`,
+  tech charge `Hook_004D3510_TechSpawn`, `hapticRecoil` / `hapticTechs`, `dllmain.cpp`, `VRHaptics*`, `VRGameHaptics.h`) in the
+  same tree, and the main tree's Release didn't link (`NoteWeaponFire` / `NoteTechSpawn` unresolved). So the deployed DLL is
+  FBT-only. `PSUExD.dll.bak_prefbt6` = that session's B3 Debug build (deployed 00:54:36): restore it to test B3, or rebuild
+  the main tree (both changes) once B3 links. Commit the FBT files separately from B3: VRBodyIk.cpp, VRTrackers.cpp, plus only
+  the `trackerFootLock` hunks in VRSettings.h / .cpp / VRSettingsPanel.cpp.
+- Calibration (`VRTrackerCal`): a whole-frame turn must now win by > 5 cm **and** fit <= 0.6 x shift; a turn < 60 deg only if the
+  shift residual >= 25 cm; a turn < 60 deg that passes keeps scale 1. Rejected: `VRTrackerCal: whole-frame full fit rejected
+  (<reason>): turn .., scale .., rms shift .. / fit .. cm; per-tracker offsets only`. Last run's 52 deg / 0.92 / 13 vs 8 cm is now rejected.
+- Residual watch (`VRTrackers.cpp` `WatchResidual`): standing still (head < 0.15 m/s, joints < 0.25 m/s, 0.5 s) and upright (head
+  >= 95% of the calibrated eye height): per joint (waist, chest, feet, knees; elbows skipped) height error vs the body model and
+  horizontal distance from the head vs the model (yaw-independent), weighted RMS, smoothed 0.3 s. Baseline starts at 0 (= the
+  calibration), averages over 20 s while no jump. `fast - baseline > 15 cm` for 2 s of standing -> log `VRTrackerCal: residual
+  jump X cm (baseline Y cm) for 2.0 s standing still: waist .. chest .. cm; trackers moved, recalibrate` + toast "Trackers moved:
+  recalibrate (both grips + left stick down)", once per calibration (reset by a new one). The 3 s `VRTrackers:` line ends
+  `residual N cm (baseline B, still S s[, warned])`. Also fires at game start if Standable's space changed since the saved calibration.
+- Foot lock (`trackerFootLock`, default true; Body > Full-body trackers > under the drive toggles "Foot lock"): a driven foot
+  tracker still (< 0.12 m/s) and on the floor (< 4 cm over its calibrated ankle height) for 0.15 s is pinned in the game world
+  (x/z; height stays tracked). Lets go when the real foot moves (> 0.35 m/s, 6 cm up or 6 cm away), eased over 0.2 s; or when
+  the body walked away from the pin (stick, snap turn) by 0.30 m (real-size, x units/m): a 0.2 s step with lift to the tracker,
+  one foot at a time (unless 0.6 m behind); > 1.5 m (teleport) jumps. Debug `VRBody: feet ...` line ends `foot lock
+  pinned|release|free/... (drift steps L R)`.
+- Filter: tracker orientation smoothing now speed-adaptive (cutoff 2 x minCutoff + beta x (lag - 3 deg) / dt), so fast foot /
+  hip turns don't lag; positions unchanged (one-euro).
+- Game files unchanged (`trackerFootLock` absent = true).
+**Test 6:** (recalibrate first: the saved `trackerCal` may hold a stale turn). `tools/lastlog.sh -d 'VRTrackerCal|VRBody: feet|VRTrackers:'`.
+1) Calibrate standing straight with the space upright: `fit none` + a `rejected (...)` line, or a full fit only with a big turn
+(Standable tilted). Joints / body look right. 2) Stand still 10 s: `residual` a few cm, no toast. 3) Toast check: in Standable,
+re-align / recenter its space (or move the hip tracker on the body by ~20 cm), stand still: toast within ~3 s, one `residual
+jump` line; recalibrate -> no more toasts, residual back to a few cm. 4) Foot lock: stand still, feet look rock steady; walk with
+the stick: feet stay planted then step (`drift steps` counting up), no gliding; lift / slide a real foot: it follows at once.
+Untick "Foot lock": feet glide with the stick as before. 5) Quick foot / hip turns: the character's feet turn without lag.
+Bad outcomes: toast while just standing normally (threshold too low: send the `residual` numbers); feet frozen while you step
+(unlock thresholds); constant stepping at rest (drift vs units/m mapping, send the `VRBody: feet` line).
 **OpenVR tracker source (built Debug + Release 2026-11-05 23:25, Debug + config exe deployed, previous DLL `PSUExD.dll.bak_preopenvr`;
 uncommitted, untested):** haptics B1/B2 committed `dd737bb`, Phase 3 HTCX `32b9986` (both local, not pushed).
 - `PSUVR/OpenVRRuntime.{h,cpp}` = `OpenVRTrackerSource` (not an `IVRRuntime`): no `openvr_api.dll`; uses SteamVR's `vrclient.dll`
@@ -815,7 +851,7 @@ estimate in ~0.3 s after the 0.3 s hold, no pop (`sources` shows `estimate`). 7)
 the feet slide with it (no stepping while tracked: expected). 8) Untick "Trackers move the body": back to the estimate. Third person
 (`bodyIkThirdPerson` on): same with the orbit camera. Bad outcomes: legs too long / hips floating -> `legs x` far from 1; feet below the
 floor -> ankle height; chest twisted at rest -> recalibrate, else the chest frame math; knees backward -> knee pole.
-**Later (note only):** detect Standable re-aligning its space (calibration residual jump) and toast "recalibrate trackers".
+**Later (done in Phase 6 polish above):** residual-jump watch + "recalibrate" toast.
 **Phase 5a tracker calibration (built Debug + Release 2026-11-06, committed `bfecafa`, user-tested OK; OpenVR
 source committed `d733d7e`):** in `VRTrackers.cpp` (no new file). `IVRRuntime::GetHeadPose` / `GetStagePose` (OpenXR: VIEW and
 STAGE located in LOCAL in `UpdateInput` at the trackers' time). Panel (Body trackers block, in game): "Calibrate trackers" ->
@@ -1081,6 +1117,56 @@ charge off `+0x170` motion / `+0x710` instead. Settings off = no recoil / techni
 **B3 test 1 (2026-11-06 01:15): not a real test.** The other session redeployed `PSUExD.dll` at 00:55:45 (built without B3), over the B3 one (now `PSUExD.dll.bak_prefbt6`); the log has no `shot` / `technique` lines. Deploys from either session must be built from the current tree, which has both B3 and the tracker work. **Pending:** rebuild Debug + deploy (and the config exe) when PSUC is closed, then retest B3.
 **Redeployed 01:26 (2026-11-06):** Debug `PSUExD.dll` built from the current tree (B3 + tracker work) + `PSUExVRConfig.exe`; the other session's 00:55 DLL is `PSUExD.dll.bak_fbt0055`. Retest B3 pending.
 
+## Visual bugs pass (2026-11-06, phase 1 passed, uncommitted; phase 2 next)
+Plan (user-approved): `C:\Users\hasan\.claude-3\plans\now-that-fbt-is-serialized-meteor.md`. One phase at a time, each built,
+deployed (Debug + config exe) and tested by the user before the next.
+1. **HUD layering, third person (cause known):** `VRHud::CapturePassBDraw` sends pass-B pieces deeper than `kHudDepthThird`
+   (12 units) to the eyes; HUD z values decode to 14-15, so the map frame (0x30), arrow (0x33), 0x39 and the HP/MP/name/EXP
+   block (0x3A / 0x3B) went to `eyes` (log `VRHud layer=`). Fix: layers >= 0x30 always visor; nameplates (0x2B) keep depth
+   routing. Setting `hudLayersByLayer` (default on).
+2. **NPC talk in first person:** `TalkThirdPerson()` (cameraMode firstPerson, camera state 5, not the dressing room, setting
+   `fpTalkThirdPerson` default on) makes `FirstPersonMode()` false / `ThirdPersonMode()` true for the talk; re-prime first
+   person after it. Check the direct `m_cameraMode` readers.
+3. **Third-person rectangle** (user: stays put in the world, edges show on head turns). Lead: Debug `Stereo: 3D near camera
+   ret=00747BE7` (6 verts, fvf 0x42, 256x256, blended, z on/no write, ±121 units AROUND the game camera): a camera-locked sheet,
+   hidden in first person because the camera is 25 units behind the head. Probe (layer, blend, colour; DIP path too), confirm
+   with the site bisect, then `eyeCameraSheets` hide (default) / keep.
+4. **Mission glow through ground / weapon:** reprojected sprites (0x00747248) already depth-test; glare / hit spark skipped.
+   Candidate: `eye XYZRHW draw with projected z from ret=004A0F4A` (not reprojected; no Ghidra function there yet). Probe
+   blended no-depth-test draws in the mission, bisect, then reproject / force the depth test (`eyeEffectDepthTest`) / skip.
+**Phase 1 done in code (2026-11-06 22:32):** `VRHud::CapturePassBDraw`: with `hudLayersByLayer` on (default; not in
+`psuex_vr.json` / `config.json`, so the default applies), pass-B layers >= 0x30 log `visor` and skip both the first-person
+`skip-own` band and the depth `eyes` route (both camera modes); layers < 0x30 unchanged. Debug prints once per layer
+`VRHud: layer 0xNN depth D > L would go to the eyes, kept on the panel (hudLayersByLayer)`. Checkbox "HUD pieces always on
+the panel (third person)" in HUD tab > HUD and menus. **Game folder:** Debug `PSUExD.dll` + `PSUExVRConfig.exe` deployed
+22:32; previous DLL kept as `PSUExD.dll.bak_prehudlayer`. **Pending test:** third person, town + field: map frame, arrow and
+HP/MP/name/EXP block on the panel; nameplates still over heads. `tools/lastlog.sh 'VRHud layer='` -> no `0x3x ... eyes`;
+`tools/lastlog.sh 'kept on the panel'` lists 0x30/0x33/0x39/0x3A/0x3B. Checkbox off -> old behaviour (pieces in the world).
+First person: HUD unchanged. **Next:** phase 2 (NPC talk) after the user's OK.
+**Phase 1 test 1 (2026-11-06 22:54):** third-person HUD fixed, but other players' nameplates went to the panel too: layers
+0x3A / 0x3B carry both the status block (fixed z 0.9286) and player nameplates (z 0.95-0.995 by distance; own plate
+0.95-0.96). All HUD-widget z values seen in both logs are 0.856-0.9375. **Fix deployed 2026-11-06 (Debug DLL + config exe):** the
+layer rule also needs raw z < 0.94 (or no depth); nameplates fall through to the depth routing. **Pending:**
+retest: HUD on panel in third person AND player nameplates over heads.
+**Phase 1 test 2 (2026-11-06): passed.** User: HUD on the panel and nameplates over heads in third person. Log: 0x30 / 0x33 /
+0x3A / 0x3B at z 0.9286-0.9334 -> `visor` (with `kept on the panel` lines); 0x3A / 0x3B nameplates z 0.972 -> `eyes`. Uncommitted
+(VRHud.cpp, VRSettings.h/.cpp, VRSettingsPanel.cpp; the settings files also hold the other session's uncommitted work). Next: phase 2.
+
+**Tracker run 2026-11-06 ~22:50, user: "trackers seem weird" (diagnosed, no code change):** source OpenXR (HTCX now sees all 8
+Standable trackers). Standable's raw space was **flat / degenerate again**: every tracker's STAGE floor height 1.0..1.26 m (feet
+included), body laid along LOCAL z (feet +0.8 m from the waist), raw y almost constant all session (waist 0.14..0.25) while x / z move
+~1 m. That is image-plane (2D-like) output, not a rigid tilt. The calibration (7 runs, turn 84..94 deg, fit 9..20 cm) rotates it
+upright, so standing still looks right, but walking toward / away from the camera moves the whole body up / down (waist joint
+-0.06 -> -0.73 m with a 0.72 m raw z shift) and the floor-based legs follow. Also: all 8 trackers lost 2 s at once (Standable dropped
+the user) -> residual jump 85..90 cm warning; later `waist tracker 0.00` / chest 0 deg with no loss = drive switched off in the
+panel (saved file still has everything true). Fix on Standable's side (redo its space / floor calibration until raw floor heights are
+feet ~0.05, waist ~1.0). Possible code guard: at calibration, refuse or warn when raw feet-to-waist STAGE height < 0.3 m.
+**Follow-up run (same day, user: "still weird"):** worse. Every tracker's STAGE floor 3.17..3.31 m, raw LOCAL y fixed at 2.04 / 2.10
+for the whole session (zero motion on that axis), so Standable gives a flat 2D sheet 3.2 m up. The body also **flips end over end**:
+feet +0.8 m z from the waist in 89 log samples, -0.8 m in 71 (calibrated feet jump from -1.0 m to +0.9 m LOCAL = above the head);
+left / right feet swap their fixed y (2.04 <-> 2.10) too. Residual jump 214 cm. Not fixable by calibration; Standable's 3D / space
+setup must be fixed. Proposed guard (not built): don't calibrate / drive when all trackers' floor heights are within 0.3 m of each
+other, and drop frames where the feet-to-waist direction flips vs the calibration.
 **B3 result (2026-11-06): works** (user: twin handgun recoil alternates hands, wand / TCSM charge + cast felt). Log: each twin
 handgun shot alternates arg2 1 / 0 -> left / right; casts spawn 0.18..0.27 s after the step starts; RCSM auto shots buzz the left
 hand (user wants to keep that: it tells them it is shooting). Fixes built + deployed (Debug + config exe): charge pulse every 0.1 s,
@@ -1093,4 +1179,17 @@ bit 1 set for TCSM casts and clear for wand casts. **Next:** B4 walking haptics 
 **Game folder (2026-11-07):** `hapticSteps` set true in `psuex_vr.json` and `config.json` (backups `psuex_vr.json.bak15`, `config.json.bak14`); `bodyProceduralLegs` is already true there, so the first test uses source a (planted feet).
 **B4 test 1 (2026-11-07):** user: footsteps a bit too frequent and too strong -> `hapticSteps` set back to false in both files (code default already false). Log (all source `plant`): IK feet land every ~3.5 game frames while running (60 units/s), but the game's run motion (id 2) loops over ~20 frames = 2 real footfalls per loop: the planted feet step ~3x too often for the buzz. Speeds: walk 11..24, run 44..61 units/s (threshold 30 fits). **Ideas (not built):** take the timing from the motion loop even when planted feet are on (2 per loop), or a minimum interval between buzzes; lower the default strength (e.g. 0.7) / one pulse instead of two. Source b (`motion wrap|half`) not tested yet.
 **B4 fix built + deployed (Debug + config exe, 2026-11-07 01:05):** footfalls always from the motion loop (wrap + half way, 2 per loop); the planted feet only stand in until the current motion's loop length is known, at most one buzz per 0.3 s. `hapticStepStrength` default 0.7 (was 1.0; also set 0.7 in both settings files), running boost x1.2 (was x1.3). `hapticSteps` stays false in the game files. **Pending test:** turn Footsteps on: 2 buzzes per run cycle, softer; log source mostly `motion wrap` / `motion half` (a few `plant` at the start of a motion).
-
+**Standable diagnosis (2026-11-06/07), no PSUEx change:** bad poses come from Standable itself (OpenVR path shows the same as OpenXR;
+the SteamVR skeleton floats with the game closed). Standable 3.0.4 at `D:\SteamLibrary\steamapps\common\Standable Full Body
+Estimation\saves`: `Sync Standable Floor to SteamVR` was on (user turned it off; still floating), `bind_offsets.json` has a ghost
+"Null Serial Number" device bound as Head (role 1) next to the PS VR2 headset. Lay Back / Front poses explain the flipping. HMD is
+PS VR2 (`playstation_vr2` driver). User is rolling Standable back to an older version. After that: check the SteamVR skeleton stands,
+then a game run: `tools/lastlog.sh -d 'VRTrackers:'` floors feet ~0.05 / waist ~1.0, calibration turn ~0 deg.
+**Resolved (2026-11-07):** user rolled Standable back to an older version: "that works". No game log yet after the rollback (last
+session in psuex.log is still the broken one); confirm on the next run with `tools/lastlog.sh -d 'VRTrackers:|whole-frame fit'`
+(feet floor ~0.05, waist ~1.0, fit turn ~0 deg). Keep Standable's auto-update off. Optional guard still unbuilt (refuse calibration
+when all tracker floor heights agree within 0.3 m).
+**Standable fixed for real (2026-11-07):** Steam Cloud kept restoring the 3.0.4 `settings.json`; the SteamVR restart broke the
+rolled-back build again. Fix: rollback beta + empty `saves` (3.0.4 files in `saves_3.0.4_backup` / `saves_cloud_restored`) + the
+old version's own floor calibration. The user has Steam Cloud for Standable off. 3.0.x dropped the separate floor calibration for
+"floor = HMD height - user height" on T-pose (+ optional sync to SteamVR), which went wrong on PS VR2 here.

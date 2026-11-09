@@ -154,6 +154,145 @@ namespace PSUVR
 		Driven s_drive[ kTrackerRoleCount ];
 		float s_legScale = 1.0f;     // character hip height over the user's (calibration), last Solve
 
+		// Foot lock (vr.trackerFootLock): a tracked foot that stays still on the floor is pinned in the game
+		// world, so stick walking doesn't slide it and tracker noise doesn't shake it. UpdateTrackers decides
+		// from the real foot's motion (once per frame); Solve pins it and lets go (eased over kReleaseTime,
+		// with a step lift when it let go because the body walked away from it).
+		constexpr float kLockSpeed = 0.12f;     // m/s: slower counts as still
+		constexpr float kLockHeight = 0.04f;    // m above the calibrated ankle height: on the floor
+		constexpr float kLockDelay = 0.15f;     // s still before pinning
+		constexpr float kUnlockSpeed = 0.35f;   // m/s, kUnlockHeight m up or kUnlockMove m away: the foot moves
+		constexpr float kUnlockHeight = 0.06f;
+		constexpr float kUnlockMove = 0.06f;
+		constexpr float kDrift = 0.30f;         // m (real-world size) the pin may fall behind the tracker
+		constexpr float kSnap = 1.5f;           // m: further than this (teleport, area change) jumps
+		constexpr float kReleaseTime = 0.2f;
+		struct FootLock
+		{
+			bool locked = false;
+			bool pinValid = false;
+			D3DXVECTOR3 pin{ 0.0f, 0.0f, 0.0f };   // world (x, z used)
+			float stillFor = 0.0f;
+			bool haveLast = false;
+			float last[ 3 ]{};                     // LOCAL joint last frame
+			float lockedAt[ 3 ]{};                 // LOCAL joint when pinned
+			bool releaseRequest = false;           // UpdateTrackers let go; Solve turns the pin into an offset
+			bool releasing = false;
+			bool releaseLift = false;
+			float releaseT = 0.0f;
+			D3DXVECTOR3 releaseOffset{ 0.0f, 0.0f, 0.0f }; // world, pin - tracked when let go
+			int steps = 0;                          // drift steps (log)
+		};
+		FootLock s_footLock[ 2 ];
+
+		void UpdateFootLock( float dt )
+		{
+			const auto &vr = Config::Get().vr;
+			const TrackerRole roles[ 2 ] = { TrackerRole::LeftFoot, TrackerRole::RightFoot };
+			for( int i = 0; i < 2; ++i )
+			{
+				FootLock &f = s_footLock[ i ];
+				const Driven &d = s_drive[ static_cast< int >( roles[ i ] ) ];
+				if( !vr.m_trackerFootLock || !d.live )
+				{
+					const int steps = f.steps;
+					f = {};
+					f.steps = steps;
+					continue;
+				}
+				if( f.releasing )
+				{
+					f.releaseT += dt / kReleaseTime;
+					f.releasing = f.releaseT < 1.0f;
+				}
+				if( dt <= 0.0f )
+				{
+					continue;
+				}
+				const float *j = d.pose.joint;
+				const float speed = f.haveLast ? std::sqrt( ( j[ 0 ] - f.last[ 0 ] ) * ( j[ 0 ] - f.last[ 0 ] ) + ( j[ 1 ] - f.last[ 1 ] ) * ( j[ 1 ] - f.last[ 1 ] ) +
+					( j[ 2 ] - f.last[ 2 ] ) * ( j[ 2 ] - f.last[ 2 ] ) ) / dt : 1.0f;
+				std::copy( j, j + 3, f.last );
+				f.haveLast = true;
+				const float up = d.pose.jointFloorHeight - VRTrackers::CalibratedJointHeight( roles[ i ] );
+				if( f.locked )
+				{
+					const float moved = std::sqrt( ( j[ 0 ] - f.lockedAt[ 0 ] ) * ( j[ 0 ] - f.lockedAt[ 0 ] ) + ( j[ 2 ] - f.lockedAt[ 2 ] ) * ( j[ 2 ] - f.lockedAt[ 2 ] ) );
+					if( speed > kUnlockSpeed || up > kUnlockHeight || moved > kUnlockMove )
+					{
+						f.locked = false;
+						f.releaseRequest = f.pinValid;
+						f.releaseLift = false; // your foot is moving: it brings its own lift
+						f.stillFor = 0.0f;
+					}
+					continue;
+				}
+				f.stillFor = speed < kLockSpeed && up < kLockHeight ? f.stillFor + dt : 0.0f;
+				if( f.stillFor >= kLockDelay && !f.releasing && !f.releaseRequest )
+				{
+					f.locked = true;
+					f.pinValid = false;
+					std::copy( j, j + 3, f.lockedAt );
+				}
+			}
+		}
+
+		// Solve: the tracked ankle (world) with the lock applied.
+		void ApplyFootLock( int i, D3DXVECTOR3 &ankle, float units, float lift )
+		{
+			FootLock &f = s_footLock[ i ];
+			FootLock &other = s_footLock[ 1 - i ];
+			const auto flat = []( const D3DXVECTOR3 &v ) { return std::sqrt( v.x * v.x + v.z * v.z ); };
+			if( f.locked )
+			{
+				if( !f.pinValid )
+				{
+					f.pin = ankle;
+					f.pinValid = true;
+				}
+				const D3DXVECTOR3 behind = f.pin - ankle;
+				const float drift = flat( behind );
+				// The body walked away from the pin (stick): step to the tracker, one foot at a time.
+				if( drift > kSnap * units )
+				{
+					f.pin = ankle;
+				}
+				else if( drift > kDrift * units && ( !( other.releasing || other.releaseRequest ) || drift > 2.0f * kDrift * units ) )
+				{
+					f.locked = false;
+					f.releaseRequest = true;
+					f.releaseLift = true;
+					f.stillFor = 0.0f;
+					++f.steps;
+				}
+				else
+				{
+					ankle.x = f.pin.x;
+					ankle.z = f.pin.z;
+					return;
+				}
+			}
+			if( f.releaseRequest )
+			{
+				f.releaseRequest = false;
+				f.releaseOffset = f.pin - ankle;
+				f.releaseOffset.y = 0.0f;
+				f.pinValid = false;
+				f.releasing = flat( f.releaseOffset ) < kSnap * units;
+				f.releaseT = 0.0f;
+			}
+			if( f.releasing )
+			{
+				const float t = std::clamp( f.releaseT, 0.0f, 1.0f );
+				const float e = t * t * ( 3.0f - 2.0f * t );
+				ankle += f.releaseOffset * ( 1.0f - e );
+				if( f.releaseLift )
+				{
+					ankle.y += std::sin( t * kPi ) * lift;
+				}
+			}
+		}
+
 		float DriveWeight( TrackerRole role )
 		{
 			const Driven &d = s_drive[ static_cast< int >( role ) ];
@@ -613,6 +752,7 @@ namespace PSUVR
 					{
 						s_feet[ 0 ].settled = s_feet[ 1 ].settled = false;
 					}
+					int landed = 0;
 					for( int i = 0; i < 2; ++i )
 					{
 						Foot &f = s_feet[ i ];
@@ -627,6 +767,7 @@ namespace PSUVR
 							{
 								f.planted = f.to;
 								f.stepping = false;
+								landed |= 1 << i; // footfall haptic (vr.hapticSteps)
 							}
 							continue;
 						}
@@ -654,6 +795,7 @@ namespace PSUVR
 							f.stepping = true;
 						}
 					}
+					VRGameHaptics::NoteFootPlant( landed );
 				}
 			}
 			for( int i = 0; i < 2; ++i )
@@ -686,6 +828,7 @@ namespace PSUVR
 				D3DXVECTOR3 ankle;
 				if( footW[ i ] > 0.0f && lowerJoint( footRole[ i ], ankleHeight, VRTrackers::CalibratedJointHeight( footRole[ i ] ), ankle ) )
 				{
+					ApplyFootLock( i, ankle, units, kStepLift * fit );
 					target += ( modelPoint( ankle ) - target ) * footW[ i ];
 				}
 				D3DXVECTOR3 pole = Normalized( model( forward + left * ( i == 0 ? 0.2f : -0.2f ) ), kModelForward );
@@ -739,9 +882,10 @@ namespace PSUVR
 			{
 #ifdef _DEBUG
 				PSU_LOG( "VRBody: feet planted %.1f,%.1f / %.1f,%.1f  stepping %d %d  pelvis speed %.1f, feet trackers %.2f %.2f knees %.2f %.2f, "
-					"%.1f units/m\n", s_feet[ 0 ].current.x, s_feet[ 0 ].current.z, s_feet[ 1 ].current.x, s_feet[ 1 ].current.z,
+					"%.1f units/m, foot lock %s/%s (drift steps %d %d)\n", s_feet[ 0 ].current.x, s_feet[ 0 ].current.z, s_feet[ 1 ].current.x, s_feet[ 1 ].current.z,
 					s_feet[ 0 ].stepping, s_feet[ 1 ].stepping, D3DXVec3Length( &s_pelvisVel ), footW[ 0 ], footW[ 1 ], kneeW[ 0 ],
-					kneeW[ 1 ], units );
+					kneeW[ 1 ], units, s_footLock[ 0 ].locked ? "pinned" : ( s_footLock[ 0 ].releasing ? "release" : "free" ),
+					s_footLock[ 1 ].locked ? "pinned" : ( s_footLock[ 1 ].releasing ? "release" : "free" ), s_footLock[ 0 ].steps, s_footLock[ 1 ].steps );
 #endif
 			}
 		}
@@ -752,7 +896,6 @@ namespace PSUVR
 			const bool on = vr.m_trackersEnabled && vr.m_trackerDriveBody && VRTrackers::Calibrated();
 			const bool group[ kTrackerRoleCount ] = { vr.m_trackerDriveWaist, vr.m_trackerDriveChest, vr.m_trackerDriveFeet,
 				vr.m_trackerDriveFeet, vr.m_trackerDriveKnees, vr.m_trackerDriveKnees, vr.m_trackerDriveElbows, vr.m_trackerDriveElbows };
-					int landed = 0;
 			const float step = ( std::max )( dt, 0.0f ) / kTrackerRamp;
 			for( int role = 0; role < kTrackerRoleCount; ++role )
 			{
@@ -767,10 +910,10 @@ namespace PSUVR
 				d.weight = std::clamp( d.weight + ( d.live ? step : -step ), 0.0f, 1.0f );
 				if( d.weight <= 0.0f && !d.live )
 				{
-								landed |= 1 << i; // footfall haptic (vr.hapticSteps)
 					d.have = false;
 				}
 			}
+			UpdateFootLock( dt );
 			if( log && on )
 			{
 				char b[ 8 ][ 16 ];
@@ -795,7 +938,6 @@ namespace PSUVR
 		}
 
 		bool TrackedPelvisYaw( float &yaw, float &weight )
-					VRGameHaptics::NoteFootPlant( landed );
 		{
 			weight = DriveWeight( TrackerRole::Waist );
 			D3DXVECTOR3 forward, up;

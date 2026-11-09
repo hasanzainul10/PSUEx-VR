@@ -356,23 +356,53 @@ namespace PSUVR
 				QRot( cal.r, ca, rc );
 				for( int k = 0; k < 3; ++k ) cal.t[ k ] = cb[ k ] - cal.s * rc[ k ];
 
-				// Keep identity (real trackers on a correct space) unless the fit is clearly better.
+				// Keep identity (real trackers on a correct space) unless the fit is clearly better. A posture
+				// that doesn't match the body model (feet apart, arms not hanging) lets a modest turn win by a few
+				// cm (2026-11-06: 52 deg + scale 0.92 on an upright space, shift 13 / fit 8 cm), so a turn must
+				// win by kMinGain AND leave at most kMaxRatio of the shift's residual; a turn under kBigTurn is
+				// only taken when the shift residual is large (the space is visibly off).
+				constexpr float kMinGain = 0.05f, kMaxRatio = 0.6f, kBigTurn = 60.0f, kLargeShift = 0.25f;
 				const float identityQ[ 4 ] = { 0.0f, 0.0f, 0.0f, 1.0f };
 				float identityT[ 3 ];
 				for( int k = 0; k < 3; ++k ) identityT[ k ] = cb[ k ] - ca[ k ];
 				const float zero[ 3 ] = {};
 				const float rmsRaw = rms( identityQ, 1.0f, zero );
 				const float rmsShift = rms( identityQ, 1.0f, identityT );
-				const float rmsFit = rms( cal.r, cal.s, cal.t );
-				if( rmsFit > rmsShift - 0.05f )
+				float rmsFit = rms( cal.r, cal.s, cal.t );
+				float angle = 2.0f * std::acos( std::clamp( std::fabs( cal.r[ 3 ] ), 0.0f, 1.0f ) ) * 57.29578f;
+				const char *rejected = nullptr;
+				if( rmsFit > rmsShift - kMinGain )
 				{
+					rejected = "gain under 5 cm";
+				}
+				else if( rmsFit > rmsShift * kMaxRatio )
+				{
+					rejected = "fit not under 0.6 x shift";
+				}
+				else if( angle < kBigTurn && rmsShift < kLargeShift )
+				{
+					rejected = "small turn while the shift residual is small";
+				}
+				if( rejected )
+				{
+					PSU_LOG( "VRTrackerCal: whole-frame %s fit rejected (%s): turn %.0f deg, scale %.2f, rms shift %.0f / fit %.0f cm; "
+						"per-tracker offsets only\n", kind, rejected, angle, cal.s, rmsShift * 100.0f, rmsFit * 100.0f );
 					std::copy( identityQ, identityQ + 4, cal.r );
 					cal.s = 1.0f;
 					// No turn: no shift either (a correct space only needs the per-tracker offsets).
 					std::fill( cal.t, cal.t + 3, 0.0f );
 					kind = "none";
+					rmsFit = rmsRaw;
+					angle = 0.0f;
 				}
-				const float angle = 2.0f * std::acos( std::clamp( std::fabs( cal.r[ 3 ] ), 0.0f, 1.0f ) ) * 57.29578f;
+				else if( angle < kBigTurn && cal.s != 1.0f )
+				{
+					// A modest turn: the scale is mostly posture noise, keep it metric.
+					cal.s = 1.0f;
+					QRot( cal.r, ca, rc );
+					for( int k = 0; k < 3; ++k ) cal.t[ k ] = cb[ k ] - rc[ k ];
+					rmsFit = rms( cal.r, cal.s, cal.t );
+				}
 				PSU_LOG( "VRTrackerCal: %d trackers, stature %.2f m, head (%.2f %.2f %.2f); whole-frame fit %s: turn %.0f deg, scale %.2f, "
 					"rms raw %.0f / shift %.0f / fit %.0f cm\n", n, stature, head[ 0 ], head[ 1 ], head[ 2 ], kind, angle, cal.s,
 					rmsRaw * 100.0f, rmsShift * 100.0f, rmsFit * 100.0f );
@@ -466,6 +496,135 @@ namespace PSUVR
 				}
 			}
 
+			// Standable can re-align its space mid-session, which makes a saved whole-frame fit stale. While
+			// you stand still and upright, each calibrated joint should sit where the body model puts it
+			// under the head: compare heights above the floor and horizontal distances from the head (both
+			// independent of where you look). The residual is 0 right after a calibration; a jump that
+			// stays kJumpSeconds asks once for a recalibration.
+			struct ResidualWatch
+			{
+				bool primed = false;
+				bool warned = false;
+				float fast = 0.0f;       // residual, smoothed over ~0.3 s (m)
+				float baseline = 0.0f;   // slow average while no jump (m), starts at 0 = the calibration
+				float jumpFor = 0.0f;    // qualifying seconds with fast - baseline over kJump
+				float stillFor = 0.0f;
+				bool haveLast = false;
+				float lastHead[ 3 ]{};
+				float lastJoint[ kTrackerRoleCount ][ 3 ]{};
+				float perRole[ kTrackerRoleCount ]{}; // last per-tracker residual (m), < 0 = not used
+			};
+			ResidualWatch s_watch;
+			constexpr float kJump = 0.15f, kJumpSeconds = 2.0f;
+
+			void WatchResidual( float dt )
+			{
+				ResidualWatch &w = s_watch;
+				float stagePos[ 3 ], stageRot[ 4 ], headPos[ 3 ], headRot[ 4 ];
+				if( dt <= 0.0f || !s_cal.valid || s_cal.stature <= 0.0f || s_countdown > 0.0f || !s_runtime ||
+					!s_runtime->GetStagePose( stagePos, stageRot ) || !s_runtime->GetHeadPose( headPos, headRot ) )
+				{
+					w.haveLast = false;
+					w.stillFor = 0.0f;
+					return;
+				}
+				float head[ 3 ];
+				ToStage( stagePos, stageRot, headPos, head );
+				// Elbows move with the arms: not part of the check.
+				constexpr int kRoles = 6;
+				const float weight[ kRoles ] = { 1.0f, 1.0f, 1.0f, 1.0f, 0.7f, 0.7f };
+				float joint[ kRoles ][ 3 ];
+				bool use[ kRoles ]{};
+				float maxSpeed = 0.0f;
+				auto dist = []( const float *a, const float *b ) {
+					const float d[ 3 ] = { a[ 0 ] - b[ 0 ], a[ 1 ] - b[ 1 ], a[ 2 ] - b[ 2 ] };
+					return std::sqrt( d[ 0 ] * d[ 0 ] + d[ 1 ] * d[ 1 ] + d[ 2 ] * d[ 2 ] );
+				};
+				for( int role = 0; role < kRoles; ++role )
+				{
+					const Pose &p = s_tracks[ role ].pose;
+					use[ role ] = p.jointValid && !p.held;
+					if( !use[ role ] )
+					{
+						continue;
+					}
+					ToStage( stagePos, stageRot, p.joint, joint[ role ] );
+					if( w.haveLast )
+					{
+						maxSpeed = ( std::max )( maxSpeed, dist( joint[ role ], w.lastJoint[ role ] ) / dt );
+					}
+					std::copy( joint[ role ], joint[ role ] + 3, w.lastJoint[ role ] );
+				}
+				const float headSpeed = w.haveLast ? dist( head, w.lastHead ) / dt : 1.0f;
+				std::copy( head, head + 3, w.lastHead );
+				const bool firstSample = !w.haveLast;
+				w.haveLast = true;
+				if( firstSample )
+				{
+					return;
+				}
+				w.stillFor = headSpeed < 0.15f && maxSpeed < 0.25f ? w.stillFor + dt : 0.0f;
+				const bool upright = head[ 1 ] >= 0.95f * 0.936f * s_cal.stature;
+				if( w.stillFor < 0.5f || !upright )
+				{
+					return; // frozen, not reset: a jump must persist over standing time
+				}
+				float sum = 0.0f, wsum = 0.0f;
+				for( int role = 0; role < kTrackerRoleCount; ++role )
+				{
+					w.perRole[ role ] = -1.0f;
+				}
+				for( int role = 0; role < kRoles; ++role )
+				{
+					if( !use[ role ] )
+					{
+						continue;
+					}
+					const JointModel &j = kJoints[ role ];
+					const float wantHeight = j.absoluteHeight ? j.height : j.height * s_cal.stature;
+					const float wantAcross = std::sqrt( j.side * j.side + ( j.forward + 0.08f ) * ( j.forward + 0.08f ) );
+					const float across = std::sqrt( ( joint[ role ][ 0 ] - head[ 0 ] ) * ( joint[ role ][ 0 ] - head[ 0 ] ) +
+						( joint[ role ][ 2 ] - head[ 2 ] ) * ( joint[ role ][ 2 ] - head[ 2 ] ) );
+					const float eh = joint[ role ][ 1 ] - wantHeight, ed = across - wantAcross;
+					const float e = std::sqrt( eh * eh + ed * ed );
+					w.perRole[ role ] = e;
+					sum += weight[ role ] * e * e;
+					wsum += weight[ role ];
+				}
+				if( wsum < 1.5f )
+				{
+					return; // fewer than two trackers: not worth judging
+				}
+				const float residual = std::sqrt( sum / wsum );
+				w.fast = w.primed ? w.fast + ( residual - w.fast ) * ( std::min )( 1.0f, dt / 0.3f ) : residual;
+				w.primed = true;
+				if( w.fast - w.baseline > kJump )
+				{
+					w.jumpFor += dt;
+					if( w.jumpFor >= kJumpSeconds && !w.warned )
+					{
+						w.warned = true;
+						char line[ 512 ];
+						int len = sprintf_s( line, "VRTrackerCal: residual jump %.0f cm (baseline %.0f cm) for %.1f s standing still:", w.fast * 100.0f,
+							w.baseline * 100.0f, w.jumpFor );
+						for( int role = 0; role < kRoles; ++role )
+						{
+							if( w.perRole[ role ] >= 0.0f )
+							{
+								len += sprintf_s( line + len, sizeof( line ) - len, " %s %.0f", kRoleNames[ role ], w.perRole[ role ] * 100.0f );
+							}
+						}
+						PSU_LOG( "%s cm; trackers moved, recalibrate\n", line );
+						VRBindings::ShowToast( "Trackers moved: recalibrate (both grips + left stick down)" );
+					}
+				}
+				else
+				{
+					w.jumpFor = 0.0f;
+					w.baseline += ( w.fast - w.baseline ) * ( std::min )( 1.0f, dt / 20.0f );
+				}
+			}
+
 			void Log()
 			{
 				char line[ 1024 ];
@@ -502,6 +661,11 @@ namespace PSUVR
 				if( !any )
 				{
 					len += sprintf_s( line + len, sizeof( line ) - len, " none active (OpenXR: roles in SteamVR > Manage Trackers? OpenVR: see 'OpenVR:' lines)" );
+				}
+				if( s_watch.primed )
+				{
+					len += sprintf_s( line + len, sizeof( line ) - len, " residual %.0f cm (baseline %.0f, still %.1f s%s)", s_watch.fast * 100.0f,
+						s_watch.baseline * 100.0f, s_watch.stillFor, s_watch.warned ? ", warned" : "" );
 				}
 				PSU_LOG( "%s\n", line );
 			}
@@ -544,7 +708,17 @@ namespace PSUVR
 					{
 						t.pose.position[ i ] = smooth > 0.0f ? t.axis[ i ].Filter( t.raw.position[ i ], dt, minCutoff, beta ) : t.raw.position[ i ];
 					}
-					const float k = smooth > 0.0f ? OneEuro::Alpha( minCutoff * 2.0f, ( std::max )( dt, 1.0e-3f ) ) : 1.0f;
+					// Orientation: like the one-euro filter, the cutoff rises with how far the smoothed turn
+					// lags the raw one (past ~3 deg of noise), so a quick foot / hip turn keeps up.
+					float k = 1.0f;
+					if( smooth > 0.0f )
+					{
+						const float sdt = ( std::max )( dt, 1.0e-3f );
+						const float dot = std::fabs( t.pose.orientation[ 0 ] * t.raw.orientation[ 0 ] + t.pose.orientation[ 1 ] * t.raw.orientation[ 1 ] +
+							t.pose.orientation[ 2 ] * t.raw.orientation[ 2 ] + t.pose.orientation[ 3 ] * t.raw.orientation[ 3 ] );
+						const float lag = 2.0f * std::acos( std::clamp( dot, 0.0f, 1.0f ) );
+						k = OneEuro::Alpha( minCutoff * 2.0f + beta * ( std::max )( lag - 0.05f, 0.0f ) / sdt, sdt );
+					}
 					Nlerp( t.pose.orientation, t.raw.orientation, k );
 					t.pose.floorValid = t.raw.floorValid;
 					t.pose.floorHeight = t.raw.floorHeight;
@@ -571,11 +745,13 @@ namespace PSUVR
 			if( vr.m_trackerCal != s_calText )
 			{
 				ParseCalibration( vr.m_trackerCal );
+				s_watch = {};
 			}
 			for( int role = 0; role < kTrackerRoleCount; ++role )
 			{
 				UpdateJoint( role, s_tracks[ role ].pose );
 			}
+			WatchResidual( dt );
 			// Calibration: 5 s countdown (a buzz each second), then capture.
 			if( vr.m_trackerCalibRequest != s_seenCalibRequest )
 			{
@@ -592,6 +768,7 @@ namespace PSUVR
 				{
 					s_countdown = -1.0f;
 					Capture();
+					s_watch = {};
 					VRHaptics::PlayBoth( VRHaptics::Effect::Done );
 				}
 				else if( std::floor( before ) != std::floor( s_countdown ) )

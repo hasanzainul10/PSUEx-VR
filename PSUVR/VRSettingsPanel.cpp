@@ -663,6 +663,9 @@ namespace PSUVR
 					ImGui::Checkbox( "Knees", &s.m_trackerDriveKnees );
 					ImGui::SameLine();
 					ImGui::Checkbox( "Elbows", &s.m_trackerDriveElbows );
+					ImGui::Checkbox( "Foot lock", &s.m_trackerFootLock );
+					Help( "A tracked foot that stays still on the floor is pinned where it is: no sliding while you walk with "
+						"the stick, no jitter. It steps to the tracker once it falls behind, or as soon as you move the foot." );
 					ImGui::Unindent();
 				}
 				if( context.trackerStatus )
@@ -696,6 +699,10 @@ namespace PSUVR
 				"the menu panel over the menu, as on a flat screen." );
 			Help( "Menus and 2D screens float on a dark background. Off: SteamVR's own space shows "
 				"around them, and with it the play-area boundary." );
+			ImGui::Checkbox( "HUD pieces always on the panel (third person)", &s.m_hudLayersByLayer );
+			Help( "The minimap frame and arrow and the HP / MP / name / EXP block stay on the HUD panel with the rest "
+				"of the HUD. Off: they are placed by their depth, which in third person puts them in the world. "
+				"Nameplates over players and NPCs float over their heads either way." );
 			ImGui::Checkbox( "Shop and mission menus on a flat screen", &s.m_flatMenus );
 			Help( "The mission counter, clothing shop and beauty parlor menus show the plain game picture on "
 				"the menu panel, like the other 2D menus, instead of in 3D." );
@@ -787,13 +794,6 @@ namespace PSUVR
 				"shotguns, grenade launchers and laser cannons kick harder." );
 			ImGui::Checkbox( "Technique charge and cast", &s.m_hapticTechs );
 			Help( "A light buzz that builds up in the casting hand while a technique charges, then a strong one when it is cast." );
-			ImGui::SliderFloat( "Vibration strength", &s.m_hapticStrength, 0.0f, 1.5f, "%.2f" );
-			Help( "Scales every controller vibration. 0 turns them all off." );
-			if( context.inGame && context.testVibration )
-			{
-				if( ImGui::Button( "Test: strength steps" ) )
-				{
-					context.testVibration( 0 );
 			ImGui::Checkbox( "Footsteps", &s.m_hapticSteps );
 			Help( "A soft buzz in both hands at each footfall while your character walks or runs (quicker and stronger when "
 				"running). Nothing while standing, in menus or with the palette open." );
@@ -805,6 +805,13 @@ namespace PSUVR
 				Help( "Off: footsteps buzz in first person only." );
 				ImGui::Unindent();
 			}
+			ImGui::SliderFloat( "Vibration strength", &s.m_hapticStrength, 0.0f, 1.5f, "%.2f" );
+			Help( "Scales every controller vibration. 0 turns them all off." );
+			if( context.inGame && context.testVibration )
+			{
+				if( ImGui::Button( "Test: strength steps" ) )
+				{
+					context.testVibration( 0 );
 				}
 				ImGui::SameLine();
 				if( ImGui::Button( "Test: length steps" ) )

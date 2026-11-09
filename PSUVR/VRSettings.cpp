@@ -36,6 +36,7 @@ namespace
 	X( m_flatMenuTasks, "flatMenuTasks" ) \
 	X( m_flatMenuHoldTasks, "flatMenuHoldTasks" ) \
 	X( m_hudOverlays, "hudOverlays" ) \
+	X( m_hudLayersByLayer, "hudLayersByLayer" ) \
 	X( m_toolkitOnHud, "toolkitOnHud" ) \
 	X( m_toolkitPointer, "toolkitPointer" ) \
 	X( m_hudFollowAngle, "hudFollowAngle" ) \
@@ -108,10 +109,10 @@ namespace
 	X( m_hapticHurt, "hapticHurt" ) \
 	X( m_hapticRecoil, "hapticRecoil" ) \
 	X( m_hapticTechs, "hapticTechs" ) \
-	X( m_autoDpad, "autoDpad" ) \
 	X( m_hapticSteps, "hapticSteps" ) \
 	X( m_hapticStepStrength, "hapticStepStrength" ) \
 	X( m_hapticStepsThirdPerson, "hapticStepsThirdPerson" ) \
+	X( m_autoDpad, "autoDpad" ) \
 	X( m_swingAttack, "swingAttack" ) \
 	X( m_paGesture, "paGesture" ) \
 	X( m_gripPhotonArt, "gripPhotonArt" ) \
@@ -134,6 +135,7 @@ namespace
 	X( m_trackerDriveFeet, "trackerDriveFeet" ) \
 	X( m_trackerDriveKnees, "trackerDriveKnees" ) \
 	X( m_trackerDriveElbows, "trackerDriveElbows" ) \
+	X( m_trackerFootLock, "trackerFootLock" ) \
 	X( m_triangleChatL2, "triangleChatL2" ) \
 	X( m_strafeBody, "strafeBody" ) \
 	X( m_strafeBodyBlend, "strafeBodyBlend" ) \

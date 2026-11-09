@@ -103,6 +103,10 @@ struct VRSettings
 	// Menu overlays bigger than the screen (mission menu scanlines) go on the menu panel in their
 	// draw order instead of being dropped as a background.
 	bool m_hudOverlays = true;
+	// Pass-B layers >= 0x30 (map frame, arrow, HP/MP/name/EXP block) always go on the HUD panel. Their fixed HUD z
+	// decodes to 14-15 units, which the third-person depth rule (> 12 = world) sent to the eyes. Nameplates (0x2B)
+	// keep the depth routing. Off: the depth rule decides for every layer.
+	bool m_hudLayersByLayer = true;
 	// Rogue's Toolkit panels and menu (drawn inside its Present hook) go on the HUD panel in the headset
 	// instead of only the monitor's back buffer. They then no longer show on the flat monitor.
 	bool m_toolkitOnHud = true;
@@ -162,6 +166,9 @@ struct VRSettings
 	bool m_trackerDriveFeet = true;   // feet position + orientation (kept above the ground)
 	bool m_trackerDriveKnees = true;  // which way the knees bend
 	bool m_trackerDriveElbows = true; // which way the elbows bend
+	// A tracked foot that barely moves stays pinned to the ground (no sliding while stick walking, no jitter);
+	// it steps to the tracker when it drifts too far behind.
+	bool m_trackerFootLock = true;
 	// Arms on the controllers: the shoulders lift toward far / high hands (0 = off, 0.5 = up to 20 deg).
 	float m_bodyShoulderShrug = 0.5f;
 	// Arms on the controllers: how much the elbow follows the controller's angle (0 = hangs by the
@@ -269,6 +276,12 @@ struct VRSettings
 	bool m_hapticRecoil = true;
 	// Rising buzz on the casting hand while a technique charges, a strong one when it is cast.
 	bool m_hapticTechs = true;
+	// A soft buzz on both hands at each footfall while walking / running (faster and stronger running).
+	bool m_hapticSteps = false;
+	// Scale of the footfall buzz (0..1.5; 1.0 felt too strong).
+	float m_hapticStepStrength = 0.7f;
+	// Footfall buzz in third person too (off = first person only).
+	bool m_hapticStepsThirdPerson = true;
 	// Motion mode: the left stick works the D-pad while a menu has the input.
 	bool m_autoDpad = true;
 	// Motion mode combat: swing a melee hand to attack (X), pull a gun hand's trigger to
@@ -276,12 +289,6 @@ struct VRSettings
 	bool m_swingAttack = true;
 	// Photon Art (Y) / technique slot 2 gestures.
 	bool m_paGesture = true;
-	// A soft buzz on both hands at each footfall while walking / running (faster and stronger running).
-	bool m_hapticSteps = false;
-	// Scale of the footfall buzz (0..1.5; 1.0 felt too strong).
-	float m_hapticStepStrength = 0.7f;
-	// Footfall buzz in third person too (off = first person only).
-	bool m_hapticStepsThirdPerson = true;
 	// On: trigger click or swing = attack / slot 1, with that hand's grip held = Photon Art /
 	// slot 2 (the right grip sends no R1 while the right weapon has controls). Off: the old
 	// scheme, melee swings only, swing with the trigger held = Photon Art.
